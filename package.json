@@ -14,7 +14,7 @@
     "build:electron": "electron-builder",
     "start:tauri": "tauri dev   --config tauri/tauri.conf.json",
     "build:tauri": "tauri build --config tauri/tauri.conf.json",
-    "test": "node --test test/"
+    "test": "node --test \"test/**/*.test.js\""
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

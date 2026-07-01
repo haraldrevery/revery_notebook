@@ -31,7 +31,25 @@ const {
 const path  = require('path');
 const fs    = require('fs');
 const os    = require('os');
-const crypto = require('crypto');
+
+/* All pure file-system logic (atomic writes, path validation, volatile
+   crash backups, the corruption-tolerant settings store) lives in
+   fs_core.js so it can be unit tested without an Electron runtime.
+   This file owns only the wiring: windows, IPC, dialogs, policy state. */
+const {
+  atomicWriteFile,
+  syncParentDir,
+  validatePath,
+  validatePathInside,
+  sanitizeDropFilename,
+  ensureVolatileDir,
+  setVolatileContent,
+  getVolatileContent,
+  deleteVolatileContent,
+  listVolatileBackups,
+  purgeOldVolatileFiles: purgeVolatileDir,
+  createSettingsStore,
+} = require('./fs_core');
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 const getSettingsFile = () => path.join(app.getPath('userData'), 'revery_settings.json');
@@ -54,69 +72,15 @@ function requireRoot() {
 const PRELOAD_SCRIPT  = path.join(__dirname, 'preload.js');
 
 /* ── Ensure volatile temp directory exists and is safe to use ───────────
-   On Unix, /tmp is a shared namespace with predictable subdirectory names.
-   We must verify that VOLATILE_DIR is owned by us, is not a symlink, and
-   has 0700 perms before writing user-note backups into it. If verification
-   fails for any reason, volatileDirReady stays false and the volatile IPC
-   handlers no-op — the user just doesn't get crash backup this session.
-   Primary save (the user's actual file) is unaffected.                    */
+   ensureVolatileDir (fs_core.js) verifies VOLATILE_DIR is owned by us, is
+   not a symlink, and has 0700 perms before we write user-note backups into
+   it. If verification fails for any reason, volatileDirReady stays false
+   and the volatile IPC handlers no-op — the user just doesn't get crash
+   backup this session. Primary save (the user's actual file) is unaffected. */
 let volatileDirReady = false;
-
-function ensureVolatileDir() {
-  // Step 1: Create with restrictive perms. recursive:true is idempotent —
-  // succeeds if dir already exists, but does NOT change perms in that case.
-  try {
-    fs.mkdirSync(VOLATILE_DIR, { recursive: true, mode: 0o700 });
-  } catch (err) {
-    if (err.code !== 'EEXIST') {
-      throw new Error(`Cannot create volatile dir: ${err.message}`);
-    }
-  }
-
-  // Windows has no Unix permission bits and no real "owner" concept for the
-  // user temp dir; we rely on the OS user-profile temp directory's default ACLs.
-  if (process.platform === 'win32') return;
-
-  // Step 2: Use lstat (NOT stat) so a pre-planted symlink can't fool us by
-  // resolving to a directory we don't actually own.
-  let st;
-  try {
-    st = fs.lstatSync(VOLATILE_DIR);
-  } catch (statErr) {
-    throw new Error(`Cannot stat volatile dir: ${statErr.message}`);
-  }
-
-  if (st.isSymbolicLink()) {
-    throw new Error(`Volatile path is a symlink — refusing to follow: ${VOLATILE_DIR}`);
-  }
-  if (!st.isDirectory()) {
-    throw new Error(`Volatile path exists but is not a directory: ${VOLATILE_DIR}`);
-  }
-
-  // Step 3: Owner check. If another local user owns this directory, refuse.
-  if (st.uid !== process.getuid()) {
-    throw new Error(
-      `Volatile dir is owned by uid=${st.uid}, not the current user (uid=${process.getuid()}). Refusing to use.`
-    );
-  }
-
-  // Step 4: Permission check. Must be exactly 0700. If it isn't, try to
-  // tighten — chmod will succeed because step 3 confirmed we own it.
-  if ((st.mode & 0o777) !== 0o700) {
-    try {
-      fs.chmodSync(VOLATILE_DIR, 0o700);
-    } catch (chmodErr) {
-      throw new Error(
-        `Volatile dir has unsafe permissions (mode=${(st.mode & 0o777).toString(8)}) ` +
-        `and could not be tightened: ${chmodErr.message}`
-      );
-    }
-  }
-}
-
 let volatileDirError = null;
 try {
-  ensureVolatileDir();
+  ensureVolatileDir(VOLATILE_DIR);
   volatileDirReady = true;
 } catch (err) {
   volatileDirError = err.message;
@@ -124,123 +88,15 @@ try {
 }
 
 /* ── Persistent settings (thin layer on top of the JSON settings file) ── */
-/* readSettings()/writeSettings() are corruption-tolerant: they fall back
-   to revery_settings.json.bak when the main file is unparseable, and only
-   ever overwrite the main file with a merge that includes the recovered
-   data — never with the raw patch alone. See the "Settings backup /
-   corruption recovery" block above for the helpers.                     */
+/* The store (fs_core.js) is corruption-tolerant: it falls back to
+   revery_settings.json.bak when the main file is unparseable, quarantines
+   the corrupt bytes, and only ever overwrites the main file with a merge
+   that includes the recovered data — never with the raw patch alone.    */
+const { readSettings, writeSettings } = createSettingsStore(getSettingsFile);
 
-function readSettings() {
-  const r = readSettingsRaw();
-  if (r.state === 'ok' || r.state === 'absent') return r.data;
-  // Main is corrupt — try .bak silently for read-only callers.
-  // If .bak is also unavailable, return {} (legacy behavior). The next
-  // writeSettings() call will quarantine the corrupt main file.
-  const bak = tryLoadSettingsBak();
-  return bak || {};
-}
-
-function writeSettings(patch) {
-  /* Step 1: choose a merge base that does NOT discard recoverable fields. */
-  const r = readSettingsRaw();
-  let base;
-  if (r.state === 'ok' || r.state === 'absent') {
-    base = r.data;
-  } else {
-    // Main file is corrupt. Recover from .bak if possible, else quarantine.
-    const bak = tryLoadSettingsBak();
-    if (bak) {
-      console.warn('[revery] Settings file was corrupt; recovered from .bak.');
-      base = bak;
-    } else {
-      console.error('[revery] Settings file is corrupt and .bak is unavailable. Quarantining and starting fresh.');
-      base = {};
-    }
-    quarantineCorruptSettings(); // always preserve the corrupt bytes for forensics
-  }
-
-  /* Step 2: atomically write the merged result to the main file. */
-  const dest = getSettingsFile();
-  const tmp = dest + '.' + Date.now() + '_' + crypto.randomBytes(4).toString('hex') + '.revery_settings_tmp';
-  const json = JSON.stringify({ ...base, ...patch }, null, 2);
-  try {
-    writeFileWithFsync(tmp, json, 'utf8');
-    fs.renameSync(tmp, dest);
-    syncParentDir(dest);
-  } catch (err) {
-    try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-    throw err;
-  }
-
-  /* Step 3: refresh the .bak so we always have a known-good copy.
-     Best-effort: never propagate failures — main write already succeeded. */
-  refreshSettingsBak(json);
-}
-
-/* ── Path security: prevent directory traversal ─────────────────────────
-   All file-system IPC handlers call this before touching the OS.
-   It resolves the path and rejects anything containing null bytes or
-   suspicious traversal patterns.                                        */
-function validatePath(raw) {
-  if (typeof raw !== 'string' || raw.length === 0) {
-    throw new Error('Invalid path: empty or wrong type');
-  }
-  if (raw.includes('\0')) throw new Error('Invalid path: null byte');
-  const resolved = path.resolve(raw);
-  // Allow any real absolute path — callers that need root restrictions
-  // (e.g. only within the opened project folder) should add a second check.
-  return resolved;
-}
-
-function validatePathInside(raw, rootPath) {
-  const resolved = validatePath(raw);  // already absolute and normalised (no '..')
-  // 1. Resolve the actual physical path of the root to prevent trickery
-  const root = fs.realpathSync(path.resolve(rootPath));
-
-  let realResolved;
-  if (fs.existsSync(resolved)) {
-    // 2. Existing path: full realpath (resolves symlinks)
-    realResolved = fs.realpathSync(resolved);
-  } else {
-    // 3. New path (target or parent may not exist yet).
-    // Walk up the ancestry to find the deepest existing ancestor, then
-    // re-attach the non-existing tail components as plain name segments.
-    // This avoids the ENOENT that realpathSync throws when the parent itself
-    // is new, while preserving all symlink-escape protection.
-    let existing = resolved;
-    const tail = [];
-    while (!fs.existsSync(existing)) {
-      tail.unshift(path.basename(existing));
-      const parent = path.dirname(existing);
-      if (parent === existing) {
-        // Reached the filesystem root without finding an existing ancestor
-        throw new Error(`Security Error: Path has no resolvable ancestor: ${resolved}`);
-      }
-      existing = parent;
-    }
-    const realAncestor = fs.realpathSync(existing);
-    realResolved = path.join(realAncestor, ...tail);
-  }
-
-  const rel = path.relative(root, realResolved);
-
-  if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
-    throw new Error(`Security Error: Path escapes project root: ${resolved}`);
-  }
-  return realResolved;
-}
-
-
-/* Reduce a dropped file's name to a safe basename inside the target dir. */
-function sanitizeDropFilename(raw) {
-  if (typeof raw !== 'string') throw new Error('Invalid file name');
-  const base = raw.split(/[/\\]/).pop().trim();
-  if (!base || base === '.' || base === '..') throw new Error('Invalid file name');
-  if (base.includes('\0')) throw new Error('File name contains null byte');
-  // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f]/.test(base)) throw new Error('File name contains control characters');
-  return base;
-}
+/* Path validation (validatePath / validatePathInside) and drop-filename
+   sanitisation live in fs_core.js. All file-system IPC handlers call them
+   before touching the OS. */
 
 
 
@@ -398,156 +254,7 @@ function purgeOldVolatileFiles() {
   // purge walk into (and delete matching files from) a directory the
   // attacker chose. Mirrors the guard in Rust's purge_old_volatile_files().
   if (!volatileDirReady) return;
-
-  try {
-    const entries = fs.readdirSync(VOLATILE_DIR);
-    const now     = Date.now();
-
-    for (const entry of entries) {
-      // Only inspect meta files; the matching .revery_volatile is handled below.
-      if (!entry.endsWith('.meta.json')) continue;
-
-      const metaFile  = path.join(VOLATILE_DIR, entry);
-      const dataFile  = path.join(VOLATILE_DIR, entry.replace('.meta.json', '.revery_volatile'));
-
-      try {
-        const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-        // 'ts' is Date.now() ms stored by set-volatile-content.
-        if (typeof meta.ts !== 'number' || (now - meta.ts) < VOLATILE_MAX_AGE_MS) {
-          continue; // Young enough — leave it alone.
-        }
-        // Old backup: delete the data file first, then the meta file.
-        try { fs.unlinkSync(dataFile); } catch { /* already gone */ }
-        try { fs.unlinkSync(metaFile); } catch { /* already gone */ }
-      } catch {
-        // Unreadable or malformed meta — skip this pair, do not delete.
-      }
-    }
-  } catch {
-    // VOLATILE_DIR doesn't exist yet or is unreadable — nothing to purge.
-  }
-}
-
-/* ── fsync-safe write helper ────────────────────────────────────────────
- */
-function writeFileWithFsync(filePath, data, encoding) {
-  let fd;
-  try {
-    fd = fs.openSync(filePath, 'w');
-    fs.writeSync(fd, data, null, encoding || 'utf8');
-    fs.fsyncSync(fd);   // flush kernel buffers → physical disk before rename
-  } finally {
-    if (fd !== undefined) {
-      try { fs.closeSync(fd); } catch (_) {}
-    }
-  }
-}
-
-function syncParentDir(filePath) {
-  if (process.platform === 'win32') return;
-  let fd;
-  try {
-    const parent = path.dirname(filePath);
-    fd = fs.openSync(parent, 'r');
-    fs.fsyncSync(fd);
-  } catch (err) {
-    console.warn('[revery] syncParentDir failed (non-fatal):', err.message);
-  } finally {
-    if (fd !== undefined) {
-      try { fs.closeSync(fd); } catch (_) {}
-    }
-  }
-}
-
-/* ── Settings backup / corruption recovery ──────────────────────────────
-   Strategy: maintain a `.bak` of the last known-good settings. On every
-   successful write to revery_settings.json, atomically refresh the .bak.
-   On the next read/write, if the main file is unparseable, recover from
-   .bak silently. If .bak is also missing/bad, quarantine the corrupt
-   main file (rename to revery_settings.corrupt-<ts>.json) so the user
-   can inspect it manually and we don't keep tripping over the same bytes.
-   This block is the SINGLE source of truth for settings I/O — every
-   read/write goes through readSettings()/writeSettings() below.        */
-
-const SETTINGS_BAK_SUFFIX = '.bak';
-const getSettingsBakFile = () => getSettingsFile() + SETTINGS_BAK_SUFFIX;
-
-/** Internal: classify the main settings file.
- *  Returns { state: 'absent' | 'ok' | 'corrupt', data: object } */
-function readSettingsRaw() {
-  const file = getSettingsFile();
-  let raw;
-  try {
-    raw = fs.readFileSync(file, 'utf8');
-  } catch (err) {
-    if (err && err.code === 'ENOENT') return { state: 'absent', data: {} };
-    // Permission/IO error: treat as corrupt so writers don't blindly clobber.
-    console.warn('[revery] Could not read settings file:', err.message);
-    return { state: 'corrupt', data: {} };
-  }
-  // Zero-byte file is an anomaly (atomic-rename writes never produce this);
-  // treat as corrupt so .bak recovery kicks in.
-  if (raw.length === 0) return { state: 'corrupt', data: {} };
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return { state: 'ok', data: parsed };
-    }
-    return { state: 'corrupt', data: {} };
-  } catch {
-    return { state: 'corrupt', data: {} };
-  }
-}
-
-/** Try to load and parse the .bak file. Returns the object on success, null otherwise. */
-function tryLoadSettingsBak() {
-  let raw;
-  try {
-    raw = fs.readFileSync(getSettingsBakFile(), 'utf8');
-  } catch {
-    return null;
-  }
-  if (raw.length === 0) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** Best-effort: rename a corrupt main settings file out of the way.
- *  Errors are logged, never thrown — caller proceeds with a fresh write. */
-function quarantineCorruptSettings() {
-  const dest = getSettingsFile();
-  try {
-    if (!fs.existsSync(dest)) return;
-    const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const quarantine = path.join(
-      path.dirname(dest),
-      `revery_settings.corrupt-${ts}.json`
-    );
-    fs.renameSync(dest, quarantine);
-    console.warn(`[revery] Quarantined corrupt settings file → ${quarantine}`);
-  } catch (err) {
-    console.error('[revery] Could not quarantine corrupt settings:', err.message);
-  }
-}
-
-/** Best-effort: atomically replace .bak with the bytes we just wrote to main.
- *  Errors are logged; .bak is best-effort and must never fail the main write. */
-function refreshSettingsBak(jsonContent) {
-  const dest = getSettingsBakFile();
-  const tmp = dest + '.' + Date.now() + '_' + crypto.randomBytes(4).toString('hex') + '.bak_tmp';
-  try {
-    writeFileWithFsync(tmp, jsonContent, 'utf8');
-    fs.renameSync(tmp, dest);
-    syncParentDir(dest);
-  } catch (err) {
-    try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-    console.warn('[revery] Could not refresh settings .bak:', err.message);
-  }
+  purgeVolatileDir(VOLATILE_DIR, VOLATILE_MAX_AGE_MS);
 }
 
 
@@ -677,74 +384,7 @@ ipcMain.handle('fs:read-file', (_event, filePath) => {
 ipcMain.handle('fs:write-file', (_event, filePath, content) => {
   if (typeof content !== 'string') throw new Error('Content must be a string');
   const safe = validatePathInside(filePath, requireRoot());
-  
-  /* Atomic write: use a unique suffix to prevent race conditions */
-  const uniqueSuffix = Date.now() + '_' + crypto.randomBytes(4).toString('hex');
-  const tmp = safe + `.${uniqueSuffix}.revery_tmp`;
-  const bak = safe + `.${uniqueSuffix}.revery_bak`;
-  
-
-  writeFileWithFsync(tmp, content, 'utf8');
-  
-  try {
-    fs.renameSync(tmp, safe);
-    syncParentDir(safe);
-  } catch (err) {
-    if (err.code === 'EXDEV' || err.code === 'EBUSY') {
-      // Step A: Snapshot the existing destination so we can restore it if the
-      //         cross-device copy is interrupted mid-write.
-      let hasBak = false;
-      if (fs.existsSync(safe)) {
-        try {
-          fs.copyFileSync(safe, bak);
-          hasBak = true;
-        } catch (bakErr) {
-          try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-          throw new Error(`EXDEV fallback aborted: cannot create backup: ${bakErr.message}`);
-        }
-      }
-      
-      // Step B: Overwrite destination from the fully-written temp file.
-      try {
-        fs.copyFileSync(tmp, safe);
-        // FIX: Flush the copied destination to physical disk before cleanup.
-        // copyFileSync does not fsync the destination. Without this, power loss
-        // between the copy and the OS flushing its buffers can leave 'safe'
-        // truncated. Mirrors the sync_data() call in Tauri's atomic_write_file().
-        try {
-          const fd = fs.openSync(safe, 'r');
-          try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        } catch (_) { /* non-fatal: best-effort sync */ }
-        syncParentDir(safe);
-        try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-        if (hasBak) try { fs.rmSync(bak, { force: true }); } catch (_) {}
-        } catch (fallbackErr) {
-        /* Only delete the snapshot if the restore actually succeeded —
-           otherwise the .revery_bak is the only intact copy of the previous
-           content (dest may be truncated). The kept file is picked up by
-           reportBakOrphans() on next boot. */
-        let restored = false;
-        if (hasBak) {
-          try { fs.copyFileSync(bak, safe); restored = true; } catch (_) {}
-          if (restored) {
-            try { fs.rmSync(bak, { force: true }); } catch (_) {}
-          }
-        }
-        try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-        if (hasBak && !restored) {
-          throw new Error(
-            `${fallbackErr.message} — the file may be incomplete. A snapshot of ` +
-            `the previous content was preserved at "${bak}". Rename it over the ` +
-            `original to recover.`
-          );
-        }
-        throw fallbackErr;
-      }
-    } else {
-      try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-      throw err;
-    }
-  }
+  atomicWriteFile(safe, content);
 });
 
 
@@ -935,53 +575,15 @@ ipcMain.handle('fs:delete-node', async (_event, targetPath) => {
 /* ── Volatile (crash backup) write ───────────────────────────────────── */
 ipcMain.handle('fs:set-volatile-content', (_event, originalPath, content) => {
   if (typeof content !== 'string') throw new Error('Content must be a string');
-  if (!volatileDirReady) return;          // see Fix #5 below — graceful no-op
-  /* Hash the original path into a collision-free safe filename */
-  const key      = crypto.createHash('sha256').update(originalPath).digest('hex');
-  const dataFile = path.join(VOLATILE_DIR, key + '.revery_volatile');
-  const metaFile = path.join(VOLATILE_DIR, key + '.meta.json');
-
-  // Atomic writes: write to a unique sibling temp then rename. VOLATILE_DIR
-  // is on the same filesystem as the temp file (both under os.tmpdir()), so
-  // rename is atomic. A crash mid-write leaves the PREVIOUS backup intact
-  // — exactly what crash recovery is supposed to provide.
-  const uniq    = Date.now() + '_' + crypto.randomBytes(4).toString('hex');
-  const dataTmp = dataFile + '.' + uniq + '.tmp';
-  const metaTmp = metaFile + '.' + uniq + '.tmp';
-
-// Data first: if the meta write fails afterward, the user still has current
-  // text on disk paired with a stale ts — recoverable. Reverse ordering would
-  // lose text on the same crash.
-  //
-  // FIX: writeFileWithFsync (not writeFileSync). Without the fsync, a power
-  // loss after the rename can leave a ZERO-BYTE data file that has already
-  // replaced the previous good backup (ext4 delayed allocation). The crash
-  // backup must be durable precisely at crash time. Mirrors atomic_write_file
-  // in the Tauri backend, which calls sync_data().
-  try {
-    writeFileWithFsync(dataTmp, content, 'utf8');
-    fs.renameSync(dataTmp, dataFile);
-    syncParentDir(dataFile);
-  } catch (err) {
-    try { fs.rmSync(dataTmp, { force: true }); } catch (_) {}
-    throw err;
-  }
-
-  try {
-    writeFileWithFsync(metaTmp, JSON.stringify({ originalPath, ts: Date.now() }), 'utf8');
-    fs.renameSync(metaTmp, metaFile);
-    syncParentDir(metaFile);
-  } catch (err) {
-    try { fs.rmSync(metaTmp, { force: true }); } catch (_) {}
-    throw err;
-  }
+  if (!volatileDirReady) return;          // graceful no-op — dir failed its safety check
+  setVolatileContent(VOLATILE_DIR, originalPath, content);
 });
 
 
 
 /* Reports whether the volatile (crash-backup) directory passed its startup
-   safety check. Renderer surfaces the result in a status badge — see Cluster
-   C #7. Source of truth lives in volatileDirReady / volatileDirError above. */
+   safety check. Renderer surfaces the result in a status badge. Source of
+   truth lives in volatileDirReady / volatileDirError above. */
 ipcMain.handle('fs:get-volatile-status', () => {
   return { ready: volatileDirReady, error: volatileDirError };
 });
@@ -989,36 +591,14 @@ ipcMain.handle('fs:get-volatile-status', () => {
 ipcMain.handle('fs:list-volatile-backups', (_event, prefix) => {
   if (typeof prefix !== 'string' || prefix.length === 0) return [];
   if (!volatileDirReady) return [];
-  let entries;
-  try { entries = fs.readdirSync(VOLATILE_DIR); } catch { return []; }
-  const out = [];
-  for (const entry of entries) {
-    if (!entry.endsWith('.meta.json')) continue;
-    try {
-      const meta = JSON.parse(fs.readFileSync(path.join(VOLATILE_DIR, entry), 'utf8'));
-      if (typeof meta.originalPath === 'string' && meta.originalPath.startsWith(prefix)) {
-        out.push({ originalPath: meta.originalPath, ts: typeof meta.ts === 'number' ? meta.ts : 0 });
-      }
-    } catch { /* unreadable meta — skip, never guess */ }
-  }
-  out.sort((a, b) => b.ts - a.ts); // newest first
-  return out;
+  return listVolatileBackups(VOLATILE_DIR, prefix);
 });
 
 /* ── Volatile (crash backup) read ────────────────────────────────────── */
 ipcMain.handle('fs:get-volatile-content', (_event, originalPath) => {
   if (typeof originalPath !== 'string') return null;
   if (!volatileDirReady) return null;   // dir not safe → treat as "no backup"
-  const key      = crypto.createHash('sha256').update(originalPath).digest('hex');
-  const tmpFile  = path.join(VOLATILE_DIR, key + '.revery_volatile');
-  const metaFile = path.join(VOLATILE_DIR, key + '.meta.json');
-  try {
-    const content = fs.readFileSync(tmpFile,  'utf8');
-    const meta    = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-    return { content, ts: meta.ts, originalPath: meta.originalPath };
-  } catch {
-    return null; /* No backup exists — not an error */
-  }
+  return getVolatileContent(VOLATILE_DIR, originalPath);
 });
 
 
@@ -1026,11 +606,7 @@ ipcMain.handle('fs:get-volatile-content', (_event, originalPath) => {
 ipcMain.handle('fs:delete-volatile-content', (_event, originalPath) => {
   if (typeof originalPath !== 'string') return;
   if (!volatileDirReady) return;        // nothing of ours to delete
-  const key      = crypto.createHash('sha256').update(originalPath).digest('hex');
-  const tmpFile  = path.join(VOLATILE_DIR, key + '.revery_volatile');
-  const metaFile = path.join(VOLATILE_DIR, key + '.meta.json');
-  try { fs.unlinkSync(tmpFile);  } catch { /* already gone */ }
-  try { fs.unlinkSync(metaFile); } catch { /* already gone */ }
+  deleteVolatileContent(VOLATILE_DIR, originalPath);
 });
 
 /* ── Native message box ───────────────────────────────────────────────── */
@@ -1078,65 +654,9 @@ ipcMain.handle('dialog:save-file', async (_event, defaultFilename, content, opti
     return { saved: false };
   }
 
- /* Atomic write (same strategy as 'fs:write-file') */
+  /* Atomic write — same code path as fs:write-file (fs_core.atomicWriteFile) */
   const safe = validatePath(result.filePath);
-  const uniqueSuffix = Date.now() + '_' + crypto.randomBytes(4).toString('hex');
-  const tmp  = safe + `.${uniqueSuffix}.revery_tmp`;
-  const bak  = safe + `.${uniqueSuffix}.revery_bak`;
-  
-  try {
-    writeFileWithFsync(tmp, content, 'utf8');
-    try {
-      fs.renameSync(tmp, safe);
-      syncParentDir(safe);
-    } catch (renameErr) {
-      if (renameErr.code === 'EXDEV' || renameErr.code === 'EBUSY') {
-        let hasBak = false;
-        
-        if (fs.existsSync(safe)) {
-          try {
-            fs.copyFileSync(safe, bak);
-            hasBak = true;
-          } catch (bakErr) {
-            try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-            throw new Error(`EXDEV fallback aborted: cannot create backup: ${bakErr.message}`);
-          }
-        }
-        
-        try {
-          fs.copyFileSync(tmp, safe);
-          syncParentDir(safe);
-          try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-          if (hasBak) try { fs.rmSync(bak, { force: true }); } catch (_) {}
-          } catch (copyErr) {
-          /* Same rule as fs:write-file: never delete the snapshot unless
-             the restore succeeded. */
-          let restored = false;
-          if (hasBak) {
-            try { fs.copyFileSync(bak, safe); restored = true; } catch (_) {}
-            if (restored) {
-              try { fs.rmSync(bak, { force: true }); } catch (_) {}
-            }
-          }
-          try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-          if (hasBak && !restored) {
-            throw new Error(
-              `${copyErr.message} — the file may be incomplete. A snapshot of ` +
-              `the previous content was preserved at "${bak}". Rename it over ` +
-              `the original to recover.`
-            );
-          }
-          throw copyErr;
-        }
-      } else {
-        throw renameErr;
-      }
-    }
-  } catch (writeErr) {
-    /* Always clean up the temp file if anything went wrong */
-    try { fs.unlinkSync(tmp); } catch (_) {}
-    throw writeErr;
-  }
+  atomicWriteFile(safe, content);
 
   // Mirror what openFolderDialog does: grant this directory as a trusted root
   // so subsequent auto-saves via writeFile (which enforces validatePathInside)
