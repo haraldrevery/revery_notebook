@@ -13,7 +13,8 @@
     "start:electron": "electron .",
     "build:electron": "electron-builder",
     "start:tauri": "tauri dev   --config tauri/tauri.conf.json",
-    "build:tauri": "tauri build --config tauri/tauri.conf.json"
+    "build:tauri": "tauri build --config tauri/tauri.conf.json",
+    "test": "node --test test/"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
@@ -28,7 +29,11 @@
     },
     "files": [
       "www/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "!www/dev.sh",
+      "!www/dev.bat",
+      "!www/tailwindcss-linux-x64",
+      "!www/css_aesthetics/**"
     ],
     "mac": {
       "category": "public.app-category.productivity",
