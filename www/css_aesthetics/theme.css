@@ -1,0 +1,49 @@
+@theme {
+  /* Font Families */
+  --font-brand: "HaraldText", sans-serif;
+  --font-mono: "HaraldMono", monospace;
+
+  /* V1 Extracted Sizes */
+  --text-body: 1.22rem;         /* global font size */
+  --text-body-mobile: 1.22rem;  /* global font size for phones */
+  --text-mono: 1.22rem;
+  --text-nav: 1.4rem;
+
+  --text-line-row-space: 1.24;   /* space between the rows/lines of text */
+  --tracking-body: 0.029em;     /* global letter-spacing (space between characters/letters)*/
+
+  /* Layout Spacing */
+  --spacing-container-px: 5%; 
+
+  /* Breakpoints and Animations */
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-nav-desktop: 1140px;
+  --animate-gradient-slow: gradient-shift 15s ease infinite;
+
+  @keyframes gradient-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+}
+
+/* 1. Font Definitions */
+@font-face {
+    font-family: 'HaraldText';
+    src: url('./fonts/HaraldReveryTextFont.woff2') format('woff2'),
+         url('./fonts/HaraldReveryTextFont.woff') format('woff'),
+         url('./fonts/HaraldReveryTextFont.ttf') format('truetype');
+    font-weight: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'HaraldMono';
+    src: url('./fonts/HaraldReveryMonoFont.woff2') format('woff2'),
+         url('./fonts/HaraldReveryMonoFont.woff') format('woff'),
+         url('./fonts/HaraldReveryMonoFont.ttf') format('truetype');
+    font-weight: normal;
+    font-display: swap;
+}
+

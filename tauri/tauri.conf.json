@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Revery Notebook",
+  "version": "1.0.0",
+  "identifier": "com.haraldrevery.notebook",
+
+"app": {
+  "withGlobalTauri": true,
+  "security": {
+   "assetProtocol": {
+      "enable": true,
+      "scope": []
+    },
+    "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: asset: http://asset.localhost https://asset.localhost; script-src 'self'"
+  },
+  "windows": [
+      {
+        "label":          "main",
+        "title":          "Revery Notebook",
+        "url":            "revery_notebook.html",
+        "width":          1280,
+        "height":         800,
+        "minWidth":       640,
+        "minHeight":      480,
+        "resizable":      true,
+        "dragDropEnabled": true
+      }
+    ]
+  },
+
+  "build": {
+    "frontendDist": "../www",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+
+"bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": []
+  }
+}

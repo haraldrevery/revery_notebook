@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist-electron/
+tauri/target/
+tauri/gen/
+
+# Local build-tool binaries (large; re-download from tailwindcss.com releases)
+tw.exe
+build_tools/tw.exe
+build_tools/tailwindcss-linux-x64
+www/tailwindcss-linux-x64
+
+# OS junk
+.DS_Store
+Thumbs.db

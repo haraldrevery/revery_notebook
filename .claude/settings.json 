@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./node_modules/**)",
+      "Glob(./node_modules/**)",
+      "Grep(./node_modules/**)",
+      "Read(./third_party_sources/**)",
+      "Glob(./third_party_sources/**)",
+      "Grep(./third_party_sources/**)",
+      "Read(./tauri/target/**)",
+      "Glob(./tauri/target/**)",
+      "Grep(./tauri/target/**)",
+      "Read(./dist/**)",
+      "Glob(./dist/**)",
+      "Grep(./dist/**)",
+      "Read(./.git/**)",
+      "Glob(./.git/**)",
+      "Grep(./.git/**)",
+      "Read(./old_readme/**)",
+      "Glob(./old_readme/**)",
+      "Grep(./old_readme/**)",
+      "Read(./www/image_assets/**)",
+      "Glob(./www/image_assets/**)",
+      "Grep(./www/image_assets/**)",
+      "Read(./www/fonts/**)",
+      "Glob(./www/fonts/**)",
+      "Grep(./www/fonts/**)"
+    ]
+  }
+}
+
+
+

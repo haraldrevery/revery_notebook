@@ -1,0 +1,1 @@
+I use tailwind to re-generate the prose.css and main.css

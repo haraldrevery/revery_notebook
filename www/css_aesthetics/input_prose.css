@@ -1,0 +1,328 @@
+@import "tailwindcss";
+
+
+@plugin "@tailwindcss/typography";
+
+
+@import "./theme.css";
+
+
+/* ===================================
+   Markdown to html "prose" template
+   =================================== */
+/* In input.css */
+@layer base {
+  .prose {
+    /* 1. Fix the color to be white (matching your About page intent) */
+    --tw-prose-body: var(--color-white);
+    --tw-prose-headings: var(--color-white);
+    --tw-prose-bold: var(--color-white);
+    --tw-prose-links: var(--color-white);
+    
+    /* 2. Force ALL text in prose to stay normal weight (400) */
+    font-weight: 400 !important;
+  }
+
+
+  .prose strong, .prose b {
+    font-weight: 400 !important; /* Force no bold */
+    color: inherit;
+    text-decoration: underline;  /* Apply underline for emphasis */
+    text-decoration-thickness: 1px; /* Makes the line as thin as possible */
+    text-underline-offset: 4px;    /* Keeps a clean gap from the text */
+  }
+  /* Opti/* 2. Headers: Integrated with your requested utilities */
+  .prose h1 {
+    @apply text-5xl md:text-6xl uppercase tracking-wider mb-6;
+    font-weight: 400 !important; /* Forces no-bold */
+    color: inherit;
+  }
+    
+  .prose h2 {
+    @apply text-4xl uppercase tracking-wide mt-16 mb-6;
+    font-weight: 400 !important;
+    color: inherit;
+  }
+    
+  .prose h3 {
+    @apply text-2xl uppercase tracking-wide mt-12 mb-4;
+    font-weight: 400 !important;
+    color: inherit;
+  }
+
+  .prose h4 {
+    @apply text-xl uppercase tracking-wide mt-10 mb-3;
+    font-weight: 400 !important;
+    color: inherit;
+  }
+
+  .prose h5 {
+    @apply text-lg uppercase tracking-wide mt-8 mb-2;
+    font-weight: 400 !important;
+    color: inherit;
+  }
+
+  .prose h6 {
+    @apply text-base uppercase tracking-wide mt-6 mb-2;
+    font-weight: 400 !important;
+    color: inherit;
+  }
+
+/* 3. List Items: Match paragraph size and line height */
+  .prose li {
+    font-size: var(--text-body); /* Uses your defined 1.22rem */
+    line-height: var(--text-line-row-space);            /* Matches your global body height */
+    margin-top: 0.15em !important;    /* Reduces top spacing */
+    margin-bottom: 0.15em !important; /* Reduces bottom spacing */
+  }
+
+  /* Removes spacing if your markdown generator wraps list items in <p> tags */
+  .prose li p {
+    margin-top: 0.4em!important;
+    margin-bottom: 0.4em !important;
+  }
+  
+    /* Images */
+ .prose img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.5rem;
+    margin-top: 2rem;
+    margin-bottom: 2rem;
+  }
+
+
+}
+
+/* 1. Force the brand font and base colors */
+.prose {
+  font-family: var(--font-brand) !important;
+  --tw-prose-body: var(--color-black);
+  --tw-prose-headings: var(--color-black);
+  --tw-prose-bold: var(--color-black);
+  --tw-prose-links: var(--color-black);
+  --tw-prose-bullets: var(--color-black);
+  --tw-prose-counters: var(--color-black);
+  hyphens: auto;       /* <--- Add this for cleaner edges */
+  max-width: none;
+}
+
+/* 2. Dark Mode Overrides (Matching your gradient background) */
+@media (prefers-color-scheme: dark) {
+  .prose {
+    --tw-prose-body: var(--color-white);
+    --tw-prose-headings: var(--color-white);
+    --tw-prose-bold: var(--color-white);
+    --tw-prose-links: var(--color-white);
+    --tw-prose-bullets: var(--color-white);
+  }
+}
+
+/* 3. Header specific styling to match your V1 design */
+.prose :is(h1, h2, h3, h4) {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wider);
+  font-weight: 400 !important; /* Forces the lighter look you want */
+  margin-bottom: 1.5rem;
+}
+
+.prose h1 { font-size: 3rem; margin-top: 5rem; } /* text-5xl */
+
+/* Desktop: text-6xl (Typically 1024px and up) */
+@media (min-width: 900px) {
+  .prose h1 { 
+    font-size: 3.75rem; 
+  }
+}
+
+/* Mobile: text-3xl (1.875rem) */
+.prose h2 { 
+  font-size: 1.875rem; 
+  margin-top: 3rem; 
+} 
+
+/* Desktop: text-4xl (2.25rem) */
+@media (min-width: 900px) {
+  .prose h2 { 
+    font-size: 2.25rem; 
+  }
+}
+/* 4. Paragraph styling */
+.prose p {
+  text-align: justify; /* <--- Add this */
+  line-height: var(--text-line-row-space);
+  margin-bottom: 1.5rem;
+}
+
+  /* 3. Global Body Styling */
+  .prose p {
+
+    font-family: var(--font-brand) !important;
+    font-size: var(--text-body-mobile); 
+    line-height: var(--text-line-row-space);                 
+    letter-spacing: var(--tracking-body);          
+  }
+
+
+
+  
+.prose table {
+  width: 100%;
+  max-width: 100%;
+  display: table;
+}
+
+.prose td,
+.prose th {
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: normal;
+  vertical-align: middle;
+}
+
+
+
+  @media (min-width: 900px) {
+    .prose p {
+      font-size: var(--text-body); /* V1 Desktop Scaling */
+    }
+  }
+/* 2. Dark Mode Overrides (Matching your gradient background) */
+@media (prefers-color-scheme: dark) {
+  .prose {
+    --tw-prose-body: var(--color-white);
+    --tw-prose-headings: var(--color-white);
+    --tw-prose-bold: var(--color-white);
+    --tw-prose-links: var(--color-white);
+    
+    /* FIX: Force list counters (1., 2., 3.) to be white */
+    --tw-prose-counters: var(--color-white);
+    
+    /* FIX: Force bullet points to be white */
+    --tw-prose-bullets: var(--color-white);
+    --tw-prose-quotes: var(--color-white);        /* ← fixes blockquote text */
+    --tw-prose-quote-borders: var(--color-white); /* ← fixes the left border too */
+  }
+
+  /* EXTRA FIX: Explicitly target the footnote area numbers if variables fail */
+  .prose .footnotes ol li::marker {
+    color: var(--color-white) !important;
+  }
+
+  /* EXTRA FIX: Make sure the superscript links [1] in the text are visible */
+  .prose sup a {
+    color: var(--color-white) !important;
+    text-decoration: none; /* Optional: cleaner look for numbers */
+  }
+}
+
+
+@layer components {
+  /* 1. Replace the Return Symbol */
+  .footnotes .footnote-backref {
+    font-family: var(--font-brand); /* Ensure it's not using a system font arrow */
+    text-decoration: none;
+    font-style: normal;
+    visibility: hidden; /* Hide the default character */
+    position: relative;
+  }
+
+  .footnotes .footnote-backref::after {
+    content: "←"; /* The new symbol */
+    visibility: visible;
+    position: absolute;
+    top: 0;
+    left: 0;
+    font-size: 1.2em;
+    margin-left: 0.25rem;
+  }
+
+  /* 2. Dark Mode Footnote Specifics */
+  @media (prefers-color-scheme: dark) {
+    .footnotes {
+      color: var(--color-gray-300);
+      border-color: var(--color-gray-800);
+    }
+    
+    .footnotes hr {
+      border-color: var(--color-white);
+      opacity: 0.2;
+    }
+  }
+}
+
+/* Custom Code & Code Block Styling */
+.prose code {
+  font-family: var(--font-mono) !important;
+  font-weight: 400 !important;
+  background-color: rgba(0, 0, 0, 0.05);    /* Light subtle background */
+  color: var(--color-black);
+  padding: 0.125rem 0.25rem;                /* Small padding */
+  border-radius: 0.25rem;                   /* Rounded corners */
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose code {
+    background-color: rgba(0, 0, 0, 0.1);
+    color: var(--color-white);
+  }
+}
+
+.prose pre {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose pre {
+    background-color: rgba(0, 0, 0, 0.5);
+  }
+}
+
+.prose pre code {
+  font-size: 1.2em !important;           
+  padding: 0;
+  background-color: transparent;
+}
+
+
+
+/* Optional: Remove default backticks (`) that Tailwind adds to inline code */
+.prose code::before,
+.prose code::after {
+  content: "";
+}
+
+.prose thead th {
+    font-weight: 400 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.96em; /* Slightly smaller if using uppercase */
+
+    border-bottom: 1.2px solid rgba(0, 0, 0, 0.8); /* A solid line for the whole row */
+    padding-bottom: 8px; /* Control the gap exactly */
+}
+/* Dark Mode Overrides */
+@media (prefers-color-scheme: dark) {
+    .prose thead th {
+        /* A light gray or semi-transparent white works best for your dark aesthetic */
+        border-bottom: 1.2px solid rgba(255, 255, 255, 0.8);
+    }
+}
+  .prose em {
+    font-style: italic;
+    font-family: var(--font-brand);
+  }
+
+  /* För bildtexter (om du använder dem) */
+  .prose figcaption {
+    text-align: center;
+    font-size: var(--text-body-mobile); 
+    color: var(--color-neutral-600);
+    margin-top: 0.5rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .prose figcaption {
+      color: var(--color-neutral-400);
+    }
+  }

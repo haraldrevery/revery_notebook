@@ -1,0 +1,2038 @@
+
+/* ── Frameless Window: Drag Region & Custom Controls ─────────────────────
+   Activated only when native_api.js adds .desktop-app to <body>.
+   The web build is completely unaffected.
+   ─────────────────────────────────────────────────────────────────────── */
+
+/* Make the entire topbar a drag handle in desktop mode.
+   -webkit-app-region is understood by both Electron (Chromium) and Tauri
+   (WebKitGTK / WKWebView). The data-tauri-drag-region attribute on the
+   element itself covers Tauri's JS-side drag implementation.             */
+body.desktop-app #topbar {
+  -webkit-app-region: drag;
+}
+
+/* All interactive elements inside the topbar must opt back out of dragging
+   so clicks reach them normally. A single broad rule covers all existing
+   buttons and inputs without touching each element individually.          */
+body.desktop-app #topbar button,
+body.desktop-app #topbar input,
+body.desktop-app #topbar a,
+body.desktop-app #topbar select,
+body.desktop-app #topbar .menu-container,
+body.desktop-app #win-controls {
+  -webkit-app-region: no-drag;
+}
+
+/* ── #win-controls container ─────────────────────────────────────────── */
+#win-controls {
+  display: none; /* revealed below for desktop-app && !is-macos */
+  align-items: center;
+  gap: 5px;
+  margin-left: 10px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+/* Show controls only on desktop, non-macOS.
+   On macOS the native traffic-light buttons handle Min/Max/Close.        */
+body.desktop-app:not(.is-macos) #win-controls {
+  display: flex;
+}
+
+/* ── Individual win-btn style ────────────────────────────────────────── */
+.win-btn {
+  width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--border-md);
+  border-radius: 2px;
+  color: var(--text-muted);
+  font-family: var(--font-mono); /* Added to match .tb-btn */
+  font-size: 0.7rem;             /* Matched to .tb-btn */
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.375rem 0 0.1875rem 0; /* Matched vertical padding to .tb-btn */
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  -webkit-app-region: no-drag;
+  touch-action: manipulation;
+  flex-shrink: 0;
+}
+.win-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--border-md);
+}
+
+/* Close button gets a red tint on hover — standard OS convention */
+#win-btn-close:hover {
+  background: rgba(220, 38, 38, 0.14);
+  border-color: rgba(220, 38, 38, 0.45);
+  color: #f87171;
+}
+
+/* On macOS with titleBarStyle:hiddenInset Electron injects its own traffic
+   lights in the top-left corner; give the topbar a bit of left clearance
+   so the draggable area doesn't overlap the native buttons.              */
+body.desktop-app.is-macos #topbar {
+  padding-left: 80px; /* ~3 traffic-light buttons + gap */
+}
+   /*in markdown_editor_menus.js, which injects a <style id="ui-scale-prose-fix">
+   tag with #preview .prose h1/h2/prose-lg rules calculated from uiSize and
+   previewTextSize. Those rules have higher specificity than prose.css and take
+   effect without needing !important or CSS custom properties here. */
+
+/* Replaces injected <style> for Font Types */
+#editor { 
+  font-family: var(--editor-font, var(--font-brand, inherit)) !important; 
+}
+html #preview .prose,
+html #preview .prose p,
+html #preview .prose li,
+html #preview .prose blockquote,
+html #preview .prose h1,
+html #preview .prose h2,
+html #preview .prose h3,
+html #preview .prose h4,
+html #preview .prose h5,
+html #preview .prose h6,
+html #preview .prose pre,
+html #preview .prose code,
+html #preview .prose em,
+html #preview .prose i,
+html #preview .prose strong,
+html #preview .prose b {
+  font-family: var(--preview-font, var(--font-brand, inherit)) !important;
+  letter-spacing: var(--preview-letter-spacing, inherit) !important;
+}
+#preview .katex { font-size: var(--katex-font-size, 0.7em) !important; }
+#outline-nav .outline-item { font-family: var(--outline-font, var(--font-brand, inherit)) !important; }
+
+/* Replaces injected <style> for Centered Headers */
+.center-headers-active #preview .prose h1,
+.center-headers-active #preview .prose h2,
+.center-headers-active #preview .prose h3,
+.center-headers-active #preview .prose h4,
+.center-headers-active #preview .prose h5,
+.center-headers-active #preview .prose h6 {
+  text-align: center !important;
+}
+
+/* Replaces inline style="" for markdown_editor_core.js */
+.preview-image-full { width: 100% !important; }
+.render-error-message {
+  color: #ff5555;
+  padding: 1rem;
+  border: 1px solid #ff5555;
+  border-radius: 4px;
+}
+
+/* Replaces inline style="" for markdown_editor_find.js */
+.find-highlight-mark {
+  background: rgba(255, 200, 60, 0.4);
+  color: transparent;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255,200,60,0.8);
+}
+
+
+
+
+/* ── Tokens ── */
+:root {
+  --font-brand: 'HaraldText', Georgia, 'Times New Roman', serif;
+  --font-mono:  'HaraldMono', 'Courier New', Courier, monospace;
+  --text-body:        1.22rem;
+  --text-body-mobile: 1.07rem;
+  --text-line:        1.24;
+  --tracking-body:    0.029em;
+  --tracking-wide:    0.12em;
+  --tracking-wider:   0.2em;
+  /* ── Outline pane font scale (set via Settings → Outline font size) ── */
+  --outline-font-size: 0.76rem;
+  /* ── Reader mode content max-width (set via Settings → Reader padding) ── */
+  --reader-max-width: none;
+}
+/* ── Editor UI Themes ── */
+[data-theme="dark"] {
+  --bg: #0a0a0a;
+  --editor-bg-start: #0a0a0a;
+  --editor-bg-end: #000000;
+  --bg-panel:   #1e1e1e;
+  --bg-hover:   #2c2c2c;
+  --border:     rgba(255,255,255,0.08);
+  --border-md:  rgba(255,255,255,0.14);
+  --theme-divider: rgb(30, 30, 30);
+  --theme-divider-hover: rgb(42, 42, 42);
+  --text:       #f5f5f5;
+  --text-muted: rgba(255, 255, 255, 0.46);
+  --text-dim:   rgba(255,255,255,0.18);
+  --accent:     rgba(255,255,255,0.58);
+  --scrollbar:  rgba(255,255,255,0.1);
+  --menu-bg:    #1f1f1f;
+  --bg_oacity:  0.027
+}
+[data-theme="light"] {
+  --bg: #fafaf8;
+  --editor-bg-start: #fafaf8;
+  --editor-bg-end:  #e3e3e3;
+  --bg-panel:   #ffffff;
+  --bg-hover:   #f2f2ef;
+  --border:     rgba(0,0,0,0.07);
+  --border-md:  rgba(0,0,0,0.14);
+  --theme-divider: rgb(232, 232, 232);
+  --theme-divider-hover: rgb(211, 211, 211);
+  --text:       #171717;
+  --text-muted: rgba(0, 0, 0, 0.632);
+  --text-dim:   rgba(0,0,0,0.18);
+  --accent:     rgba(0,0,0,0.58);
+  --scrollbar:  rgba(0,0,0,0.1);
+  --menu-bg:    #ffffff;
+  --bg_oacity:  0.027
+}
+
+[data-theme="paper"] {
+  --bg: #f4efe4;
+  --editor-bg-start: #f4efe4;
+  --editor-bg-end: #e7d7c0;
+  --bg-panel:            #ece5d6;
+  --bg-hover:            #dabca2;
+  --border:              rgba(110, 80, 40, 0.11);
+  --border-md:           rgba(110, 80, 40, 0.21);
+  --theme-divider:       rgb(208, 196, 176);
+  --theme-divider-hover: rgb(188, 174, 150);
+  --text:                #2f2820;
+  --text-muted:          rgba(55, 38, 18, 0.536);
+  --text-dim:            rgba(55, 38, 18, 0.22);
+  --accent:              rgba(176, 95, 51, 0.55);
+  --scrollbar:           rgba(110, 80, 40, 0.14);
+  --menu-bg:             #ece5d6;
+  --bg_oacity:           0.05;
+}
+[data-theme="forest"] {
+  --bg: #0e1a11;
+  --editor-bg-start: #0e1a11;
+  --editor-bg-end: #0c1b09;
+  --bg-panel:            #152019;
+  --bg-hover:            #1d2d22;
+  --border:              rgba(90, 170, 90, 0.09);
+  --border-md:           rgba(90, 170, 90, 0.17);
+  --theme-divider:       rgb(24, 40, 28);
+  --theme-divider-hover: rgb(36, 58, 40);
+  --text:                #cfe8c8;
+  --text-muted:          rgba(170, 215, 158, 0.50);
+  --text-dim:            rgba(170, 215, 158, 0.20);
+  --accent:              rgba(130, 195, 118, 0.65);
+  --scrollbar:           rgba(90, 170, 90, 0.11);
+  --menu-bg:             #192a1d;
+  --bg_oacity:           0.030;
+}
+
+/* ── Reset for Editor Layout ── */
+html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-brand);
+  background: linear-gradient(135deg, var(--bg-start), var(--bg-end));
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  transition: background 0.25s, color 0.25s;
+}
+
+/* ── Top bar ── */
+#topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 2.2rem; /* Scales up with internal buttons to prevent clipping */
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg);
+  z-index: 10;
+  position: relative; /* needed so #topbar-center can be absolutely centred */
+}
+
+/* ── Logo (centre of topbar) ── */
+#topbar-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  pointer-events: all; /* Allow interactions for the dropdown */
+}
+#btn-logo {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+  /* ── LOGO VERTICAL OFFSET ──────────────────────────────────────────────────
+     Adjust margin-top to shift the logo up (negative) or down (positive)
+     relative to the topbar centre line. 0px = perfectly centred.          */
+  margin-top: 0px;
+}
+#btn-logo:hover { opacity: 1; }
+
+#btn-logo svg {
+  /* ── LOGO SIZE ─────────────────────────────────────────────────────────────
+     Change height to scale the logo. The SVG viewBox is 1:1, so width
+     will always equal height. E.g. 1.5rem = smaller, 2.25rem = larger.   */
+  height: 1.2rem;      /* SVG logo size tweak, scales with UI text size */
+  width: auto;
+  display: block;
+  fill: currentColor;
+}
+
+#topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+
+#doc-title {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text);
+  background: none;
+  border: none;
+  outline: none;
+  width: 320px;
+}
+
+
+
+@media (max-width: 1480px) and (min-width: 751px) {
+  #doc-title {
+    width: 180px;        /* Slightly narrower on medium screens */
+  }
+
+   /* NEW: Hide the Export .md button on medium-width screens */
+  #btn-export {
+    display: none !important;
+  }
+}
+
+#doc-title::placeholder { color: var(--text-dim); }
+#wordcount {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+#topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tb-btn {
+  background: none;
+  border: 1px solid var(--border-md);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  padding: 0.375rem 0.75rem 0.1875rem 0.75rem; /* FONTFIX Top: 0.375rem, Bottom: 0.1875rem. */
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  border-radius: 2px;
+  position: relative;
+
+/* ADD THESE LINES for UI text alignment */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1; /* Strips extra vertical space */
+
+  touch-action: manipulation;
+
+}
+.tb-btn:hover { color: var(--text); border-color: var(--border-md); background: var(--bg-hover); }
+/* ── Menus (Dropdown & Context) ── */
+.menu-container {
+  display: none;
+  position: absolute;
+  background: var(--menu-bg);
+  border: 1px solid var(--border-md);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  border-radius: 4px;
+  z-index: 100;
+  min-width: 8rem; /* Changed from 200px to scale proportionally with UI size */
+  padding: 4px 0;
+  flex-direction: column;
+  /* overflow: visible keeps submenus from being clipped.
+     max-height + overflow-y are applied dynamically by smartPositionDropdown()
+     in markdown_editor_menus.js when the menu would exceed the viewport. */
+  overflow: visible;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+/* Style the menu scrollbar to match the editor theme */
+.menu-container::-webkit-scrollbar { width: 4px; }
+.menu-container::-webkit-scrollbar-track { background: transparent; }
+.menu-container::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
+
+.menu-container.show { display: flex; }
+#toolbar-dropdown { top: 38px; right: 0; }
+.menu-item {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-align: left;
+  padding: 0.5625rem 1rem 0.375rem 1rem; /* FONTFIX Top: 0.5625rem, Bottom: 0.375rem. */
+  cursor: pointer;
+  transition: background 0.1s;
+
+  /* ADD THESE LINES for UI text alignment */
+  display: flex;
+  align-items: center;
+  line-height: 1;
+
+  touch-action: manipulation;
+  white-space: nowrap; /* Forces container expansion to prevent text stacking */
+}
+/* Also add to other clickable elements for consistency */
+.outline-item,
+.find-btn {
+  touch-action: manipulation;
+}
+
+
+.menu-item:hover { background: var(--bg-hover); }
+.menu-divider { height: 1px; background: var(--theme-divider); margin: 4px 0; }
+
+/* ── Layout: two panes ── */
+#workspace {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0; /* Prevents hidden container from being scrolled by the browser */
+}
+
+/* ── Divider ── */
+#divider {
+  width: 1px;
+  background-color: var(--theme-divider);
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+
+  touch-action: none;
+}
+#divider:hover, #divider.dragging { background-color: var(--theme-divider-hover); }
+#divider::after { content: ''; position: absolute; inset: 0 -12px; z-index: 10; }
+
+/* ── Editor pane (Defaults to 33.33%) ── */
+#editor-pane {
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, var(--editor-bg-start), var(--editor-bg-end));
+  overflow: hidden;
+  width: 33.33%;
+  min-width: 200px;
+}
+/* Solid editor background — toggled by .editor-bg-solid on <html> */
+.editor-bg-solid #editor-pane {
+  background: var(--editor-bg-start);
+}
+.pane-label {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 8px 20px 6px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+#editor {
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.96rem;
+  line-height: 1.7;
+  letter-spacing: 0.01em;
+  padding: var(--editor-padding, 24px 28px);
+  overflow-y: auto;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+#editor::selection { background: rgba(255, 255, 255, 0.22); }
+[data-theme="light"] #editor::selection { background: rgba(0, 0, 0, 0.22); }
+
+/* ── Preview pane ── */
+#preview-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+  min-width: 200px;
+}
+#preview {
+  flex: 1;
+  overflow-y: auto;
+  padding: 40px 52px 80px;
+  position: relative;
+  /* ── Apply background directly to prevent scrolling ── */
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-attachment: scroll; /* Fixes background to the element, preventing scrolling with text */
+}
+/* Disable the old pseudo-element (opacity trick moved to background gradients below) */
+#preview::before {
+  display: none; 
+}
+
+
+/* ── Force Preview Prose to follow Editor Theme (Overrides Tailwind OS Media Queries) ── */
+#preview .prose {
+  --tw-prose-body: var(--text);
+  --tw-prose-headings: var(--text);
+  --tw-prose-lead: var(--text-muted);
+  --tw-prose-links: var(--text);
+  --tw-prose-bold: var(--text);
+  --tw-prose-counters: var(--text-muted);
+  --tw-prose-bullets: var(--text-muted);
+  --tw-prose-hr: var(--border-md);
+  --tw-prose-quotes: var(--text);
+  --tw-prose-quote-borders: var(--border-md);
+  --tw-prose-captions: var(--text-muted);
+  --tw-prose-code: var(--text);
+  --tw-prose-pre-code: var(--text);
+  --tw-prose-pre-bg: var(--bg-panel);
+  --tw-prose-th-borders: var(--border-md);
+  --tw-prose-td-borders: var(--border);
+  color: var(--text);
+}
+
+
+/* ── CHANGE THESE URLS TO YOUR OWN BACKGROUND IMAGES ── */
+[data-theme="dark"] #preview {
+  /* Overlays dark bg (#0a0a0a) to mimic low opacity without needing a scrolling ::before element */
+  background-image: 
+    linear-gradient(rgba(10, 10, 10, calc(1 - var(--bg_oacity))), rgba(10, 10, 10, calc(1 - var(--bg_oacity)))), 
+    var(--preview-bg-image, none);
+}
+
+[data-theme="light"] #preview {
+  /* Overlays light bg (#fafaf8) to mimic low opacity without needing a scrolling ::before element */
+  background-image: 
+    linear-gradient(rgba(250, 250, 248, calc(1 - var(--bg_oacity))), rgba(250, 250, 248, calc(1 - var(--bg_oacity)))), 
+    var(--preview-bg-image, none);
+}
+
+[data-theme="paper"] #preview {
+  /* Overlays paper bg (#f4efe4) */
+  background-image: 
+    linear-gradient(rgba(244, 239, 228, calc(1 - var(--bg_oacity))), rgba(244, 239, 228, calc(1 - var(--bg_oacity)))), 
+    var(--preview-bg-image, none);
+}
+
+[data-theme="forest"] #preview {
+  /* Overlays forest bg (#0e1a11) */
+  background-image: 
+    linear-gradient(rgba(14, 26, 17, calc(1 - var(--bg_oacity))), rgba(14, 26, 17, calc(1 - var(--bg_oacity)))), 
+    var(--preview-bg-image, none);
+}
+
+/* Ensure all preview content sits above the background */
+#preview > * {
+  position: relative;
+  z-index: 1;
+}
+
+
+/* YAML Frontmatter Rendering */
+.yaml-render {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 24px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: background 0.15s;
+  max-width: var(--reader-max-width, none);
+  margin-left: auto;
+  margin-right: auto;
+}
+.yaml-render:hover {
+  background: rgba(128,128,128,0.04);
+}
+.yaml-render-title {
+  font-size: 0.7rem;
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.yaml-pill-container { display: flex; flex-wrap: wrap; gap: 8px; }
+.yaml-pill {
+  background: var(--bg-hover);
+  border: 1px solid var(--border-md);
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  display: flex;
+  gap: 6px;
+}
+.yaml-key { color: var(--text-muted); }
+.yaml-value { color: var(--text); }
+
+/* ── Scrollbars ── */
+#editor::-webkit-scrollbar, #preview::-webkit-scrollbar { width: 4px; }
+#editor::-webkit-scrollbar-track, #preview::-webkit-scrollbar-track { background: transparent; }
+#editor::-webkit-scrollbar-thumb, #preview::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
+
+/* Empty state */
+#preview-empty {
+  display: flex; align-items: center; justify-content: center; height: 100%; pointer-events: none;
+}
+#preview-empty span {
+  font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: var(--tracking-wider); text-transform: uppercase; color: var(--text-dim);
+}
+
+/* ── Copy flash ── */
+.copy-flash { animation: flash 0.5s ease; }
+@keyframes flash { 0%,100% { opacity:1; } 50% { opacity: 0.4; } }
+
+/* ── Code block copy button ── */
+/* Block code: the pre element becomes the positioning anchor */
+#preview pre {
+  position: relative;
+}
+.code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, color 0.12s, background 0.12s;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-md);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  z-index: 2;
+  line-height: 1;
+  white-space: nowrap;
+  /* Don't inherit prose styles */
+  font-weight: 400;
+}
+/* Label via ::after so toggling .is-copied only mutates an attribute,
+   never a text node — prevents the MutationObserver in editor-sync.js
+   from firing its scroll-sync logic on every copy action.             */
+
+.code-copy-btn::after          { content: var(--str-copy, 'Copy'); }
+.code-copy-btn.is-copied::after { content: var(--str-copied, 'Copied!'); }
+/* Show the button on hover of the parent pre or inline wrapper */
+#preview pre:hover .code-copy-btn,
+.inline-code-wrapper:hover .code-copy-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+.code-copy-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--border-md);
+}
+/* Inline code: wrapper makes the button positionable without breaking text flow */
+.inline-code-wrapper {
+  position: relative;
+  display: inline-block;
+  vertical-align: baseline;
+}
+/* Inline copy button floats above the code snippet */
+.inline-code-wrapper .code-copy-btn {
+  top: auto;
+  bottom: calc(100% + 3px);
+  right: 0;
+  font-size: 0.58rem;
+  padding: 2px 6px;
+}
+
+/* ── Preview → Editor sync ── */
+/* Blocks that have a source-line stamp are click-navigable */
+#preview [data-sl] {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+#preview [data-sl]:hover {
+  background: rgba(128,128,128,0.07);
+}
+/* Flash played on the clicked preview block */
+@keyframes previewFlash {
+  0%   { background: rgba(128,128,128,0.07); }
+  35%  { background: rgba(255,200,60,0.18); }
+  100% { background: transparent; }
+}
+.preview-flash { animation: previewFlash 0.55s ease forwards; }
+
+/*Flash played on the editor pane to draw the eye. Custom class to override the selection highlight color */
+#editor.highlight-flash::selection {
+  background: rgba(255, 200, 60, 0.6) !important;
+  color: #000 !important;
+}
+
+/* ── Dual button labels: desktop full / mobile abbreviated ── */
+.btn-label-mobile  { display: none; }
+.btn-label-desktop { display: inline; }
+
+
+/* ── Mobile / narrow ── */
+@media (max-width: 820px) {
+  #divider { display: none; }
+  #win-controls { display: none !important; }
+  /* Show mobile sidebar button, hide desktop one */
+  #btn-sidebar { display: none !important; }
+  #btn-sidebar-mobile { display: inline-flex !important; margin-right: auto; }
+  #editor-pane { width: 100% !important; flex: 1; }
+  #preview-pane { display: none; flex: 1; }
+  body[data-view="preview"] #editor-pane { display: none; }
+  body[data-view="preview"] #preview-pane { display: flex; }
+
+/* Hide the "Preview" label bar on mobile */
+  #preview-pane .pane-label {
+    display: none !important;
+  }
+
+  #preview { padding: 28px 20px 80px; }
+
+
+
+#editor  { 
+    padding: var(--editor-padding-mobile, 24px 20px 40vh); /* 40vh ensures text lifts above the virtual keyboard */
+    font-size: var(--text-body-mobile);
+    line-height: var(--text-line-row-space);
+  }
+  #topbar-center { display: none; }
+  #topbar-left   { display: none; }
+
+  #topbar       { padding: 0 4px; justify-content: stretch; gap: 0; }
+
+  #topbar-right { flex: 1; justify-content: space-evenly; gap: 0; }
+
+
+/* ── Filename bar & Button row spacing in editor mode ── */
+  body[data-view="editor"] #topbar {
+    flex-wrap: wrap;
+    height: auto;         
+    padding-top: 8px;     /* Consistent top padding */
+    padding-bottom: 8px;  /* Consistent bottom padding */
+    gap: 8px;             /* Space between the two rows */
+  }
+body[data-view="editor"] #topbar-left {
+    display: flex;
+    flex: 0 0 100%;
+    box-sizing: border-box; /* Fix: Absorbs the 40px padding into the 100% width */
+    height: auto;         
+    padding: 4px 20px;    
+    align-items: center;
+    gap: 12px;
+    flex-wrap: nowrap;
+    order: 2;             
+  }
+  body[data-view="editor"] #topbar-right {
+    display: flex;
+    flex: 0 0 100%;
+    box-sizing: border-box; /* Fix: Absorbs the 40px padding into the 100% width */
+    height: auto;         
+    padding: 4px 20px;    
+    align-items: center;
+    justify-content: flex-end;  
+    gap: 12px;                   
+    order: 1;             
+  }
+/* Hide export button in edit and sidebar modes on mobile */
+  body[data-view="editor"] #btn-export,
+  body[data-view="sidebar"] #btn-export {
+    display: none !important;
+  }
+
+  /* Mobile edit mode: keep the Outline button hidden — on mobile, the
+     outline is opened via the mobile-outline drawer in preview mode only.
+     (Pairs with the desktop-only show in @media (min-width: 821px).)    */
+  body[data-view="editor"] #btn-reader-outline {
+    display: none !important;
+  }
+  /* Hide toolbar button and its dropdown wrapper in sidebar mode */
+  body[data-view="sidebar"] #topbar-right > div:has(#btn-toolbar) {
+    display: none !important;
+  }
+
+  /* Show the file button wrapper and the title input, hide everything else */
+  body[data-view="editor"] #topbar-left .file-btn-wrapper {
+    display: inline-flex;
+    flex-shrink: 0;
+  }
+  
+body[data-view="editor"] #topbar-left #doc-title {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    width: auto;
+    border-bottom: 1px solid var(--border);
+    margin: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+  
+  body[data-view="editor"] #topbar-left #size-warning {
+    display: none !important;
+  }
+
+body[data-view="editor"] #topbar-left #wordcount {
+    flex-shrink: 0;
+    white-space: nowrap;
+    min-width: 4rem;
+    text-align: right;
+}
+  body[data-view="editor"] #doc-title {
+    display: block;
+    width: auto;
+    max-width: 40vw;
+    font-size: 0.85rem;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+/* Keep buttons away from screen edges in preview/reader/sidebar mode */
+  body[data-view="preview"] #topbar,
+  body[data-view="sidebar"] #topbar,
+  body.reader-mode-active #topbar {
+    height: auto;
+    padding: 8px 4px; /* Matched Editor mode's outer padding */
+  }
+
+  .tb-btn { padding: 0.4375rem 0.625rem 0.3125rem 0.625rem; font-size: 0.82rem; }
+
+  .btn-label-mobile  { display: inline; }
+  .btn-label-desktop { display: none; }
+
+
+/* In preview mode: show only toggle-view and outline buttons, with outline on the right */
+  /* !important needed to beat: body:not(.reader-mode-active) #btn-reader-outline { display: none !important } */
+  body[data-view="preview"] button#btn-reader-outline {
+  display: inline-flex !important;
+}
+
+  body[data-view="preview"] #topbar-right .tb-btn:not(#btn-toggle-view):not(#btn-reader-outline) {
+    display: none;
+  }
+
+  /* FIX: Hide the empty menu wrapper divs to eliminate ghost flex gaps */
+  body[data-view="preview"] #topbar-right > div {
+    display: none !important;
+  }
+
+  body[data-view="preview"] #topbar-right {
+    display: flex;
+    width: 100%;
+    margin-left: 0;
+  }
+
+/* New: right‑align buttons in preview, reader, and sidebar modes */
+  body[data-view="preview"] #topbar-right,
+  body[data-view="sidebar"] #topbar-right,
+  body.reader-mode-active #topbar-right {
+    justify-content: flex-end;
+    padding: 4px 20px; /* Matched Editor mode's inner padding */
+    gap: 12px;         /* Matched Editor mode's gap */
+    margin-left: 0;
+  }
+  
+  /* Move preview to the right of settings and toolbar in editor mode */
+  body[data-view="editor"] #btn-toggle-view {
+    order: 10;
+  }
+
+  /* In preview mode: swap order so Outline appears before Preview */
+  body[data-view="preview"] #btn-reader-outline {
+    order: 1;
+  }
+  body[data-view="preview"] #btn-toggle-view {
+    order: 2;
+  }
+
+  /* In reader mode: swap order so Outline appears before Exit Reader Mode */
+  body.reader-mode-active #btn-exit-reader-mode {
+    order: 2;
+  }
+  body.reader-mode-active #btn-reader-outline {
+    order: 1;
+  }
+  
+}
+
+/* ── Reader Mode Topbar Adjustments ── */
+body.reader-mode-active #topbar-left { visibility: hidden !important; }
+body.reader-mode-active #topbar-left #btn-sidebar { visibility: visible !important; }
+body.reader-mode-active #topbar-right > div:not(#win-controls) { display: none !important; }
+body.reader-mode-active #btn-export,
+body.reader-mode-active #btn-reader-mode,
+body.reader-mode-active #btn-toggle-view { display: none !important; }
+
+/* Hide the Preview pane label (and its bar) in reader mode */
+body.reader-mode-active #preview-pane .pane-label { display: none !important; }
+
+body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; }
+
+/* Desktop edit mode: place the Outline button between Toolbar and Export.
+   Default order is 0, so unordered buttons (Reader Mode, Settings, Toolbar)
+   keep their DOM order; Outline / Export / win-controls slot in after them. */
+@media (min-width: 821px) {
+  body:not(.reader-mode-active) #btn-reader-outline { order: 1; }
+  body:not(.reader-mode-active) #btn-export         { order: 2; }
+  body:not(.reader-mode-active) #win-controls       { order: 3; }
+}
+
+@media (max-width: 820px) {
+  #btn-reader-mode { display: none !important; }
+}
+
+
+/* ── Submenu Styling ── */
+.menu-item.has-submenu {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: default;
+}
+.submenu {
+  display: none;
+  position: absolute;
+  left: 100%; /* Opens to the right */
+  top: -1px;
+  background: var(--menu-bg);
+  border: 1px solid var(--border-md);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  border-radius: 4px;
+  min-width: 6rem; /* Changed from 160px to scale proportionally with UI size */
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+.submenu::-webkit-scrollbar { width: 4px; }
+.submenu::-webkit-scrollbar-track { background: transparent; }
+.submenu::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
+/* Submenu shown via JS (mouseenter/mouseleave) — see buildMenu() */
+/* Smart alignment if near the right edge of the screen */
+.menu-container.align-right .submenu {
+  left: auto;
+  right: 100%;
+}
+/* Checkmark indicator for toggle items */
+.menu-item-check {
+  display: inline-block;
+  width: 1em;
+  margin-right: 6px;
+  text-align: center;
+  opacity: 0.65;
+}
+/* ── Mobile Menu Scroll & Accordion Fix ── */
+@media (max-width: 820px) {
+  .menu-container {
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 0;
+    max-width: calc(100vw - 32px);
+    width: auto;
+  }
+  
+  .menu-item.has-submenu {
+    flex-wrap: wrap;
+  }
+  .menu-item.has-submenu > span {
+    width: 100%;
+  }
+  .submenu {
+    position: relative;
+    left: auto !important;
+    right: auto !important;
+    top: auto !important;
+    width: 100%;
+    box-shadow: none;
+    border: none;
+    border-left: 2px solid var(--border-md);
+    margin-top: 8px;
+    padding: 8px 0 8px 12px;
+    border-radius: 0;
+    background: transparent;
+  }
+}
+
+
+/* ── Interactive YAML Pills ── */
+.yaml-pill {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.yaml-pill:hover {
+  background: rgba(128, 128, 128, 0.1);
+  border-color: var(--accent);
+}
+
+/* ── Desktop: mobile-view simulation ── */
+#preview-pane.mobile-preview {
+  /* fill the remaining space and centre the phone window inside it */
+  flex: 1 !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+/* hide the "Preview" pane label — the frame makes it obvious */
+#preview-pane.mobile-preview .pane-label {
+  display: none;
+}
+
+/* the phone frame */
+#preview-pane.mobile-preview #preview {
+  flex: none;
+  width: 360px;
+  height: 640px;        /* 360 × 640 = exact 9:16 */
+  border-radius: 20px;
+  border: 1px solid var(--border-md);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  padding: 28px 20px 40px;
+  overflow-y: auto;
+  background-color: var(--bg-panel); /* Changed to background-color to preserve the image */
+}
+
+/* Preserve the mobile phone frame texture overlay */
+[data-theme="dark"] #preview-pane.mobile-preview #preview {
+  /* --bg-panel in dark mode is #111111 */
+  background-image: 
+    linear-gradient(rgba(17, 17, 17, calc(1 - var(--bg_oacity))), rgba(17, 17, 17, calc(1 - var(--bg_oacity)))), 
+    var(--preview-bg-image, none);
+}
+
+[data-theme="light"] #preview-pane.mobile-preview #preview {
+  /* --bg-panel in light mode is #ffffff */
+  background-image: 
+    linear-gradient(rgba(255, 255, 255, calc(1 - var(--bg_oacity))), rgba(255, 255, 255, calc(1 - var(--bg_oacity)))), 
+    var(--preview-bg-image, none);
+}
+
+[data-theme="paper"] #preview-pane.mobile-preview #preview {
+  /* --bg-panel in paper mode is #ece5d6 */
+  background-image: 
+    linear-gradient(rgba(236, 229, 214, calc(1 - var(--bg_oacity))), rgba(236, 229, 214, calc(1 - var(--bg_oacity)))), 
+    var(--preview-bg-image, none);
+}
+
+[data-theme="forest"] #preview-pane.mobile-preview #preview {
+  /* --bg-panel in forest mode is #152019 */
+  background-image: 
+    linear-gradient(rgba(21, 32, 25, calc(1 - var(--bg_oacity))), rgba(21, 32, 25, calc(1 - var(--bg_oacity)))), 
+    var(--preview-bg-image, none);
+}
+/* apply mobile font scale inside the phone frame */
+#preview-pane.mobile-preview .prose p,
+#preview-pane.mobile-preview .prose li {
+  font-size: var(--text-body-mobile) !important;
+}
+
+/* ── Custom Modal ── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(3px);
+}
+.modal-overlay.show { display: flex; }
+
+.modal-content {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-md);
+  padding: 24px;
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  max-width: 400px;
+  width: 90%;
+  font-family: var(--font-brand);
+}
+.modal-content h3 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  color: var(--text);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+.modal-content p {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.modal-buttons .tb-btn {
+  font-size: 0.75rem;
+}
+.btn-danger {
+  border-color: #ff5555 !important;
+  color: #ff5555 !important;
+}
+.btn-danger:hover {
+  background: rgba(255, 85, 85, 0.1) !important;
+}
+
+/* ── Custom Date Picker Calendar ── */
+.md-cal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-md);
+  border-radius: 4px;
+  padding: 12px;
+  user-select: none;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.md-cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.md-cal-nav-btn {
+  background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px 10px; border-radius: 2px;
+  font-size: 1rem; line-height: 1;
+}
+.md-cal-nav-btn:hover { background: var(--bg-hover); color: var(--text); }
+.md-cal-month-label { font-size: 0.75rem; letter-spacing: var(--tracking-wide); text-transform: uppercase; color: var(--text); }
+.md-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+.md-cal-dow { font-size: 0.65rem; letter-spacing: 0.05em; color: var(--text-dim); padding: 4px 0; text-transform: uppercase; }
+.md-cal-day {
+  font-size: 0.75rem; padding: 8px 0; cursor: pointer; border-radius: 2px; transition: background 0.15s; color: var(--text-muted); border: 1px solid transparent;
+}
+.md-cal-day:hover { background: var(--bg-hover); color: var(--text); }
+.md-cal-day.md-today { border-color: var(--border-md); color: var(--text); }
+.md-cal-day.md-other { opacity: 0.2; pointer-events: none; }
+
+/* ── Outline Navigation Pane ── */
+#outline-pane {
+  width: 200px;
+  min-width: 140px;
+  max-width: 420px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+/* ── Outline resize divider (between preview-pane and outline-pane) ── */
+#outline-divider {
+  width: 1px;
+  background-color: var(--theme-divider);
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+}
+#outline-divider:hover, #outline-divider.dragging { background-color: var(--theme-divider-hover); }
+#outline-divider::after { content: ''; position: absolute; inset: 0 -12px; z-index: 10; }
+#outline-nav {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0 12px;
+}
+#outline-nav::-webkit-scrollbar { width: 4px; }
+#outline-nav::-webkit-scrollbar-track { background: transparent; }
+#outline-nav::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
+.outline-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  /* ── Uses CSS custom property so Settings → Outline font size can scale it ── */
+  font-size: var(--outline-font-size, 0.76rem);
+  letter-spacing: 0.02em;
+  text-align: left;
+  padding: 4px 14px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  line-height: 1.45;
+  word-break: break-word;
+  white-space: normal;
+}
+.outline-item:hover { background: var(--bg-hover); color: var(--text); }
+/* H1: no indent */
+.outline-item.outline-h1 { padding-left: 14px; }
+/* Each level adds 16px of indent */
+.outline-item.outline-h2 { padding-left: 30px; }
+.outline-item.outline-h3 { padding-left: 46px; }
+.outline-item.outline-h4 { padding-left: 62px; }
+.outline-item.outline-h5 { padding-left: 78px; }
+.outline-item.outline-h6 { padding-left: 92px; }
+
+/* Highlight for the active section currently being read */
+.outline-item.active-outline {
+  color: var(--text);
+
+
+}
+/* "No headings" placeholder text */
+.outline-empty {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 24px 14px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+/* Outline pane on narrow mobile: slide-in drawer overlay in preview mode */
+@media (max-width: 820px) {
+  #outline-divider { display: none !important; }
+
+
+/* Prevent horizontal overflow on mobile */
+  .menu-container {
+    min-width: auto;
+    width: auto;
+    max-width: calc(100vw - 32px);
+  }
+
+  /* Outline becomes an anchored dropdown instead of a side drawer */
+  #outline-pane {
+    display: none !important;
+    position: absolute;               /* will be positioned by JS */
+    width: min(280px, 80vw);
+    max-height: 60vh;                 /* prevent overflowing the screen */
+    overflow-y: auto;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-md);
+    border-radius: 6px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+    z-index: 60;
+  }
+
+  body[data-view="preview"].mobile-outline-open #outline-pane {
+    display: flex !important;
+    flex-direction: column;
+  }
+
+  /* Scrim now covers the whole screen (including topbar) */
+  #mobile-outline-scrim {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.32);
+    z-index: 55;
+    cursor: pointer;
+  }
+  body[data-view="preview"].mobile-outline-open #mobile-outline-scrim {
+    display: block;
+  }
+}
+
+/* ── Reader mode content width — controlled via Settings → Reader padding ── */
+#preview .prose {
+  max-width: var(--reader-max-width, none);
+  /* margin: 0 auto already present via the prose wrapper's mx-auto class */
+  transition: max-width 0.25s ease;
+}
+
+/* ── Find / Replace Bar ─────────────────────────────────────────────────── */
+#find-bar {
+  display: none; /* shown via JS — openFindBar() sets display:flex */
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-md);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 20;
+}
+
+/* Two logical groups: find row + replace row */
+.find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 100%;
+}
+.find-row + .find-row {
+  border-top: 1px solid var(--border);
+  padding-top: 5px;
+  margin-top: 1px;
+}
+
+/* Shared input style */
+.find-input {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.01em;
+  background: var(--bg);
+  border: 1px solid var(--border-md);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 2px;
+  outline: none;
+  flex: 1;
+  min-width: 80px;
+  transition: border-color 0.15s;
+}
+.find-input:focus { border-color: var(--accent); }
+.find-input::placeholder { color: var(--text-dim); }
+
+/* Match counter badge */
+.find-count {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 48px;
+  text-align: center;
+}
+.find-count.find-no-results { color: #e05252; }
+
+/* Navigation / action buttons inside the find bar */
+.find-btn {
+  background: none;
+  border: 1px solid var(--border-md);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+
+
+.find-btn:hover { color: var(--text); background: var(--bg-hover); border-color: var(--border-md); }
+
+.find-toggle-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 4px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.find-toggle-btn:hover {
+  color: var(--text); background: var(--bg-hover);
+}
+.find-toggle-btn.active {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--border-md);
+}
+
+/* Close button — slightly more prominent */
+
+/* Close button — slightly more prominent */
+#find-close {
+  margin-left: auto;
+  font-size: 0.8rem;
+  padding: 4px 7px;
+  opacity: 0.6;
+}
+#find-close:hover { opacity: 1; }
+
+/* ── Table Generator Modal ── */
+.table-modal-inputs {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin: 12px 0 4px;
+}
+.table-modal-inputs label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.table-modal-inputs input[type="number"] {
+  width: 64px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  background: var(--bg);
+  border: 1px solid var(--border-md);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 2px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.table-modal-inputs input[type="number"]:focus { border-color: var(--accent); }
+
+
+/* KaTeX math renders at 88% of surrounding prose text.
+   Uses em so it scales automatically with the Text Size setting.
+   The #preview prefix gives enough specificity to beat texmath.min.css's !important. 
+#preview .katex { font-size: 0.7em !important; }
+*/
+
+
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   PRINT STYLES
+   Only active when the user prints (Ctrl+P / Cmd+P / browser print menu).
+   Completely inert at runtime — cannot affect the live editor.
+   ══════════════════════════════════════════════════════════════════════ */
+@media print {
+
+/* 1. Un-clip the body so the full rendered content can flow across pages */
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+    background: none !important;
+  }
+
+  /* Turn off the global animated background gradient/texture */
+  body::before {
+    display: none !important;
+    animation: none !important;
+    background: none !important;
+  }
+
+  /* 2. Hide everything that isn't the preview */
+  #topbar,
+  #editor-pane,
+  #divider,
+  #outline-pane,
+  #outline-divider,
+  #find-bar,
+  .modal-overlay,
+  .pane-label {
+    display: none !important;
+  }
+
+  /* 3. Make the workspace a simple block so the preview fills the page */
+  #workspace {
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+
+  /* 4. Make the preview pane fill the full width */
+  #preview-pane {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: none !important;
+  }
+
+  /* 5. Let the preview content flow naturally across printed pages */
+  #preview {
+    overflow: visible !important;
+    height: auto !important;
+    padding: 0 !important;
+    background-image: none !important; /* strip the texture background */
+    background: none !important;
+  }
+
+  /* 6. Remove interactive hover/click styles that look odd on paper */
+  #preview [data-sl] {
+    cursor: default !important;
+  }
+  #preview [data-sl]:hover {
+    background: none !important;
+  }
+
+  /* 7. Hide the code-block copy buttons */
+  .code-copy-btn {
+    display: none !important;
+  }
+
+  /* 8. Avoid breaking headings and code blocks across pages */
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+  pre, blockquote, table {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+ /* ── NEW: Ensure horizontal rules and table borders appear in print ── */
+  hr {
+    border-top: 2px solid rgb(85, 85, 85) !important;
+    border-bottom: none !important;
+    margin: 1em 0 !important;
+  }
+  table, th, td {
+    border: 1px solid #333333 !important;
+    border-collapse: collapse !important;
+  }
+  th, td {
+    padding: 4px 8px !important;
+  }
+
+  /* Title starts on a new page */
+  h1 {
+    page-break-before: always;
+  }
+  h1:first-of-type {
+    page-break-before: avoid;
+  }
+  h1:last-of-type {
+    page-break-after: avoid;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tb-btn:hover { color: var(--text); border-color: var(--border-md); background: var(--bg-hover); }
+  .menu-item:hover { background: var(--bg-hover); }
+  .outline-item:hover { background: var(--bg-hover); color: var(--text); }
+  .find-btn:hover { color: var(--text); background: var(--bg-hover); border-color: var(--border-md); }
+  #preview [data-sl]:hover { background: rgba(128,128,128,0.07); }
+  .md-cal-day:hover { background: var(--bg-hover); color: var(--text); }
+}
+
+
+
+/* ── CSP Modal Fixes (1:1 mapping to original inline styles) ── */
+/* Modal Widths & Margins */
+.mod-w-360 { max-width: 360px; }
+.mod-w-560 { max-width: 560px; }
+.mod-w-680 { max-width: 680px; }
+.mod-mt-20 { margin-top: 20px; }
+.mod-mt-24 { margin-top: 24px; }
+.mod-mb-4  { margin-bottom: 4px; }
+.mod-mb-8  { margin-bottom: 8px; }
+.mod-mb-10 { margin-bottom: 10px; }
+.mod-mb-20 { margin-bottom: 20px; }
+
+/* Scrollable Areas (Restores specific line-heights and max-heights) */
+.mod-scroll-about { font-size: 0.9rem; color: var(--text-muted); line-height: 1.5; max-height: 400px; overflow-y: auto; padding-right: 8px; }
+.mod-scroll-legal { font-size: 0.9rem; color: var(--text-muted); line-height: 1.6; max-height: 70vh; overflow-y: auto; padding-right: 10px; }
+.mod-scroll-guide { font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; max-height: 70vh; overflow-y: auto; padding-right: 10px; }
+
+/* Typography & Headings */
+.mod-about-title { color: var(--text); margin-bottom: 4px; font-size: 1rem; }
+.mod-h4 { color: var(--text); margin: 0 0 8px; font-size: 0.95rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.mod-guide-h4 { color: var(--text); margin: 0 0 10px; font-size: 0.95rem; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* Dividers */
+.mod-hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; opacity: 0.5; }
+.mod-guide-hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; opacity: 0.5; }
+
+/* Lists */
+.mod-list-none { list-style: none; padding: 0; margin: 0; }
+.mod-ul { margin: 0 0 8px; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.mod-guide-ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+
+/* Paragraphs */
+.mod-p { margin: 0 0 8px; }
+.mod-p-0 { margin: 0; }
+.mod-p-4 { margin: 0 0 4px; }
+.mod-p-sub { margin: 0 0 6px; font-weight: 400; }
+.mod-p-0-082 { margin: 0; font-size: 0.82em; }
+.mod-p-last { margin: 0; font-size: 0.82em; font-family: var(--font-mono); }
+.mod-guide-tip { margin: 12px 0 0; font-size: 0.8rem; font-style: italic; }
+
+/* Tables */
+.mod-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.82rem; }
+.mod-th-row { color: var(--text); border-bottom: 1px solid var(--border); }
+.mod-th-w52 { text-align: left; padding: 4px 0; width: 52%; font-weight: 400; }
+.mod-th { text-align: left; padding: 4px 0; font-weight: 400; }
+.mod-td-w52 { padding: 3px 0; width: 52%; }
+.mod-td { padding: 3px 0; }
+.mod-td-4 { padding: 4px 0; }
+
+/* Libraries */
+.mod-lib-wrap { display: flex; flex-direction: column; gap: 10px; }
+.mod-lib-card { background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; }
+.mod-license-details { margin-top: 8px; }
+.mod-license-summary { font-family: var(--font-mono); font-size: 0.78em; color: var(--text-muted); cursor: pointer; user-select: none; letter-spacing: 0.04em; }
+.mod-license-summary:hover { color: var(--text); }
+.mod-license-pre { white-space: pre-wrap; font-family: var(--font-mono); font-size: 0.72em; line-height: 1.55; color: var(--text-muted); margin: 8px 0 0; max-height: 260px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
+
+/* Fonts */
+.mod-mono { font-family: var(--font-mono); }
+.mod-mono-08 { font-family: var(--font-mono); font-size: 0.8em; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CodeMirror 6 — layout & compatibility overrides
+   ═══════════════════════════════════════════════════════════════════════════
+
+   The CM view's outer div receives id="editor" (set in cm_setup.js) so that
+   document.getElementById('editor') keeps working in menus.js.
+
+   The old #editor textarea CSS rules now land on this div — most are fine
+   (font, color, letter-spacing inherit to .cm-content) but padding and
+   overflow must be neutralised here because they belong on the inner layers.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 1. Neutralise textarea-specific properties that must NOT apply to the CM wrapper */
+#editor.cm-editor {
+  padding:    0 !important;   /* padding lives on .cm-content, not the wrapper   */
+  overflow:   visible !important; /* overflow lives on .cm-scroller               */
+  resize:     none;
+  white-space: normal !important;
+  word-break: normal !important;
+  /* flex:1 from the old rule is correct and kept                               */
+}
+
+/* 2. Scrollable container: fills the wrapper, thin scrollbar */
+#editor .cm-scroller {
+  overflow:      auto;
+  flex:          1;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+#editor .cm-scroller::-webkit-scrollbar       { width: 4px; }
+#editor .cm-scroller::-webkit-scrollbar-track { background: transparent; }
+#editor .cm-scroller::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
+
+/* 3. Editable content layer: own padding + inherit font-size from #editor
+      so that applyTextSize() in menus.js (which sets #editor.style.fontSize)
+      cascades down here automatically.                                        */
+#editor .cm-content {
+  padding:        var(--editor-padding, 24px 28px);
+  font-size:      inherit;       /* inherits the JS-set size from #editor        */
+  line-height:    inherit;
+  letter-spacing: inherit;
+  caret-color:    var(--text);
+  color:          var(--text);
+  tab-size:       2;
+  min-height:     100%;
+}
+
+/* 4. Mobile padding — mirrors the old mobile #editor rule */
+@media (max-width: 820px) {
+  #editor .cm-content {
+    padding:     var(--editor-padding-mobile, 24px 20px 40vh);
+    font-size:   inherit;
+    line-height: var(--text-line-row-space, 1.24);
+  }
+}
+
+/* 5. Cursor and selection */
+#editor .cm-cursor,
+#editor .cm-dropCursor { border-left-color: var(--text); }
+
+#editor .cm-selectionBackground {
+  background: rgba(255, 255, 255, 0.22);
+}
+[data-theme="light"] #editor .cm-selectionBackground {
+  background: rgba(0, 0, 0, 0.22);
+}
+
+/* highlight-flash: yellow selection during preview→editor click sync */
+#editor.highlight-flash .cm-selectionBackground {
+  background: rgba(255, 200, 60, 0.6) !important;
+}
+
+/* 6. Placeholder */
+#editor .cm-placeholder {
+  color:       var(--text-muted, rgba(0,0,0,0.4));
+  font-style:  normal;
+  pointer-events: none;
+}
+
+/* 7. No focus ring on the wrapper */
+#editor.cm-focused { outline: none; }
+
+/* 8. Find highlight marks (rendered by CM decorations via cm_setup.js) */
+#editor .cm-find-highlight {
+  background:   rgba(255, 200, 60, 0.35);
+  border-radius: 2px;
+}
+#editor .cm-find-highlight-current {
+  background:   rgba(255, 140, 0, 0.55);
+  outline:      1px solid rgba(255, 140, 0, 0.85);
+  border-radius: 2px;
+}
+
+/* 9. Subtle markdown syntax colours in the editor (optional, low-contrast) */
+[data-theme="dark"]  #editor .cm-header  { color: #d4d4d4; }
+[data-theme="light"] #editor .cm-header  { color: #222; }
+[data-theme="dark"]  #editor .cm-em      { color: #aaa; font-style: italic; }
+[data-theme="light"] #editor .cm-em      { color: #444; font-style: italic; }
+[data-theme="dark"]  #editor .cm-link    { color: #7da3c8; }
+[data-theme="light"] #editor .cm-link    { color: #2563eb; }
+
+
+/* ================================================= */
+/* OVERRIDE TO FIX THE DARK/LIGHT MODE TOGGLE */
+/* ================================================= */
+
+/* Custom Code & Code Block Styling */
+.prose code {
+  font-family: var(--font-mono) !important;
+  font-weight: 400 !important;
+  background-color: rgba(0, 0, 0, 0.05);    /* Light subtle background */
+  color: var(--color-black);
+  padding: 0.125rem 0.25rem;                /* Small padding */
+  border-radius: 0.25rem;                   /* Rounded corners */
+}
+
+/* Updated to respect the manual dark class toggle */
+.dark .prose code {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: var(--color-white);
+}
+
+.prose pre {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+/* Updated to respect the manual dark class toggle */
+.dark .prose pre {
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+.prose thead th {
+    font-weight: 400 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.96em; /* Slightly smaller if using uppercase */
+
+    border-bottom: 1.2px solid rgba(0, 0, 0, 0.8); /* A solid line for the whole row */
+    padding-bottom: 8px; /* Control the gap exactly */
+}
+
+/* Updated to respect the manual dark class toggle */
+.dark .prose thead th {
+    /* A light gray or semi-transparent white works best for your dark aesthetic */
+    border-bottom: 1.2px solid rgba(255, 255, 255, 0.8);
+}
+
+/* 10. Line Numbers Gutter */
+#editor .cm-gutters {
+  background-color: transparent;
+  color: var(--text-dim);
+  border-right: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.8em; /* Slightly smaller than body text */
+}
+
+#editor .cm-activeLineGutter {
+  background-color: transparent;
+  color: var(--text);
+}
+
+/* Ensure padding doesn't clash with the gutter */
+#editor .cm-lineNumbers .cm-gutterElement {
+  padding: 0 12px 0 8px; /* Breathing room around the numbers */
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   project_sidebar.css — Revery Notebook Desktop Project Sidebar Styles
+   Append this file's contents to revery_notebook_style.css, or load it as
+   a separate <link> after the main stylesheet.
+   ───────────────────────────────────────────────────────────────────────── */
+/* Ensure sidebar toggle button aligns perfectly with other top‑bar buttons */
+#btn-sidebar {
+  padding: 0.375rem 0.75rem 0.1875rem 0.75rem;  /* same as .tb-btn */
+  line-height: 1;                                /* same as .tb-btn */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-0.02em);                    /* optical centering for 'E' */
+  margin: 0;                                     /* remove any unexpected margin */
+
+  touch-action: manipulation;
+}
+
+/* ── Sidebar Toggle Button (topbar) ──────────────────────────────────── */
+/* Folder toggle button*/
+#btn-sidebar.active {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--border-md);
+  
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  border-radius: 2px;
+  position: relative;
+
+
+
+}
+
+#btn-sidebar:hover { opacity: 1; }
+#btn-sidebar.active {
+  opacity: 1;
+  background: var(--hover-bg, rgba(255,255,255,0.07));
+}
+
+
+/* ── Sidebar Panel ───────────────────────────────────────────────────── */
+#project-sidebar {
+  display: none; /* shown by JS */
+  flex-direction: column;
+  width: 220px;
+  min-width: 160px;
+  max-width: 1200px;
+  background: var(--bg-secondary, var(--bg));
+  border-right: 1px solid var(--border-md, rgba(128,128,128,0.18));
+  overflow: hidden;
+  flex-shrink: 0;
+  position: relative;
+  min-height: 0; /* Ensures the panel respects the workspace boundaries */
+  /* Smooth open/close */
+  transition: width 0.18s ease;
+}
+
+/* Ensure the new sidebar slot sits before editor-pane in the flex row.
+   The HTML must place #project-sidebar before #editor-pane.            */
+#workspace {
+  /* inherits existing display:flex; flex-direction:row; */
+}
+
+
+/* ── Sidebar Header ──────────────────────────────────────────────────── */
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-md, rgba(128,128,128,0.18));
+  flex-shrink: 0;
+  min-height: 36px;
+}
+
+.sidebar-folder-name {
+  flex: 1;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-wide, 0.05em);
+  text-transform: uppercase;
+  color: var(--text-muted, var(--text));
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text);
+  padding: 3px 5px;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  line-height: 1;
+  opacity: 0.65;
+  transition: opacity 0.12s, background 0.12s;
+  font-family: var(--font-mono)
+}
+.sidebar-btn:hover {
+  opacity: 1;
+  background: var(--hover-bg, rgba(128,128,128,0.12));
+}
+
+
+/* ── Sidebar Tree Container ──────────────────────────────────────────── */
+#sidebar-tree {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+  min-height: 0; /* Prevents infinite vertical growth from breaking the flex chain */
+  /* Thin scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-md, rgba(128,128,128,0.3)) transparent;
+}
+#sidebar-tree::-webkit-scrollbar       { width: 5px; }
+#sidebar-tree::-webkit-scrollbar-track { background: transparent; }
+#sidebar-tree::-webkit-scrollbar-thumb { background: var(--border-md, rgba(128,128,128,0.3)); border-radius: 3px; }
+
+
+/* ── Tree Items (files & folders) ────────────────────────────────────── */
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 8px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 3px;
+  margin: 1px 4px;
+  font-size: 0.83rem;
+  font-family: var(--font-body, inherit);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background 0.1s;
+  /* padding-left is set inline by JS based on depth */
+}
+
+.sidebar-item:hover {
+  background: var(--hover-bg, rgba(128,128,128,0.10));
+}
+
+.sidebar-file.active {
+  background: var(--active-bg, rgba(99,102,241,0.15));
+  color: var(--accent, #818cf8);
+  font-weight: 400;
+}
+
+.sidebar-icon {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  width: 14px;
+  text-align: center;
+  opacity: 0.6;
+  font-family: var(--font-mono); 
+}
+
+.sidebar-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-dir .sidebar-icon {
+  font-size: 0.65rem;
+  opacity: 0.8;
+  transition: transform 0.12s;
+}
+
+.sidebar-dir.expanded > .sidebar-icon {
+  /* arrow is updated in text by JS; no transform needed */
+}
+
+.sidebar-loading {
+  padding: 10px 16px;
+  font-size: 0.78rem;
+  opacity: 0.5;
+  font-family: var(--font-mono);
+}
+
+
+
+/* Sidebar divider – now matches the editor/preview divider */
+#sidebar-divider {
+  width: 1px;
+  background-color: var(--theme-divider);
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+  transition: background-color 0.15s;
+}
+#sidebar-divider:hover,
+#sidebar-divider.dragging {
+  background-color: var(--theme-divider-hover);
+}
+#sidebar-divider::after {
+  content: '';
+  position: absolute;
+  inset: 0 -12px;
+  z-index: 10;
+}
+
+
+/* ── Context menu danger item ────────────────────────────────────────── */
+.menu-danger {
+  color: #f87171; /* red-400 */
+}
+.menu-danger:hover {
+  background: rgba(248, 113, 113, 0.12) !important;
+}
+
+
+/* ── Hide sidebar on mobile (≤ 820px) — unless data-view="sidebar" ── */
+@media (max-width: 820px) {
+  body:not([data-view="sidebar"]) #project-sidebar,
+  #sidebar-divider {
+    display: none !important;
+  }
+  
+  body[data-view="sidebar"] #project-sidebar {
+    display: flex !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 1;
+    border-right: none;
+  }
+  
+  body[data-view="sidebar"] #editor-pane,
+  body[data-view="sidebar"] #preview-pane,
+  body[data-view="sidebar"] #topbar-left {
+    display: none !important;
+  }
+
+  /* Align sidebar header padding (folder name and buttons) with pane-label on mobile */
+  .sidebar-header {
+    padding: 8px 20px 6px !important;
+  }
+
+  /* Align card navigation padding (Back button & breadcrumbs) to match the 20px visual edge */
+  /* The .sidebar-card-view wrapper already has 6px padding, so we add 14px to reach exactly 20px */
+  .sidebar-card-nav {
+    padding: 4px 14px 6px !important;
+  }
+
+    /* Give card view the same horizontal padding as the folder button */
+  body[data-view="sidebar"] .sidebar-card-view {
+    padding: 6px 20px !important;
+  }
+
+}

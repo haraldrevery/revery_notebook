@@ -1,0 +1,21 @@
+{
+  "name": "revery-notebook-cm-build",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build tool: bundles CodeMirror 6 into a single IIFE for self-hosting",
+  "scripts": {
+    "build": "node build_cm.js",
+    "build:watch": "node build_cm.js --watch"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.7.1",
+    "@codemirror/lang-markdown": "^6.3.2",
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/language-data": "^6.5.1",
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.36.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2"
+  }
+}
