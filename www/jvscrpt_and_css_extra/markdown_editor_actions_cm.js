@@ -1488,7 +1488,7 @@ document.getElementById('quit-btn-leave')?.addEventListener('click', () => {
     window.NativeAPI.confirmClose();
   } else {
     // Fallback for web mode (#15: '/notebook.html' was a dead URL — 404)
-    window.location.href = './revery_notebook.html';
+    window.location.href = './index.html';
   }
 });
 

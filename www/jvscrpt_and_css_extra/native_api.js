@@ -97,7 +97,11 @@ function flushVolatile() {
   // Run the startup check once the DOM is ready. The badge element may not
   // exist yet when this module loads, so we defer to DOMContentLoaded.
   function checkVolatileStartup() {
-    if (!window.NativeAPI || typeof window.NativeAPI.getVolatileStatus !== 'function') {
+    // Web mode has no crash backup by design — never show the warning badge
+    // there (the unified index.html contains the badge element on all
+    // platforms, so this guard is what keeps it desktop-only).
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
+    if (typeof window.NativeAPI.getVolatileStatus !== 'function') {
       return;
     }
     Promise.resolve(window.NativeAPI.getVolatileStatus()).then(

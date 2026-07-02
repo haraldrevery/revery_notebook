@@ -2601,8 +2601,8 @@ mod tests {
 
     #[test]
     fn navigation_allows_own_origins() {
-        assert!(nav("tauri://localhost/revery_notebook.html")); // Linux/macOS prod
-        assert!(nav("http://tauri.localhost/revery_notebook.html")); // Windows prod
+        assert!(nav("tauri://localhost/index.html")); // Linux/macOS prod
+        assert!(nav("http://tauri.localhost/index.html")); // Windows prod
         assert!(nav("https://tauri.localhost/index.html"));
         assert!(nav("http://localhost:1420/")); // devUrl
         assert!(nav("about:blank")); // transient WebView2 init
