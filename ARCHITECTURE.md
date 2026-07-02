@@ -576,6 +576,42 @@ npm install
 
 ---
 
+## Testing
+
+The data-safety layer is covered by automated tests. Run them before and
+after touching anything in `electron/fs_core.js`, the IPC handlers in
+`electron/main.js`, or the path/write helpers in `tauri/src/main.rs`.
+
+```bash
+# JS side — no dependencies beyond Node itself (node:test)
+npm test
+
+# Rust side
+npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
+```
+
+| Suite | What it proves |
+|---|---|
+| `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails |
+| `test/fs_core.paths.test.js` | Path traversal / symlink-escape rejection, dropped-filename sanitisation |
+| `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
+| `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata |
+| `test/crash_consistency.test.js` | A child process is SIGKILLed mid-write 12 times; the target file must always contain exactly one complete payload |
+| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `atomic_write_file`, `is_cross_device_err` |
+
+`electron/fs_core.js` is the single source of truth for the Electron-side
+atomic-write strategy — both `fs:write-file` and `dialog:save-file` call
+`atomicWriteFile()`. Do not re-inline that logic into handlers; it is what
+the tests pin down.
+
+Note for VSCode users: launching the app from an integrated terminal can
+inherit `ELECTRON_RUN_AS_NODE=1` from the editor, which makes
+`require('electron')` return a path string and the app crash at
+`app.whenReady`. Run `ELECTRON_RUN_AS_NODE= npm run start:electron` if you
+hit that.
+
+---
+
 ## Known Limitations & Future Work
 
 1. **Tauri multi-button dialogs**: The `tauri-plugin-dialog` v2 API has
