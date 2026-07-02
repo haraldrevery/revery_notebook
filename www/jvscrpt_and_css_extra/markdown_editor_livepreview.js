@@ -209,6 +209,50 @@
     return window.NativeAPI.toMediaUrl(abs);
   }
 
+  /* ── KaTeX math ───────────────────────────────────────────────────────
+     The lezer markdown parser has no math syntax, so $…$ / $$…$$ are
+     found by a conservative scanner over the visible text (excluding
+     code contexts and the YAML frontmatter) and rendered through the
+     globally loaded KaTeX — the same engine the classic preview uses.
+     Stability rules: throwOnError:false, every render wrapped, and any
+     failure falls back to the raw text. Multi-line $$ blocks stay raw
+     (replace decorations may not cross lines from a view plugin); the
+     classic preview remains the full renderer for those.              */
+  class MathWidget extends WidgetType {
+    constructor(tex, display) { super(); this.tex = tex; this.display = display; }
+    eq(other) { return other.tex === this.tex && other.display === this.display; }
+    toDOM() {
+      const el = document.createElement('span');
+      el.className = this.display ? 'lp-math lp-math-block' : 'lp-math';
+      try {
+        el.innerHTML = katex.renderToString(this.tex, {
+          throwOnError: false,
+          displayMode: this.display,
+        });
+      } catch (_) {
+        el.textContent = this.display ? '$$' + this.tex + '$$' : '$' + this.tex + '$';
+      }
+      return el;
+    }
+    ignoreEvent() { return true; }
+  }
+
+  const MATH_RE = /\$\$([^$\n]+?)\$\$|\$([^$\n]+?)\$/g;
+
+  /* End offset of a YAML frontmatter block at the very start of the doc,
+     or 0. CommonMark would otherwise misparse it: the fences become
+     thematic breaks and 'key: value' + '---' becomes a Setext heading. */
+  function frontmatterEnd(doc) {
+    if (doc.lines < 2) return 0;
+    if (doc.line(1).text.replace(/\r$/, '') !== '---') return 0;
+    const maxScan = Math.min(doc.lines, 60);
+    for (let n = 2; n <= maxScan; n++) {
+      const text = doc.line(n).text.replace(/\r$/, '');
+      if (text === '---' || text === '...') return doc.line(n).to;
+    }
+    return 0;
+  }
+
   /** Line numbers touched by any selection range — marks stay visible there. */
   function selectionLines(state) {
     const lines = new Set();
@@ -226,6 +270,8 @@
     const revealed = selectionLines(state);
     const ranges   = [];
     const seenLineDeco = new Set(); // `${lineNumber}:${cls}` — one line deco per class
+    const fmEnd      = frontmatterEnd(doc);
+    const codeRanges = []; // math must never render inside code contexts
 
     const addLineClass = (lineFrom, cls) => {
       const line = doc.lineAt(lineFrom);
@@ -254,6 +300,15 @@
         to: vr.to,
         enter: (node) => {
           const name = node.name;
+
+          /* YAML frontmatter is a protected region: no decorations at
+             all (prevents the hr / Setext-heading misparse); its lines
+             get a dim mono style below instead.                       */
+          if (fmEnd && node.from < fmEnd) return;
+
+          if (name === 'FencedCode' || name === 'InlineCode') {
+            codeRanges.push([node.from, node.to]);
+          }
 
           const headingCls = HEADING_LINE[name];
           if (headingCls) addLineClass(node.from, headingCls);
@@ -356,6 +411,40 @@
           if (to > node.from) ranges.push(hideDeco.range(node.from, to));
         },
       });
+    }
+
+    /* Frontmatter lines: dim mono, applied to whichever of them are visible. */
+    if (fmEnd) {
+      const vFrom = view.visibleRanges.length ? view.visibleRanges[0].from : 0;
+      let pos = Math.min(vFrom, fmEnd);
+      for (;;) {
+        const line = doc.lineAt(pos);
+        if (line.from >= fmEnd) break;
+        addLineClass(line.from, 'lp-frontmatter');
+        if (line.to >= doc.length) break;
+        pos = line.to + 1;
+      }
+    }
+
+    /* Math scan over the visible text, outside code and frontmatter. */
+    for (const vr of view.visibleRanges) {
+      const text = doc.sliceString(vr.from, vr.to);
+      MATH_RE.lastIndex = 0;
+      let m;
+      while ((m = MATH_RE.exec(text)) !== null) {
+        const from = vr.from + m.index;
+        const to   = from + m[0].length;
+        const tex  = m[1] !== undefined ? m[1] : m[2];
+        const display = m[1] !== undefined;
+        if (from < fmEnd) continue;
+        if (from > 0 && doc.sliceString(from - 1, from) === '\\') continue; // escaped \$
+        /* texmath-style validity for single-$: content must not start or
+           end with whitespace (keeps '5$ and 10$' as plain currency). */
+        if (!display && (/^\s/.test(tex) || /\s$/.test(tex))) continue;
+        if (codeRanges.some(([a, b]) => from < b && to > a)) continue;
+        if (revealed.has(doc.lineAt(from).number)) continue;
+        ranges.push(Decoration.replace({ widget: new MathWidget(tex, display) }).range(from, to));
+      }
     }
 
     /* sort:true — mixed line/mark/replace ranges arrive out of order. */

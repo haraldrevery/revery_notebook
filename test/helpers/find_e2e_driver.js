@@ -198,6 +198,27 @@
   await sleep(300);
   lpPhase2.taskToggled = editor.value.startsWith('- [x] first');
 
+  /* KaTeX math + protected YAML frontmatter */
+  replaceEditorContent('---\ntitle: t\ntags: x\n---\n\nEuler: $e^{i\\pi}=-1$ inline\n\n$$x^2 + y^2 = r^2$$\n\nprice 5$ and 10$ stays text\n\n`code $a+b$ stays raw`\n\nend');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(400);
+  lpPhase2.mathInline   = document.querySelectorAll('.lp-math .katex').length >= 2;
+  lpPhase2.mathBlock    = !!document.querySelector('.lp-math-block .katex');
+  lpPhase2.currencySafe = !document.querySelector('.cm-line:nth-child(7) .lp-math')
+    && editor.value.includes('5$ and 10$');
+  lpPhase2.codeMathRaw  = (() => {
+    const codeEl = document.querySelector('.lp-code');
+    return !!codeEl && codeEl.textContent.includes('$a+b$');
+  })();
+  lpPhase2.fmProtected  = !document.querySelector('.lp-hr')
+    && !document.querySelector('.cm-line.lp-h1, .cm-line.lp-h2')
+    && !!document.querySelector('.cm-line.lp-frontmatter');
+  /* cursor onto the math line → raw $ source returns */
+  const mathPos = editor.value.indexOf('$e^');
+  editor.setSelectionRange(mathPos, mathPos);
+  await sleep(250);
+  lpPhase2.mathRevealsRaw = document.querySelectorAll('.lp-math .katex').length < 2;
+
   window.setLivePreviewMode(false);
   await sleep(150);
   const lpOffState = {
