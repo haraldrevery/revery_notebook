@@ -125,9 +125,13 @@ bullets as inline widgets, and real inline image widgets using the same
 path resolution AND root-containment guard as postProcessImages. Center
 Headers parity included. Note: CodeMirror forbids block decorations from
 view plugins, so image widgets are inline (the line grows) — equivalent
-for the common image-on-its-own-line case. Phase 3 candidates: GFM
-strikethrough (needs markdown() config change), task-list checkboxes,
-fence syntax highlighting.
+for the common image-on-its-own-line case. Follow-up fixes after user
+soak: GFM strikethrough enabled (markdown({ extensions: [Strikethrough] })
+— note this also makes the CLASSIC editor strike ~~text~~ through, at
+parity with how bold/italic were always highlighted) and the fenced-code
+copy button (CopyWidget on the opening fence line, reusing the preview's
+.code-copy-btn styling and clipboard fallback chain). Remaining phase 3
+candidates: task-list checkboxes, fence syntax highlighting.
 
 ## 7. Order of work
 

@@ -2139,6 +2139,15 @@ body.center-headers-active .cm-line.lp-h6 {
   background: rgba(0, 0, 0, 0.25);
   font-family: var(--font-mono, monospace);
   font-size: 0.92em;
+  position: relative; /* anchors the copy button widget */
+}
+/* Copy button parity in live preview: same .code-copy-btn as the
+   classic preview (opacity-0 base + ::after label defined above);
+   revealed when hovering the opening fence line it sits on. */
+.cm-line.lp-codeblock .code-copy-btn { top: 2px; }
+.cm-line.lp-codeblock:hover .code-copy-btn {
+  opacity: 1;
+  pointer-events: auto;
 }
 [data-theme="light"] .cm-line.lp-codeblock, [data-theme="paper"] .cm-line.lp-codeblock {
   background: rgba(0, 0, 0, 0.05);
