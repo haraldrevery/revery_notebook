@@ -102,12 +102,19 @@ const { readSettings, writeSettings } = createSettingsStore(getSettingsFile);
 
 
 /* ── File watcher registry ──────────────────────────────────────────────
-   Maps filePath → fs.FSWatcher so we can start/stop per-file watches.  */
+   Maps filePath → { watcher, timer }. The timer is the pending debounce
+   from the last raw fs event; it must be cleared on stop, or a stale
+   'fs:file-changed' can still be emitted for a path that was just
+   unwatched (spurious "file changed externally" dialog after closing). */
 const fileWatchers = new Map();
 
 function stopWatcher(filePath) {
-  const watcher = fileWatchers.get(filePath);
-  if (watcher) { watcher.close(); fileWatchers.delete(filePath); }
+  const entry = fileWatchers.get(filePath);
+  if (entry) {
+    clearTimeout(entry.timer);
+    entry.watcher.close();
+    fileWatchers.delete(filePath);
+  }
 }
 
 
@@ -574,6 +581,7 @@ ipcMain.handle('fs:delete-node', async (_event, targetPath) => {
 
 /* ── Volatile (crash backup) write ───────────────────────────────────── */
 ipcMain.handle('fs:set-volatile-content', (_event, originalPath, content) => {
+  if (typeof originalPath !== 'string') return; // same guard as get/delete
   if (typeof content !== 'string') throw new Error('Content must be a string');
   if (!volatileDirReady) return;          // graceful no-op — dir failed its safety check
   setVolatileContent(VOLATILE_DIR, originalPath, content);
@@ -612,11 +620,15 @@ ipcMain.handle('fs:delete-volatile-content', (_event, originalPath) => {
 /* ── Native message box ───────────────────────────────────────────────── */
 ipcMain.handle('dialog:show-message-box', async (_event, options) => {
   /* Whitelist only safe dialog properties */
+  const buttons = Array.isArray(options.buttons) ? options.buttons.map(String).slice(0, 8) : ['OK'];
+  /* Out-of-range indices would make Electron's focus/Escape behaviour
+     silently undefined — only accept indices that name a real button. */
+  const validIdx = (v) => Number.isInteger(v) && v >= 0 && v < buttons.length;
   const safeOptions = {
     type:      ['none','info','question','warning','error'].includes(options.type) ? options.type : 'info',
-    buttons:   Array.isArray(options.buttons) ? options.buttons.map(String).slice(0, 8) : ['OK'],
-    defaultId: typeof options.defaultId === 'number' ? options.defaultId : 0,
-    cancelId:  typeof options.cancelId  === 'number' ? options.cancelId  : undefined,
+    buttons,
+    defaultId: validIdx(options.defaultId) ? options.defaultId : 0,
+    cancelId:  validIdx(options.cancelId)  ? options.cancelId  : undefined,
     title:     String(options.title   || '').substring(0, 100),
     message:   String(options.message || '').substring(0, 500),
     detail:    String(options.detail  || '').substring(0, 1000),
@@ -733,16 +745,16 @@ ipcMain.handle('fs:watch-file', (_event, filePath) => {
   const parent     = path.dirname(safe);
   const targetName = path.basename(safe);
 
-  let debounceTimer = null;
-  const watcher = fs.watch(parent, (eventType, filename) => {
+  const entry = { watcher: null, timer: null };
+  entry.watcher = fs.watch(parent, (eventType, filename) => {
     /* fs.watch on a directory passes the changed entry's filename as the
        second arg. On Windows this can occasionally be null for directory-
        level events — skip those. */
     if (!filename || filename !== targetName) return;
 
     /* Debounce: rapid successive events (e.g. editor auto-save) fire once */
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => {
     if (mainWindow && !mainWindow.isDestroyed()) {
         // Normalise eventType to 'modify' so the frontend catches it
         // (Node emits 'change'/'rename', frontend expects 'modify').
@@ -752,12 +764,12 @@ ipcMain.handle('fs:watch-file', (_event, filePath) => {
     }, 300);
   });
 
-  watcher.on('error', (err) => {
+  entry.watcher.on('error', (err) => {
     console.warn('[Watcher] Error watching', parent, 'for', targetName, err.message);
     stopWatcher(filePath);
   });
 
-  fileWatchers.set(filePath, watcher);
+  fileWatchers.set(filePath, entry);
 });
 
 
@@ -833,18 +845,6 @@ ipcMain.handle('settings:clear-all', () => {
   writeSettings(wipe);
 });
  
-
-// This one caused some issues?
-/*
-ipcMain.handle('settings:get-last-root-path', () => {
-
-  const current = readSettings();
-  const wipe = {};
-  for (const k of Object.keys(current)) {
-    wipe[k] = null;
-  }
-  writeSettings(wipe);
-}); */
 
 ipcMain.handle('settings:get-last-root-path', () => {
   return readSettings().lastRootPath || null;
