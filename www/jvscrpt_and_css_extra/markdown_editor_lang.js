@@ -330,6 +330,10 @@ window.uiTemplates = {
             <p class="mod-p-0-082">Copyright © 2018–2024 Marijn Haverbeke and contributors. Used packages: @codemirror/view, @codemirror/state, @codemirror/commands, @codemirror/lang-markdown, @codemirror/language. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, subject to the following condition: the above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. Source: codemirror.net.</p>
           </div>
           <div class="mod-lib-card">
+            <p class="mod-p-4"><strong>Feather Icons</strong> (icon shapes) &nbsp;·&nbsp; <span class="mod-mono-08">MIT Licence</span></p>
+            <p class="mod-p-0-082">Copyright © 2013–2023 Cole Bemis. The interface icons in the project sidebar are inline SVGs whose shapes are based on Feather Icons. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, subject to the following condition: the above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. Source: feathericons.com.</p>
+          </div>
+          <div class="mod-lib-card">
             <p class="mod-p-4"><strong>DOMPurify</strong> &nbsp;·&nbsp; <span class="mod-mono-08">Apache Licence 2.0</span></p>
             <p class="mod-p-0-082">Copyright © 2025 Dr.-Ing. Mario Heiderich, Cure53. Source: github.com/cure53/DOMPurify.</p>
             <details class="mod-license-details">
@@ -602,6 +606,10 @@ END OF TERMS AND CONDITIONS</pre>
             <p class="mod-p-0-082">Copyright © 2018–2024 Marijn Haverbeke och bidragsgivare. Använda paket: @codemirror/view, @codemirror/state, @codemirror/commands, @codemirror/lang-markdown, @codemirror/language. Samma MIT-licensvillkor som ovan gäller. Källa: codemirror.net.</p>
           </div>
           <div class="mod-lib-card">
+            <p class="mod-p-4"><strong>Feather Icons</strong> (ikonformer) &nbsp;·&nbsp; <span class="mod-mono-08">MIT-licens</span></p>
+            <p class="mod-p-0-082">Copyright © 2013–2023 Cole Bemis. Gränssnittsikonerna i projektsidofältet är inbäddade SVG:er vars former bygger på Feather Icons. Samma MIT-licensvillkor som ovan gäller. Källa: feathericons.com.</p>
+          </div>
+          <div class="mod-lib-card">
             <p class="mod-p-4"><strong>DOMPurify</strong> &nbsp;·&nbsp; <span class="mod-mono-08">Apache-licens 2.0</span></p>
             <p class="mod-p-0-082">Copyright © 2025 Dr.-Ing. Mario Heiderich, Cure53. Källa: github.com/cure53/DOMPurify.</p>
             <details class="mod-license-details">
@@ -803,6 +811,16 @@ END OF TERMS AND CONDITIONS</pre>
         </ul>
       </section>
       <hr class="mod-hr">
+      <section class="mod-mb-20">
+        <h4 class="mod-about-title">Safety by design</h4>
+        <ul class="mod-list-none">
+          <li>Auto-save writes files atomically — a crash mid-save can never corrupt your document.</li>
+          <li>A crash backup of your typing is kept while you write; recovery is offered on the next start.</li>
+          <li>The app never opens links and never acts as a browser.</li>
+          <li>Only one instance runs at a time, so saves never compete for the same file.</li>
+        </ul>
+      </section>
+      <hr class="mod-hr">
     `,
     Swedish: `
       <section class="mod-mb-20">
@@ -815,6 +833,16 @@ END OF TERMS AND CONDITIONS</pre>
         <ul class="mod-list-none">
           <li><span class="mod-mono">v1.0.2</span> — Stabil</li>
           <li><span class="mod-mono">Bygg:</span> April 2026</li>
+        </ul>
+      </section>
+      <hr class="mod-hr">
+      <section class="mod-mb-20">
+        <h4 class="mod-about-title">Säkerhet i grunden</h4>
+        <ul class="mod-list-none">
+          <li>Autospar skriver filer atomiskt — en krasch mitt i en sparning kan aldrig förstöra ditt dokument.</li>
+          <li>En kraschsäkerhetskopia av det du skriver sparas löpande; återställning erbjuds vid nästa start.</li>
+          <li>Appen öppnar aldrig länkar och agerar aldrig webbläsare.</li>
+          <li>Endast en instans körs åt gången, så sparningar konkurrerar aldrig om samma fil.</li>
         </ul>
       </section>
       <hr class="mod-hr">
@@ -849,6 +877,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Click any preview block</strong> — jumps the editor cursor to the matching source line.</li>
           <li><strong>CPU performance delay</strong> — Higher value = Saves battery and CPU, but not that great experience. Low value = drains more CPU and battery but smoother experience.</li>
           <li><strong>Forced Prev. Synch.</strong> — "Forced Preview Synchronization" is a more reliable synchronization between the editor and preview window, but might feel a little janky. Use if you notice that the what you type is not visible on the preview.</li>
+          <li><strong>Slow Hardware Mode</strong> — one switch for older machines: fewer disk writes while typing, calmer preview rendering, no background image, and lighter file cards. Saving stays exactly as crash-safe as before.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
@@ -880,7 +909,7 @@ END OF TERMS AND CONDITIONS</pre>
       </section>
       <hr class="mod-guide-hr">
       <section class="mod-mb-8">
-        <h4 class="mod-guide-h4">Latex suppport</h4>
+        <h4 class="mod-guide-h4">LaTeX support</h4>
         <p class="mod-guide-tip">This editor has LaTeX support (through "KaTeX"). Use "$$ . . . $$" for equation blocks and "$ . . . $" for having the equation in the text. <strong>Note</strong> that after the dollar sign, no gap between the "$" and the first syntax symbol, otherwise it will not render it out correctly.</p>
       </section>
     `,
@@ -911,6 +940,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Klicka på ett förhandsgranskningsblock</strong> — hoppar redigerarens markör till motsvarande källrad.</li>
           <li><strong>CPU-prestandafördröjning</strong> — Högre värde = sparar batteri och CPU, men inte lika bra upplevelse. Lågt värde = drar mer CPU och batteri men jämnare upplevelse.</li>
           <li><strong>Tvingad förhandsgr.synk</strong> — "Tvingad förhandsgranskningssynkronisering" är en mer pålitlig synkronisering mellan redigeraren och förhandsgranskningsfönstret, men kan kännas lite ryckig. Använd om du märker att det du skriver inte syns i förhandsgranskningen.</li>
+          <li><strong>Långsam hårdvara-läge</strong> — ett reglage för äldre datorer: färre diskskrivningar medan du skriver, lugnare förhandsgranskning, ingen bakgrundsbild och lättare filkort. Sparandet är precis lika kraschsäkert som annars.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">

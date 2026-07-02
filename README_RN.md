@@ -130,7 +130,7 @@ Build tooling (not deployed):
 └── cm_entry_slim.js                  ← CodeMirror 6 entry point
 ```
 
-> **Beginner tip:** The only file you ever need to open in a browser is `index.html`. Everything else is a resource it loads automatically. You do not need Node.js or a build step unless you want to update the CodeMirror bundle.
+> **Beginner tip:** The only file you ever need to open in a browser is `index.html`. Everything else is a resource it loads automatically. You do not need Node.js or a build step unless you want to update one of the two generated bundles: the CodeMirror bundle (`build_tools/build_cm.js`) or the project sidebar bundle (`npm run build:sidebar`, source in `src/sidebar/`).
 
 ---
 
@@ -198,6 +198,12 @@ codemirror-bundle.js           (defines window.CM.*)
 markdown_editor_cm_setup.js    (creates the CM instance; exposes window.editor shim)
 markdown_editor_core_cm.js     (render loop, autosave — requires editor shim)
 markdown_editor_actions_cm.js  (toolbar actions — requires render())
+…
+project_sidebar.js            (GENERATED from src/sidebar/ — npm run build:sidebar)
+
+find_worker.js is not a <script> tag: the find bar loads it as a Web
+Worker at runtime, so it must ship in jvscrpt_and_css_extra/ alongside
+the scripts.
 markdown_editor_menus.js       (settings menus — requires all actions)
 markdown_editor_sync.js        (scroll sync — requires editor, preview)
 markdown_editor_layout.js      (drag dividers — requires edPane, divider)

@@ -18,38 +18,35 @@
 ## Project Structure
 
 ```
-revery-desktop/
+revery_notebook/
 │
-├── native_api.js            ← Unified abstraction layer (load first in <head>)
-├── project_sidebar.js       ← Sidebar UI + file management logic
-├── project_sidebar.css      ← Sidebar styles (append to or load after main CSS)
-├── core_boot_patch.js       ← Replacement boot block for markdown_editor_core_cm.js
-├── html_changes.diff        ← Annotated HTML modification guide
-├── package.json             ← npm scripts for both wrappers + electron-builder config
+├── www/                              ← Everything the app ships (web + both wrappers)
+│   ├── index.html                    ← The ONLY app shell (web, Electron and Tauri)
+│   ├── revery_notebook.html          ← Legacy redirect stub for old web bookmarks
+│   ├── main.css / prose.css          ← Generated Tailwind outputs (sources in css_aesthetics/)
+│   └── jvscrpt_and_css_extra/
+│       ├── native_api.js             ← Unified NativeAPI abstraction (Electron/Tauri/web)
+│       ├── project_sidebar.js        ← GENERATED bundle — edit src/sidebar/, npm run build:sidebar
+│       ├── find_worker.js            ← Regex search Web Worker (loaded at runtime, not a <script>)
+│       └── markdown_editor_*.js      ← Editor core, menus, actions, sync, find, theme, lang
 │
+├── src/sidebar/                      ← Sidebar source modules (state, save, tree, cards, …)
 ├── electron/
-│   ├── main.js              ← Electron main process (BrowserWindow + IPC handlers)
-│   └── preload.js           ← Secure contextBridge (exposes window.electronAPI)
-│
-└── tauri/
-    ├── Cargo.toml           ← Rust dependencies
-    ├── tauri.conf.json      ← Tauri v2 configuration + FS scope
-    └── src/
-        └── main.rs          ← All Rust #[tauri::command] implementations
+│   ├── main.js                       ← Main process wiring: window, IPC, policy
+│   ├── fs_core.js                    ← Pure FS logic (atomic writes, settings store) — unit tested
+│   └── preload.js                    ← contextBridge (exposes window.electronAPI)
+├── tauri/
+│   ├── Cargo.toml / tauri.conf.json  ← Rust deps, window config, CSP
+│   └── src/main.rs                   ← #[tauri::command] implementations + tests
+├── build_tools/                      ← esbuild scripts + local Tailwind binaries (not shipped)
+├── test/                             ← node:test suites incl. crash-consistency and E2E
+└── package.json                      ← npm scripts + electron-builder config
 ```
 
-### Files that exist in the web project and are MODIFIED (not replaced):
-| File | Change |
-|---|---|
-| `index.html` | Add sidebar HTML, load new scripts/CSS (see `html_changes.diff`) |
-| `markdown_editor_core_cm.js` | Replace boot block with `core_boot_patch.js` content |
-
-### Files that are NEW (copy into `jvscrpt_and_css_extra/`):
-| File | Purpose |
-|---|---|
-| `native_api.js` | Abstraction layer — load this first |
-| `project_sidebar.js` | Sidebar logic |
-| `project_sidebar.css` | Sidebar styles |
+> Historical note: this document originally described a porting kit
+> (core_boot_patch.js, html_changes.diff, project_sidebar.css). That
+> integration was completed long ago — the sidebar now lives in
+> `src/sidebar/` and everything above reflects the real tree.
 
 ---
 
@@ -492,28 +489,10 @@ for production).
 
 ## Integration Checklist
 
-Apply changes in this exact order:
-
-- [ ] **Copy new files** into `jvscrpt_and_css_extra/`:
-  - `native_api.js`
-  - `project_sidebar.js`
-  - `project_sidebar.css`
-
-- [ ] **Modify `index.html`** per `html_changes.diff`:
-  - [ ] Change 1: load `native_api.js` after theme script in `<head>`
-  - [ ] Change 2: load `project_sidebar.css` after main CSS
-  - [ ] Change 3: add `#btn-sidebar` button as first child of `#topbar-left`
-  - [ ] Change 4: add `#project-sidebar` + `#sidebar-divider` as first children of `#workspace`
-  - [ ] Change 5: load `project_sidebar.js` as the last script before `</body>`
-
-- [ ] **Modify `markdown_editor_core_cm.js`**:
-  - [ ] Replace the boot block (lines ~524–553) with `core_boot_patch.js`
-  - [ ] Remove the now-redundant standalone `render(); countWords();` line immediately after the replaced block
-
-- [ ] **Optional: guard the existing Ctrl+S handler** in `markdown_editor_actions_cm.js` (see sidebar section above)
-
-- [ ] **Build Electron wrapper**: `npm run build:electron`
-- [ ] **Build Tauri wrapper**: `npm run build:tauri`
+Historical — the integration this checklist described was completed. The
+sidebar is developed in `src/sidebar/` and bundled by
+`npm run build:sidebar`; data-safety logic lives in `electron/fs_core.js`
+and `tauri/src/main.rs` and is covered by the test suites (see Testing).
 
 ---
 
@@ -654,23 +633,23 @@ hit that.
 
 ## Known Limitations & Future Work
 
-1. **Tauri multi-button dialogs**: The `tauri-plugin-dialog` v2 API has
-   limited support for custom button arrays. The `show_message_box` Rust
-   command currently returns `response: 0` always. For production, implement
-   a custom Tauri window (`tauri::WindowBuilder`) to host a small HTML
-   confirmation dialog and emit the response via a Tauri event.
+1. **Tauri multi-button dialogs** — ✅ RESOLVED: native_api.js routes every
+   dialog with more than one button through an in-page HTML dialog
+   (`showHtmlMessageBox`) that honors `defaultId`/`cancelId`; the Rust
+   native dialog is only used for single-button notices.
 
 2. **File watcher on macOS**: `fs.watch()` in Node.js and the `notify` crate
    both use `FSEvents` on macOS, which can have a ~1s delay. Consider
    `chokidar` (Electron) or the `notify` `PollWatcher` as fallback.
 
-3. **Single-instance lock**: Add `app.requestSingleInstanceLock()` to
-   `electron/main.js` for production to prevent opening two windows.
+3. **Single-instance lock** — ✅ RESOLVED: `app.requestSingleInstanceLock()`
+   in electron/main.js and `tauri-plugin-single-instance` in the Tauri
+   builder; a second launch exits and focuses the existing window.
 
-4. **Windows atomic rename**: `fs.rename()` on Windows will fail if the
-   destination exists. The current `writeFile` handler deletes the temp file
-   on error. For robustness, use `fs.copyFileSync` + `fs.unlinkSync` as
-   a fallback.
+4. **Windows atomic rename** — ✅ RESOLVED: `atomicWriteFile` in
+   electron/fs_core.js (and `atomic_write_file` in tauri/src/main.rs) fall
+   back on EXDEV/EBUSY to a copy with a `.revery_bak` snapshot that is only
+   deleted after the copy verifiably succeeded; covered by unit tests.
 
 5. **Tauri v1 compatibility**: The Rust code targets Tauri v2. For v1,
    replace `app.path().app_config_dir()` with `app.path_resolver().app_config_dir()`,
