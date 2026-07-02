@@ -99,5 +99,6 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     mathInline: true, mathBlock: true, currencySafe: true, codeMathRaw: true,
     fmProtected: true, mathRevealsRaw: true,
     sizeMatchesPreview: true, sizeNotEditorBound: true,
+    familyFollows: true, familyRestores: true, katexSizeParity: true,
   }, 'phase 2+ must render widgets, strikethrough, copy button, task checkboxes, KaTeX math, and protect frontmatter');
 });
