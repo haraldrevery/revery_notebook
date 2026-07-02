@@ -31,6 +31,8 @@ let previewFontType = 'harald'; // Preview font style ('harald' is default)
 let uiLanguage = window.uiLanguage; // UI Language setting (synced from lang.js)
 let selectedBackground = 'bg_6'; // Active background image key
 let slowHardwareMode = false;    // One switch for older machines — see setSlowHardwareMode
+let backgroundOpacity = null;    // null = per-theme CSS default; number 0.01–1 overrides
+const CUSTOM_BG_KEY = 'revery_custom_bg'; // data: URL of an imported background (outside the settings JSON)
 window.slowHardwareMode = false; // Mirror read by core/sync/native_api/sidebar at call time
 let editorBgGradient = false;     // true = gradient fade, false = solid colour
 
@@ -65,7 +67,8 @@ window.saveEditorSettings = function() {
     selectedBackground,
     themeMode,
     editorBgGradient,
-    slowHardwareMode
+    slowHardwareMode,
+    backgroundOpacity
   };
 
   try {
@@ -132,6 +135,9 @@ function loadEditorSettings() {
     if (s.centerHeaders !== undefined) window.centerHeaders = s.centerHeaders;
     if (s.selectedBackground !== undefined) selectedBackground = s.selectedBackground;
     if (s.slowHardwareMode !== undefined) { slowHardwareMode = !!s.slowHardwareMode; window.slowHardwareMode = slowHardwareMode; }
+    if (typeof s.backgroundOpacity === 'number' && s.backgroundOpacity > 0 && s.backgroundOpacity <= 1) {
+      backgroundOpacity = s.backgroundOpacity;
+    }
     if (s.themeMode !== undefined) themeMode = s.themeMode;
     if (s.editorBgGradient !== undefined) editorBgGradient = s.editorBgGradient;
     }
@@ -463,12 +469,101 @@ applyEditorPadding();
    without touching the user's selectedBackground choice — turning the mode
    off restores their background.                                          */
 function applyBackground() {
+  if (slowHardwareMode) {
+    document.documentElement.style.removeProperty('--preview-bg-image');
+    return;
+  }
+  if (selectedBackground === 'custom') {
+    let dataUrl = null;
+    try { dataUrl = localStorage.getItem(CUSTOM_BG_KEY); } catch (_) {}
+    if (dataUrl) {
+      document.documentElement.style.setProperty('--preview-bg-image', `url("${dataUrl}")`);
+    } else {
+      /* The stored image is gone (storage cleared) — fall back to none. */
+      document.documentElement.style.removeProperty('--preview-bg-image');
+    }
+    return;
+  }
   const opt = BACKGROUND_OPTIONS.find(o => o.val === selectedBackground);
-  if (slowHardwareMode || !opt || opt.val === 'none') {
+  if (!opt || opt.val === 'none') {
     document.documentElement.style.removeProperty('--preview-bg-image');
   } else {
     document.documentElement.style.setProperty('--preview-bg-image', `url('${opt.url}')`);
   }
+}
+
+/* ── Background opacity ────────────────────────────────────────────────
+   The stylesheet simulates image opacity per theme with an overlay
+   gradient driven by --bg_oacity (the historical variable name is
+   missing its 'p' — kept for compatibility with all existing CSS).
+   Only override when the user picked a value; otherwise each theme's
+   own subtle default applies, so existing setups look unchanged.      */
+window.setBackgroundOpacity = function (v) {
+  backgroundOpacity = (typeof v === 'number' && v > 0 && v <= 1) ? v : null;
+  if (backgroundOpacity !== null) {
+    document.documentElement.style.setProperty('--bg_oacity', String(backgroundOpacity));
+  } else {
+    document.documentElement.style.removeProperty('--bg_oacity');
+  }
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+};
+
+/* ── Custom background import ──────────────────────────────────────────
+   The imported image is stored as a data: URL in localStorage — never
+   the filesystem — so it behaves identically in web, Electron and Tauri
+   and cannot interact with any file-safety code path. The picker
+   downscales through a canvas so the stored string stays small.       */
+window.applyCustomBackgroundImage = function (dataUrl) {
+  try {
+    localStorage.setItem(CUSTOM_BG_KEY, dataUrl);
+  } catch (e) {
+    if (typeof window.showStatusWarning === 'function') {
+      window.showStatusWarning('storage-full',
+        'Storage full! The image is too large to keep as a background.',
+        { priority: 100, ttl: 5000 });
+    }
+    return false;
+  }
+  selectedBackground = 'custom';
+  applyBackground();
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+  return true;
+};
+
+window.removeCustomBackgroundImage = function () {
+  try { localStorage.removeItem(CUSTOM_BG_KEY); } catch (_) {}
+  if (selectedBackground === 'custom') selectedBackground = 'bg_6';
+  applyBackground();
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+};
+
+function importCustomBackgroundFile(file) {
+  if (!file || !file.type || !file.type.startsWith('image/')) return;
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    const MAX_DIM = 2560; // plenty for a blurred-behind-text background
+    const scale = Math.min(1, MAX_DIM / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+    const w = Math.max(1, Math.round((img.naturalWidth  || 1) * scale));
+    const h = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    let dataUrl;
+    try {
+      dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    } catch (e) {
+      console.warn('[Background] Could not re-encode the image:', e);
+      return;
+    }
+    if (window.applyCustomBackgroundImage(dataUrl)) buildSettingsMenu();
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    console.warn('[Background] Could not decode the chosen image.');
+  };
+  img.src = url;
 }
 
 /* ── Slow hardware mode ────────────────────────────────────────────────
@@ -561,6 +656,9 @@ applyFontTypes(); // Execute font assignment on boot
 applyCenterHeaders(); // <-- ADD THIS LINE to apply the saved setting on page load
 applyBackground();
 applyEditorBgStyle();
+if (backgroundOpacity !== null) {
+  document.documentElement.style.setProperty('--bg_oacity', String(backgroundOpacity));
+}
 window.setSlowHardwareMode(slowHardwareMode); // sync body class + bg suppression on boot
 
 function applyLoadedStates() {
@@ -1402,9 +1500,88 @@ const themeOptions = [
     bgSub.appendChild(btn);
   });
 
+  // No background (solid theme color)
+  const bgNoneBtn = document.createElement('button');
+  bgNoneBtn.className = 'menu-item';
+  bgNoneBtn.textContent = (selectedBackground === 'none' ? '■ ' : '\u00a0\u00a0') + window.t('No background');
+  bgNoneBtn.onclick = (e) => {
+    e.stopPropagation();
+    selectedBackground = 'none';
+    applyBackground();
+    settingsDropdown.classList.remove('show');
+    buildSettingsMenu();
+    if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+  };
+  bgSub.appendChild(bgNoneBtn);
+
+  // Import a custom image (stored locally as a downscaled data: URL)
+  const bgCustomBtn = document.createElement('button');
+  bgCustomBtn.className = 'menu-item';
+  bgCustomBtn.textContent = (selectedBackground === 'custom' ? '■ ' : '\u00a0\u00a0') + window.t('Custom image…');
+  bgCustomBtn.onclick = (e) => {
+    e.stopPropagation();
+    settingsDropdown.classList.remove('show');
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = 'image/*';
+    picker.onchange = () => {
+      if (picker.files && picker.files[0]) importCustomBackgroundFile(picker.files[0]);
+    };
+    picker.click();
+  };
+  bgSub.appendChild(bgCustomBtn);
+
+  let hasCustomBg = false;
+  try { hasCustomBg = !!localStorage.getItem(CUSTOM_BG_KEY); } catch (_) {}
+  if (hasCustomBg) {
+    const bgRemoveBtn = document.createElement('button');
+    bgRemoveBtn.className = 'menu-item';
+    bgRemoveBtn.textContent = '\u00a0\u00a0' + window.t('Remove custom image');
+    bgRemoveBtn.onclick = (e) => {
+      e.stopPropagation();
+      window.removeCustomBackgroundImage();
+      settingsDropdown.classList.remove('show');
+      buildSettingsMenu();
+    };
+    bgSub.appendChild(bgRemoveBtn);
+  }
+
   bgWrapper.appendChild(bgSub);
   attachSubmenuHandlers(bgWrapper, bgSub);
   settingsDropdown.appendChild(bgWrapper);
+
+  // ── Background opacity submenu (null = each theme's subtle default)
+  const bgOpacityOptions = [
+    { label: window.t('Theme default'), val: null },
+    { label: '3%',  val: 0.03 }, { label: '5%',  val: 0.05 },
+    { label: '8%',  val: 0.08 }, { label: '12%', val: 0.12 },
+    { label: '20%', val: 0.20 }, { label: '30%', val: 0.30 },
+    { label: '50%', val: 0.50 }, { label: '75%', val: 0.75 },
+    { label: '100%', val: 1 },
+  ];
+  const bgOpWrapper = document.createElement('div');
+  bgOpWrapper.className = 'menu-item has-submenu';
+  const bgOpLabel = document.createElement('span');
+  bgOpLabel.textContent = window.t('Background opacity ▸');
+  bgOpWrapper.appendChild(bgOpLabel);
+  const bgOpSub = document.createElement('div');
+  bgOpSub.className = 'submenu';
+  bgOpSub.style.display = 'none';
+  bgOpacityOptions.forEach(opt => {
+    const btn = document.createElement('button');
+    btn.className = 'menu-item';
+    btn.textContent = (backgroundOpacity === opt.val ? '■ ' : '\u00a0\u00a0') + opt.label;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      window.setBackgroundOpacity(opt.val);
+      settingsDropdown.classList.remove('show');
+      buildSettingsMenu();
+    };
+    bgOpSub.appendChild(btn);
+  });
+  bgOpWrapper.appendChild(bgOpSub);
+  attachSubmenuHandlers(bgOpWrapper, bgOpSub);
+  settingsDropdown.appendChild(bgOpWrapper);
 
   // ── UI Menu Size submenu
   const uiSizeOptions = [90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270];

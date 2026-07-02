@@ -88,7 +88,26 @@
     persisted:  readSetting() === false,
   };
 
+  /* 8. Background customization: opacity override (and its removal back
+        to the per-theme default) plus the custom-image data-URL path. */
+  window.setBackgroundOpacity(0.3);
+  const settingsNow = () => JSON.parse(localStorage.getItem('revery_md_settings') || '{}');
+  const opSet = document.documentElement.style.getPropertyValue('--bg_oacity') === '0.3'
+    && settingsNow().backgroundOpacity === 0.3;
+  window.setBackgroundOpacity(null);
+  const opCleared = document.documentElement.style.getPropertyValue('--bg_oacity') === ''
+    && settingsNow().backgroundOpacity === null;
+
+  const PIXEL = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+  const bgApplied = window.applyCustomBackgroundImage(PIXEL) === true
+    && document.documentElement.style.getPropertyValue('--preview-bg-image').includes('data:image/gif')
+    && settingsNow().selectedBackground === 'custom';
+  window.removeCustomBackgroundImage();
+  const bgRemoved = !document.documentElement.style.getPropertyValue('--preview-bg-image').includes('data:')
+    && localStorage.getItem('revery_custom_bg') === null
+    && settingsNow().selectedBackground !== 'custom';
+
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
            replacedText, ghostCount, barHidden, supersededCount,
-           slowOn, slowOff };
+           slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved };
 })()

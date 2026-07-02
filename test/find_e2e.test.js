@@ -71,4 +71,10 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   // (off-state fields are success-booleans: flag/persisted verify `=== false`)
   assert.deepEqual(r.slowOff, { flag: true, bodyClass: false, bgRestored: true, persisted: true },
     'disabling slow hardware mode must restore the user background and persist');
+
+  // 8. background customization: opacity override + custom image roundtrip
+  assert.equal(r.opSet, true, 'setBackgroundOpacity must set the CSS var and persist');
+  assert.equal(r.opCleared, true, 'clearing opacity must fall back to the per-theme default');
+  assert.equal(r.bgApplied, true, 'custom background must apply from a data URL and persist');
+  assert.equal(r.bgRemoved, true, 'removing the custom background must clean storage and fall back');
 });

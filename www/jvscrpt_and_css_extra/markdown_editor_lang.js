@@ -878,6 +878,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>CPU performance delay</strong> — Higher value = Saves battery and CPU, but not that great experience. Low value = drains more CPU and battery but smoother experience.</li>
           <li><strong>Forced Prev. Synch.</strong> — "Forced Preview Synchronization" is a more reliable synchronization between the editor and preview window, but might feel a little janky. Use if you notice that the what you type is not visible on the preview.</li>
           <li><strong>Slow Hardware Mode</strong> — one switch for older machines: fewer disk writes while typing, calmer preview rendering, no background image, and lighter file cards. Saving stays exactly as crash-safe as before.</li>
+          <li><strong>Background &amp; opacity</strong> — pick one of the built-in preview backgrounds, turn it off, or import your own image (kept locally and downscaled automatically). "Background opacity" tunes how strongly it shows through.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
@@ -941,6 +942,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>CPU-prestandafördröjning</strong> — Högre värde = sparar batteri och CPU, men inte lika bra upplevelse. Lågt värde = drar mer CPU och batteri men jämnare upplevelse.</li>
           <li><strong>Tvingad förhandsgr.synk</strong> — "Tvingad förhandsgranskningssynkronisering" är en mer pålitlig synkronisering mellan redigeraren och förhandsgranskningsfönstret, men kan kännas lite ryckig. Använd om du märker att det du skriver inte syns i förhandsgranskningen.</li>
           <li><strong>Långsam hårdvara-läge</strong> — ett reglage för äldre datorer: färre diskskrivningar medan du skriver, lugnare förhandsgranskning, ingen bakgrundsbild och lättare filkort. Sparandet är precis lika kraschsäkert som annars.</li>
+          <li><strong>Bakgrund &amp; opacitet</strong> — välj en av de inbyggda förhandsgranskningsbakgrunderna, stäng av den, eller importera en egen bild (sparas lokalt och skalas ner automatiskt). "Bakgrundsopacitet" styr hur tydligt den syns.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
