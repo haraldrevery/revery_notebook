@@ -543,6 +543,20 @@ npm run start:electron
 npm run start:tauri
 ```
 
+### Sidebar bundle
+
+`www/jvscrpt_and_css_extra/project_sidebar.js` is a **generated file**. The
+source of truth is the ES modules in `src/sidebar/` (state, save engine,
+tree, cards, file operations, drag-and-drop, watcher, lifecycle). After
+editing anything there, rebuild the single-file bundle the HTML loads:
+
+```bash
+npm run build:sidebar
+```
+
+The bundle is committed so the web version and both wrappers work without a
+build step. Never edit the bundle directly — the banner comment says so too.
+
 ### Production Build
 
 ```bash
