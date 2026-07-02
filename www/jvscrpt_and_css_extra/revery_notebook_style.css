@@ -2030,3 +2030,53 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   }
 
 }
+/* ── Live Preview (experimental) ─────────────────────────────────────────
+   Classes applied by markdown_editor_livepreview.js decorations. Colors
+   lean on the existing theme variables so all four themes work. The body
+   class hides the side preview while the mode is active — the user's own
+   previewVisible choice is untouched underneath.                        */
+/* Reader mode and the mobile 'Preview' view both NEED the preview pane —
+   they win over live preview's pane-hiding (otherwise both panes would be
+   hidden at once and the workspace would go blank).                     */
+body.live-preview-active:not(.reader-mode-active):not([data-view="preview"]) #preview-pane,
+body.live-preview-active:not(.reader-mode-active) #divider {
+  display: none !important;
+}
+/* The editor carries inline width styles (divider drag / preview toggle
+   set them from JS) — !important is required to win over those while the
+   mode is active. Toggling off restores whatever was inline before.    */
+body.live-preview-active #editor-pane {
+  width: 100% !important;
+  flex: 1 1 auto !important;
+}
+
+.cm-line.lp-h1 { font-size: 1.7em;  font-weight: 700; line-height: 1.25; }
+.cm-line.lp-h2 { font-size: 1.45em; font-weight: 700; line-height: 1.25; }
+.cm-line.lp-h3 { font-size: 1.25em; font-weight: 600; line-height: 1.3; }
+.cm-line.lp-h4 { font-size: 1.12em; font-weight: 600; }
+.cm-line.lp-h5 { font-size: 1.02em; font-weight: 700; }
+.cm-line.lp-h6 { font-size: 0.95em; font-weight: 700; letter-spacing: 0.04em; }
+
+.lp-strong { font-weight: 700; }
+.lp-em     { font-style: italic; }
+.lp-strike { text-decoration: line-through; opacity: 0.75; }
+.lp-code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.92em;
+  background: rgba(128, 128, 128, 0.16);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+/* Link-styled text only — clicking never navigates (app link policy). */
+.lp-link { color: var(--accent, #7a8ee0); text-decoration: underline; }
+
+.cm-line.lp-quote {
+  border-left: 3px solid var(--border, rgba(128, 128, 128, 0.45));
+  padding-left: 10px;
+  opacity: 0.85;
+}
+.cm-line.lp-codeblock {
+  background: rgba(128, 128, 128, 0.09);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.92em;
+}

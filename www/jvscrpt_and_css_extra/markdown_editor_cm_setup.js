@@ -42,6 +42,25 @@ const lineNumbersCompartment = new Compartment();
       });
     }
   };
+
+  /* ── Live preview slot ────────────────────────────────────────────────
+     The live-preview extension (markdown_editor_livepreview.js) installs
+     itself through this compartment. Same file-switch rule as the line
+     numbers above: replaceEditorContent() builds a FRESH state from
+     _editorExtensions, which snapshots the compartment's initial (empty)
+     value — the tracked current value MUST be re-applied after every
+     setState or live preview silently dies on file switch.             */
+  const livePreviewCompartment = new Compartment();
+  let _currentLivePreviewExt = []; // Track state for file-switching
+
+  window.setLivePreviewExtension = function (ext) {
+    _currentLivePreviewExt = ext || [];
+    if (window.cmView) {
+      window.cmView.dispatch({
+        effects: livePreviewCompartment.reconfigure(_currentLivePreviewExt)
+      });
+    }
+  };
   // ═════════════════════════════════════════════════════════════════════════
   // 1.  FIND HIGHLIGHT DECORATIONS
   //     Replacing the old textarea-backdrop approach with CM native marks.
@@ -255,6 +274,7 @@ const lineNumbersCompartment = new Compartment();
       EditorView.contentAttributes.of({ spellcheck: 'true' }),
       placeholderCompartment.of(placeholder('Start writing\u2026')),
       lineNumbersCompartment.of([]), // Initialize empty, Settings will toggle this
+      livePreviewCompartment.of([]), // Initialize empty, Settings will toggle this
       Prec.highest(keymap.of(tabKeymap)),
       Prec.high(keymap.of([...escapeKeymap, ...autoWrapKeymap])),
       keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -483,6 +503,8 @@ window.replaceEditorContent = function (text) {
     
     // Re-apply the line numbers visibility state to the fresh editor
     window.setLineNumbersVisible(_currentLineNumbersVisible);
+    // Re-apply live preview — the fresh state snapshotted an empty slot
+    window.setLivePreviewExtension(_currentLivePreviewExt);
 
     if (typeof render === 'function')     render();
     if (typeof countWords === 'function') countWords();

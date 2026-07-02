@@ -81,4 +81,12 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   // 9. full import pipeline: File → decode → downscale → store → COMPUTED style
   assert.deepEqual(r.pipeline, { stored: true, selected: true, rendered: true, opacityBumped: true },
     'a real picked image must decode under the CSP and visibly render on #preview');
+
+  // 10. live preview: render, reveal-on-selection, fresh-state survival, clean off
+  assert.deepEqual(r.lpOnState, {
+    paneHidden: true, headingClass: true, marksHidden: true, boldStyled: true,
+    marksRevealed: true, survivedReplace: true,
+  }, 'live preview must decorate, hide marks off-line, reveal them on the edited line, and survive file switches');
+  assert.deepEqual(r.lpOffState, { decorationsGone: true, paneBack: true, persistedOff: true },
+    'toggling live preview off must fully restore the classic editor');
 });
