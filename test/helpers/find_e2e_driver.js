@@ -187,6 +187,17 @@
   await sleep(150);
   lpPhase2.copyClickSafe = editor.value.includes('copy me\nline two');
 
+  /* task-list checkboxes: render + click toggles the DOCUMENT text */
+  replaceEditorContent('- [ ] first\n- [x] second\n\nend');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(300);
+  const boxes = document.querySelectorAll('.lp-task-checkbox');
+  lpPhase2.taskBoxes = boxes.length === 2;
+  lpPhase2.taskDoneStyled = !!document.querySelector('.cm-line.lp-task-done');
+  if (boxes[0]) boxes[0].click();
+  await sleep(300);
+  lpPhase2.taskToggled = editor.value.startsWith('- [x] first');
+
   window.setLivePreviewMode(false);
   await sleep(150);
   const lpOffState = {

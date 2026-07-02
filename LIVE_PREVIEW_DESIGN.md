@@ -130,8 +130,13 @@ soak: GFM strikethrough enabled (markdown({ extensions: [Strikethrough] })
 — note this also makes the CLASSIC editor strike ~~text~~ through, at
 parity with how bold/italic were always highlighted) and the fenced-code
 copy button (CopyWidget on the opening fence line, reusing the preview's
-.code-copy-btn styling and clipboard fallback chain). Remaining phase 3
-candidates: task-list checkboxes, fence syntax highlighting.
+.code-copy-btn styling and clipboard fallback chain). Task-list checkboxes also
+delivered (TaskList parser extension + a checkbox that toggles
+[ ]<->[x] through a normal editor transaction — user-initiated, undoable,
+flows through autosave; the marker is re-validated at click time via
+posAtDOM before any edit). Remaining phase 3 candidate: fence syntax
+highlighting (needs the language-data pack the bundle deliberately
+omits — weigh size cost first).
 
 ## 7. Order of work
 

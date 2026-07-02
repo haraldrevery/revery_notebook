@@ -147,6 +147,41 @@
     ignoreEvent() { return true; }
   }
 
+  /* Task-list checkbox. Clicking toggles [ ] <-> [x] in the DOCUMENT via
+     a normal editor transaction — a user-initiated edit like any
+     keystroke: it flows through undo, dirty-tracking and autosave. The
+     marker text is re-read at click time (via posAtDOM) and validated,
+     so a stale widget can never corrupt anything.                     */
+  class TaskWidget extends WidgetType {
+    constructor(checked) { super(); this.checked = checked; }
+    eq(other) { return other.checked === this.checked; }
+    toDOM() {
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.className = 'lp-task-checkbox';
+      box.checked = this.checked;
+      box.addEventListener('click', (e) => {
+        e.preventDefault(); // the doc edit drives the visual state
+        const view = window.cmView;
+        if (!view) return;
+        let pos;
+        try { pos = view.posAtDOM(box); } catch (_) { return; }
+        const marker = view.state.doc.sliceString(pos, pos + 3);
+        if (!/^\[[ xX]\]$/.test(marker)) return; // not where we thought — abort
+        const next = marker === '[ ]' ? '[x]' : '[ ]';
+        view.dispatch({ changes: { from: pos, to: pos + 3, insert: next } });
+      });
+      return box;
+    }
+    ignoreEvent() { return false; } // let the click reach the checkbox
+  }
+  /* The checkbox rides ON the replace decoration (like the hr widget) —
+     a separate point widget at the edge of a replaced range would be
+     swallowed by it. */
+  const taskDoneDeco = Decoration.replace({ widget: new TaskWidget(true) });
+  const taskTodoDeco = Decoration.replace({ widget: new TaskWidget(false) });
+  const taskLineDone = Decoration.line({ class: 'lp-task-done' });
+
   /* Resolve an image reference exactly like the classic preview does
      (postProcessImages in markdown_editor_core_cm.js): absolute schemes
      pass through; in desktop mode relative paths resolve against the
@@ -257,8 +292,27 @@
           if (name === 'ListMark') {
             const text = doc.sliceString(node.from, node.to);
             if (/^[-*+]$/.test(text) && !revealed.has(doc.lineAt(node.from).number)) {
-              ranges.push(bulletDeco.range(node.from, node.to));
+              /* '- [ ] task': the checkbox replaces the whole marker pair —
+                 hide the list dash (and its space) instead of a bullet.  */
+              if (/^ \[[ xX]\]/.test(doc.sliceString(node.to, node.to + 4))) {
+                ranges.push(hideDeco.range(node.from, node.to + 1));
+              } else {
+                ranges.push(bulletDeco.range(node.from, node.to));
+              }
             }
+            return;
+          }
+
+          if (name === 'TaskMarker') {
+            const line = doc.lineAt(node.from);
+            if (revealed.has(line.number)) return; // raw '[ ]' while editing
+            const marker = doc.sliceString(node.from, node.to);
+            const done = /x/i.test(marker);
+            /* Replace '[ ]' (and one following space) with the checkbox. */
+            let to = node.to;
+            if (to < line.to && doc.sliceString(to, to + 1) === ' ') to++;
+            ranges.push((done ? taskDoneDeco : taskTodoDeco).range(node.from, to));
+            if (done) ranges.push(taskLineDone.range(line.from));
             return;
           }
 
