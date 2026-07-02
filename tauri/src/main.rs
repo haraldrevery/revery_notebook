@@ -2405,3 +2405,151 @@ tauri::Builder::default()
         .run(tauri::generate_context!())
         .expect("Error while running Revery Notebook (Tauri)");
 }
+/* ══════════════════════════════════════════════════════════════════════════
+   TESTS — pure helpers only (no Tauri runtime required).
+   Run with: cargo test --manifest-path tauri/Cargo.toml
+══════════════════════════════════════════════════════════════════════════ */
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Fresh unique directory under the OS temp dir for each test.
+    fn test_dir(label: &str) -> PathBuf {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "revery-rs-test-{}-{}-{}",
+            std::process::id(),
+            label,
+            n
+        ));
+        fs::create_dir_all(&dir).expect("create test dir");
+        dir
+    }
+
+    /* ── safe_path ─────────────────────────────────────────────────── */
+
+    #[test]
+    fn safe_path_rejects_empty() {
+        assert!(safe_path("").is_err());
+    }
+
+    #[test]
+    fn safe_path_rejects_null_byte() {
+        assert!(safe_path("/tmp/a\0b").is_err());
+    }
+
+    #[test]
+    fn safe_path_accepts_normal_paths() {
+        assert_eq!(safe_path("/tmp/x.md").unwrap(), PathBuf::from("/tmp/x.md"));
+    }
+
+    /* ── safe_path_inside ──────────────────────────────────────────── */
+
+    #[test]
+    fn inside_accepts_existing_file_in_root() {
+        let root = test_dir("inside-ok");
+        let file = root.join("note.md");
+        fs::write(&file, "x").unwrap();
+        let got = safe_path_inside(file.to_str().unwrap(), &root).unwrap();
+        assert_eq!(got, root.canonicalize().unwrap().join("note.md"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn inside_accepts_new_nested_path() {
+        let root = test_dir("inside-nested");
+        let target = root.join("new_a").join("new_b").join("note.md");
+        let got = safe_path_inside(target.to_str().unwrap(), &root).unwrap();
+        assert!(got.starts_with(root.canonicalize().unwrap()));
+        assert!(got.ends_with(Path::new("new_a/new_b/note.md")));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn inside_rejects_dotdot_escape() {
+        let root = test_dir("inside-escape");
+        let evil = format!("{}/../evil.md", root.to_str().unwrap());
+        assert!(safe_path_inside(&evil, &root).is_err());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn inside_rejects_absolute_path_outside_root() {
+        let root = test_dir("inside-abs");
+        let outside = test_dir("inside-abs-outside");
+        let target = outside.join("f.md");
+        assert!(safe_path_inside(target.to_str().unwrap(), &root).is_err());
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inside_rejects_symlink_escape() {
+        let root = test_dir("inside-symlink");
+        let outside = test_dir("inside-symlink-outside");
+        let link = root.join("sneaky");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let target = link.join("f.md");
+        assert!(safe_path_inside(target.to_str().unwrap(), &root).is_err());
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
+    }
+
+    /* ── atomic_write_file ─────────────────────────────────────────── */
+
+    #[test]
+    fn atomic_write_creates_file_and_removes_tmp() {
+        let dir = test_dir("aw-create");
+        let dest = dir.join("note.md");
+        let tmp = dir.join("note.md.test_tmp");
+        atomic_write_file(&tmp, &dest, b"hello world").unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "hello world");
+        assert!(!tmp.exists(), "temp file must not survive a successful write");
+        // No stray .revery_bak either
+        let strays: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name() != "note.md")
+            .collect();
+        assert!(strays.is_empty(), "no leftovers expected: {strays:?}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_content() {
+        let dir = test_dir("aw-replace");
+        let dest = dir.join("note.md");
+        fs::write(&dest, "OLD").unwrap();
+        let tmp = dir.join("note.md.test_tmp");
+        atomic_write_file(&tmp, &dest, "NEW ünïcode 📝".as_bytes()).unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "NEW ünïcode 📝");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn atomic_write_fails_cleanly_when_tmp_dir_missing() {
+        let dir = test_dir("aw-fail");
+        let dest = dir.join("note.md");
+        fs::write(&dest, "OLD").unwrap();
+        // tmp in a directory that does not exist → File::create fails
+        let tmp = dir.join("no-such-subdir").join("note.md.test_tmp");
+        assert!(atomic_write_file(&tmp, &dest, b"NEW").is_err());
+        assert_eq!(
+            fs::read_to_string(&dest).unwrap(),
+            "OLD",
+            "failed write must leave the destination untouched"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /* ── is_cross_device_err ───────────────────────────────────────── */
+
+    #[test]
+    fn cross_device_detection() {
+        assert!(is_cross_device_err(&std::io::Error::from_raw_os_error(18))); // EXDEV
+        assert!(!is_cross_device_err(&std::io::Error::from_raw_os_error(13))); // EACCES
+    }
+}
