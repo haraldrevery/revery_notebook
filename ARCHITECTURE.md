@@ -41,7 +41,7 @@ revery-desktop/
 ### Files that exist in the web project and are MODIFIED (not replaced):
 | File | Change |
 |---|---|
-| `revery_notebook.html` | Add sidebar HTML, load new scripts/CSS (see `html_changes.diff`) |
+| `index.html` | Add sidebar HTML, load new scripts/CSS (see `html_changes.diff`) |
 | `markdown_editor_core_cm.js` | Replace boot block with `core_boot_patch.js` content |
 
 ### Files that are NEW (copy into `jvscrpt_and_css_extra/`):
@@ -58,7 +58,7 @@ revery-desktop/
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                     Revery Notebook Frontend                   │
-│  (revery_notebook.html + all existing JS/CSS — unchanged API) │
+│  (index.html + all existing JS/CSS — unchanged API) │
 │                                                                │
 │   Calls only:  window.NativeAPI.readFile(path)                │
 │                window.NativeAPI.writeFile(path, content)       │
@@ -499,7 +499,7 @@ Apply changes in this exact order:
   - `project_sidebar.js`
   - `project_sidebar.css`
 
-- [ ] **Modify `revery_notebook.html`** per `html_changes.diff`:
+- [ ] **Modify `index.html`** per `html_changes.diff`:
   - [ ] Change 1: load `native_api.js` after theme script in `<head>`
   - [ ] Change 2: load `project_sidebar.css` after main CSS
   - [ ] Change 3: add `#btn-sidebar` button as first child of `#topbar-left`

@@ -150,7 +150,7 @@ function createWindow() {
 
   /* Load the app. In production load from the built dist folder.
      In dev, load from the local file (same as current web setup).       */
-mainWindow.loadFile(path.join(__dirname, '..', 'www', 'revery_notebook.html'));
+mainWindow.loadFile(path.join(__dirname, '..', 'www', 'index.html'));
 
   /* ── Never navigate, never open links ───────────────────────────────────
      Policy (CLAUDE.md "Must fix"): the app must never open links or act as

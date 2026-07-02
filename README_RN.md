@@ -99,7 +99,7 @@ Press **Ctrl+F** to open the find bar. Features include:
 
 ```
 /
-├── revery_notebook.html              ← The app. Open this in a browser.
+├── index.html              ← The app. Open this in a browser.
 │
 └── jvscrpt_and_css_extra/            ← All assets live here
     ├── revery_notebook_style.css     ← All styles for the editor UI
@@ -130,7 +130,7 @@ Build tooling (not deployed):
 └── cm_entry_slim.js                  ← CodeMirror 6 entry point
 ```
 
-> **Beginner tip:** The only file you ever need to open in a browser is `revery_notebook.html`. Everything else is a resource it loads automatically. You do not need Node.js or a build step unless you want to update the CodeMirror bundle.
+> **Beginner tip:** The only file you ever need to open in a browser is `index.html`. Everything else is a resource it loads automatically. You do not need Node.js or a build step unless you want to update the CodeMirror bundle.
 
 ---
 
@@ -154,8 +154,8 @@ All libraries are self-hosted (no CDN calls at runtime) to satisfy the Content S
 
 You do not need to install anything.
 
-1. Copy the entire project folder to your web server (or open `revery_notebook.html` directly in a browser for local use).
-2. Open `revery_notebook.html`. The editor loads with a short welcome note.
+1. Copy the entire project folder to your web server (or open `index.html` directly in a browser for local use).
+2. Open `index.html`. The editor loads with a short welcome note.
 3. Start typing in the left pane. The right pane updates as you type.
 4. Press **Ctrl+S** to download your work as a `.md` file. The filename comes from the title field in the top-left corner.
 5. Your text is automatically saved to the browser each time you type, so refreshing the page will restore your last session.
@@ -181,10 +181,10 @@ npx serve .
 python3 -m http.server 8080
 ```
 
-Then open `http://localhost:8080/revery_notebook.html`.
+Then open `http://localhost:8080/index.html`.
 
 ### Script loading order
-The scripts in `revery_notebook.html` must be loaded in this exact order. Each file depends on globals defined by those before it:
+The scripts in `index.html` must be loaded in this exact order. Each file depends on globals defined by those before it:
 
 ```
 markdown_editor_theme.js       (inline, before <body> — prevents theme flash)
@@ -325,11 +325,11 @@ Or use **File → Quit → Total Reset** from inside the app.
 
 ## Deployment Checklist
 
-- [ ] Copy `revery_notebook.html` and the entire `jvscrpt_and_css_extra/` folder to the server.
+- [ ] Copy `index.html` and the entire `jvscrpt_and_css_extra/` folder to the server.
 - [ ] Ensure the server serves `.js` and `.css` files with correct MIME types.
 - [ ] If using HTTPS (recommended), the Clipboard API (`navigator.clipboard`) will be available. On `http://` origins the copy-button falls back to the `execCommand` approach automatically.
 - [ ] The CSP `<meta>` tag allows `img-src 'self' data:`. If your users embed external images (`![](https://...)`) you will need to add `img-src * data:` or an appropriate domain allowlist.
-- [ ] If you rename the `jvscrpt_and_css_extra/` directory, update all `<script src="...">` and `<link href="...">` paths in `revery_notebook.html` accordingly.
+- [ ] If you rename the `jvscrpt_and_css_extra/` directory, update all `<script src="...">` and `<link href="...">` paths in `index.html` accordingly.
 
 ---
 

@@ -129,14 +129,6 @@ html #preview .prose b {
   border-radius: 4px;
 }
 
-/* Replaces inline style="" for markdown_editor_find.js */
-.find-highlight-mark {
-  background: rgba(255, 200, 60, 0.4);
-  color: transparent;
-  border-radius: 2px;
-  box-shadow: 0 0 0 1px rgba(255,200,60,0.8);
-}
-
 
 
 
@@ -616,9 +608,6 @@ body {
   font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: var(--tracking-wider); text-transform: uppercase; color: var(--text-dim);
 }
 
-/* ── Copy flash ── */
-.copy-flash { animation: flash 0.5s ease; }
-@keyframes flash { 0%,100% { opacity:1; } 50% { opacity: 0.4; } }
 
 /* ── Code block copy button ── */
 /* Block code: the pre element becomes the positioning anchor */
@@ -1701,13 +1690,6 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   border-radius: 2px;
 }
 
-/* 9. Subtle markdown syntax colours in the editor (optional, low-contrast) */
-[data-theme="dark"]  #editor .cm-header  { color: #d4d4d4; }
-[data-theme="light"] #editor .cm-header  { color: #222; }
-[data-theme="dark"]  #editor .cm-em      { color: #aaa; font-style: italic; }
-[data-theme="light"] #editor .cm-em      { color: #444; font-style: italic; }
-[data-theme="dark"]  #editor .cm-link    { color: #7da3c8; }
-[data-theme="light"] #editor .cm-link    { color: #2563eb; }
 
 
 /* ================================================= */
