@@ -475,6 +475,7 @@ for production).
 | XSS → file read | Renderer has no direct FS access; must go through IPC |
 | Oversized payloads | Files > 20 MB are rejected at the IPC handler level |
 | Dialog spoofing | Only `dialog.*` APIs in main process; renderer cannot fake them |
+| Acting as a browser | `will-navigate` cancels everything except same-URL reloads; `setWindowOpenHandler` denies all; links are never forwarded to the OS browser (policy: the app never opens links) |
 
 ### Tauri
 
@@ -485,6 +486,7 @@ for production).
 | FS scope bypass | Custom commands + plugin scope both validate independently |
 | Oversized file reads | `meta.len() > 20 MB` guard in `read_file` |
 | Unregistered IPC | Tauri rejects invocations for commands not in `generate_handler![]` |
+| Acting as a browser | `navigation-guard` plugin (`on_navigation` + `is_allowed_navigation`) — only the app's own origins may load in the webview; everything else is cancelled and logged |
 
 ---
 

@@ -152,21 +152,18 @@ function createWindow() {
      In dev, load from the local file (same as current web setup).       */
 mainWindow.loadFile(path.join(__dirname, '..', 'www', 'revery_notebook.html'));
 
-  /* ── Block in-window navigation; open external URLs in the OS browser ──
-     Without this, clicking any <a href="https://…"> in the rendered preview
-     would navigate the entire BrowserWindow away from the app, instantly
-     destroying all unsaved in-memory state.
+  /* ── Never navigate, never open links ───────────────────────────────────
+     Policy (CLAUDE.md "Must fix"): the app must never open links or act as
+     a browser. Navigating the BrowserWindow away from the app would also
+     destroy all unsaved in-memory state, and the frameless UI would leave
+     the user stranded on the external page with no window controls.
+     The preview's click guard already blocks link clicks and shows the
+     "External links are disabled" toast; these two hooks are the
+     platform-level backstop for every other vector (URLs dropped onto the
+     window, window.open / target="_blank", location assignment from any
+     script). Nothing is forwarded to the OS browser.
      will-navigate fires for same-frame navigations (standard link clicks).
      setWindowOpenHandler fires for target="_blank" and window.open() calls. */
-// Only allow safe, web-only protocols. Never open file://, app://, javascript:, etc.
-function isSafeExternalUrl(url) {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
-  } catch {
-    return false; // unparseable URL — deny
-  }
-}
 
 mainWindow.webContents.on('will-navigate', (event, url) => {
   /* Allow reloads of the currently loaded page (window.location.reload()
@@ -177,15 +174,11 @@ mainWindow.webContents.on('will-navigate', (event, url) => {
   if (url === event.sender.getURL()) return;
 
   event.preventDefault();
-  if (isSafeExternalUrl(url)) {
-    shell.openExternal(url);
-  }
+  console.warn('[revery] Blocked navigation attempt to:', url);
 });
 
 mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-  if (isSafeExternalUrl(url)) {
-    shell.openExternal(url);
-  }
+  console.warn('[revery] Blocked window.open attempt to:', url);
   return { action: 'deny' };
 });
 

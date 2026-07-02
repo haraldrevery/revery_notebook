@@ -318,6 +318,31 @@ fn get_root(root_state: &State<'_, RootPath>) -> Result<std::path::PathBuf, Stri
     }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   NAVIGATION POLICY
+   The app must never open links or act as a browser (CLAUDE.md "Must fix").
+   The preview's click guard blocks link clicks in the renderer; this
+   allowlist is the platform-level backstop for every other navigation
+   vector (dropped URLs, location assignment, window.open). Only the app's
+   own origins may load in the webview:
+     tauri://localhost            production on Linux/macOS
+     http(s)://tauri.localhost    production on Windows (WebView2)
+     http://localhost:1420        the devUrl from tauri.conf.json
+     about:blank                  transient WebView2 init navigation
+══════════════════════════════════════════════════════════════════════════ */
+fn is_allowed_navigation(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "tauri" => true,
+        "http" | "https" => match url.host_str() {
+            Some("tauri.localhost") => true,
+            Some("localhost") => url.port() == Some(1420),
+            _ => false,
+        },
+        "about" => url.as_str() == "about:blank",
+        _ => false,
+    }
+}
+
 
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -2320,6 +2345,21 @@ fn main() {
 
 tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        /* ── Navigation guard ── (see is_allowed_navigation above)
+           A plugin's on_navigation hook applies to every webview, including
+           the config-created main window, which WebviewWindowBuilder's own
+           hook cannot reach. Returning false cancels the navigation.      */
+        .plugin(
+            tauri::plugin::Builder::<tauri::Wry>::new("navigation-guard")
+                .on_navigation(|_webview, url| {
+                    let allowed = is_allowed_navigation(url);
+                    if !allowed {
+                        eprintln!("[revery] Blocked navigation to external URL: {url}");
+                    }
+                    allowed
+                })
+                .build(),
+        )
 
         /* ── Managed state ── */
         .manage(WatcherState::default())
@@ -2551,5 +2591,38 @@ mod tests {
     fn cross_device_detection() {
         assert!(is_cross_device_err(&std::io::Error::from_raw_os_error(18))); // EXDEV
         assert!(!is_cross_device_err(&std::io::Error::from_raw_os_error(13))); // EACCES
+    }
+
+    /* ── is_allowed_navigation ─────────────────────────────────────── */
+
+    fn nav(url: &str) -> bool {
+        is_allowed_navigation(&tauri::Url::parse(url).unwrap())
+    }
+
+    #[test]
+    fn navigation_allows_own_origins() {
+        assert!(nav("tauri://localhost/revery_notebook.html")); // Linux/macOS prod
+        assert!(nav("http://tauri.localhost/revery_notebook.html")); // Windows prod
+        assert!(nav("https://tauri.localhost/index.html"));
+        assert!(nav("http://localhost:1420/")); // devUrl
+        assert!(nav("about:blank")); // transient WebView2 init
+    }
+
+    #[test]
+    fn navigation_blocks_external_urls() {
+        assert!(!nav("https://example.com/"));
+        assert!(!nav("http://example.com/phish"));
+        assert!(!nav("https://localhost.evil.com/"));
+        assert!(!nav("http://localhost:8080/")); // wrong port
+        assert!(!nav("http://localhost/")); // no port
+    }
+
+    #[test]
+    fn navigation_blocks_non_web_schemes() {
+        assert!(!nav("file:///etc/passwd"));
+        assert!(!nav("javascript:alert(1)"));
+        assert!(!nav("data:text/html,<h1>x</h1>"));
+        assert!(!nav("asset://localhost/some/file.png")); // subresource-only scheme
+        assert!(!nav("about:config"));
     }
 }
