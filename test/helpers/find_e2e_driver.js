@@ -231,6 +231,41 @@
   lpPhase2.sizeMatchesPreview  = Number.isFinite(pvSize) && Math.abs(cmSize - pvSize) < 0.6;
   lpPhase2.sizeNotEditorBound  = Math.abs(cmSize - edInline) > 0.6 || Math.abs(pvSize - edInline) < 0.6;
 
+  /* FONT FAMILY parity via the real settings path: click 'Preview font
+     type -> Times' like a user, assert LP content and preview paragraph
+     change together; then restore the default and assert they return. */
+  replaceEditorContent('family parity $a^2$ check\n\nsecond');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(250);
+  const famOf = (sel) => {
+    const el = document.querySelector(sel);
+    return el ? getComputedStyle(el).fontFamily : null;
+  };
+  const clickPreviewFont = (label) => {
+    const wrapper = Array.from(document.querySelectorAll('#settings-dropdown .menu-item'))
+      .find(el => el.textContent.includes('Preview font type'));
+    const btn = wrapper && Array.from(wrapper.querySelectorAll('.submenu button'))
+      .find(b => b.textContent.toLowerCase().includes(label));
+    if (btn) { btn.click(); return true; }
+    return false;
+  };
+  const famBefore = famOf('.cm-content');
+  const timesClicked = clickPreviewFont('times');
+  await sleep(300);
+  lpPhase2.familyFollows = timesClicked
+    && /times/i.test(famOf('.cm-content') || '')
+    && famOf('.cm-content') === famOf('#preview p');
+  lpPhase2.katexSizeParity = (() => {
+    const lpK = document.querySelector('.lp-math .katex');
+    const pvK = document.querySelector('#preview .katex');
+    if (!lpK || !pvK) return false;
+    return Math.abs(parseFloat(getComputedStyle(lpK).fontSize) - parseFloat(getComputedStyle(pvK).fontSize)) < 0.6;
+  })();
+  const defaultClicked = clickPreviewFont('harald') || clickPreviewFont('default');
+  await sleep(300);
+  lpPhase2.familyRestores = defaultClicked && famOf('.cm-content') === famBefore
+    && famOf('.cm-content') === famOf('#preview p');
+
   window.setLivePreviewMode(false);
   await sleep(150);
   const lpOffState = {

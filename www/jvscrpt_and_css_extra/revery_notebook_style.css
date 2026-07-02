@@ -2194,8 +2194,11 @@ body.center-headers-active .cm-line.lp-h6 {
   opacity: 0.6;
 }
 
-/* KaTeX math in live preview (katex.min.css is loaded globally). */
-.lp-math .katex { font-size: 1.05em; }
+/* KaTeX math in live preview (katex.min.css is loaded globally).
+   Same size variable as '#preview .katex' — applyFontTypes() sets it per
+   font choice (0.7em for the Harald font, 1em otherwise), so math tracks
+   the Preview font type setting here exactly like in the preview pane. */
+body.live-preview-active .lp-math .katex { font-size: var(--katex-font-size, 0.7em) !important; }
 .lp-math-block {
   display: inline-block;
   width: 100%;
