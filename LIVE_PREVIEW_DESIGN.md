@@ -134,9 +134,17 @@ copy button (CopyWidget on the opening fence line, reusing the preview's
 delivered (TaskList parser extension + a checkbox that toggles
 [ ]<->[x] through a normal editor transaction — user-initiated, undoable,
 flows through autosave; the marker is re-validated at click time via
-posAtDOM before any edit). Remaining phase 3 candidate: fence syntax
-highlighting (needs the language-data pack the bundle deliberately
-omits — weigh size cost first).
+posAtDOM before any edit). KaTeX math also delivered: a
+conservative scanner (code contexts and frontmatter excluded, texmath
+whitespace rules so currency stays text) renders $…$ and single-line
+$$…$$ through the globally loaded KaTeX with throwOnError:false and a
+raw-text fallback; multi-line $$ blocks stay raw (replace decorations
+cannot cross lines from a view plugin — the classic preview covers
+them). YAML frontmatter became a protected region (CommonMark would
+misparse the fences as a thematic break and 'key: value' + '---' as a
+Setext heading): no decorations inside, dim mono styling instead.
+Remaining phase 3 candidate: fence syntax highlighting (needs the
+language-data pack the bundle deliberately omits — weigh size first).
 
 ## 7. Order of work
 

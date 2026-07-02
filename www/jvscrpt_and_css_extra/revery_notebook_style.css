@@ -2182,6 +2182,22 @@ body.center-headers-active .cm-line.lp-h6 {
   opacity: 0.6;
 }
 
+/* KaTeX math in live preview (katex.min.css is loaded globally). */
+.lp-math .katex { font-size: 1.05em; }
+.lp-math-block {
+  display: inline-block;
+  width: 100%;
+  text-align: center;
+  padding: 0.25em 0;
+}
+/* YAML frontmatter: protected raw region, dimmed mono — the preview's
+   pill rendering stays a preview-pane feature. */
+.cm-line.lp-frontmatter {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  opacity: 0.55;
+}
+
 .lp-image-fallback {
   font-size: 0.85em;
   opacity: 0.6;
