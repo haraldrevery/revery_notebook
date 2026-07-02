@@ -71,6 +71,25 @@ function requireRoot() {
 
 const PRELOAD_SCRIPT  = path.join(__dirname, 'preload.js');
 
+/* ── Single instance ─────────────────────────────────────────────────────
+   Two instances of the app would be two autosave writers and two file
+   watchers on the same project — defeating the in-process save
+   serialization and inviting lost writes. The lock is keyed on userData,
+   so a second launch of the SAME profile exits immediately and the first
+   window is brought to front instead.                                    */
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
 /* ── Ensure volatile temp directory exists and is safe to use ───────────
    ensureVolatileDir (fs_core.js) verifies VOLATILE_DIR is owned by us, is
    not a symlink, and has 0700 perms before we write user-note backups into
@@ -195,6 +214,9 @@ mainWindow.webContents.setWindowOpenHandler(({ url }) => {
 }
 
 app.whenReady().then(() => {
+  /* A second instance is already quitting — never create its window. */
+  if (!gotSingleInstanceLock) return;
+
   createWindow();
 
 

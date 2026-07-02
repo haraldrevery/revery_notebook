@@ -2344,6 +2344,16 @@ fn main() {
     }
 
 tauri::Builder::default()
+        /* ── Single instance ── (registered first, per plugin docs)
+           Two instances would be two autosave writers and two file
+           watchers on the same project. A second launch exits itself and
+           this callback brings the existing window to front instead.    */
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         /* ── Navigation guard ── (see is_allowed_navigation above)
            A plugin's on_navigation hook applies to every webview, including
