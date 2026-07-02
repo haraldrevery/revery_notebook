@@ -219,6 +219,18 @@
   await sleep(250);
   lpPhase2.mathRevealsRaw = document.querySelectorAll('.lp-math .katex').length < 2;
 
+  /* font/size parity: LP text must equal the PREVIEW's paragraph size
+     (both consume --text-body), not the editor's size. */
+  replaceEditorContent('parity check paragraph\n\nsecond');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(300);
+  const cmSize = parseFloat(getComputedStyle(document.querySelector('.cm-content')).fontSize);
+  const prevP  = document.querySelector('#preview p');
+  const pvSize = prevP ? parseFloat(getComputedStyle(prevP).fontSize) : NaN;
+  const edInline = parseFloat(getComputedStyle(document.getElementById('editor')).fontSize);
+  lpPhase2.sizeMatchesPreview  = Number.isFinite(pvSize) && Math.abs(cmSize - pvSize) < 0.6;
+  lpPhase2.sizeNotEditorBound  = Math.abs(cmSize - edInline) > 0.6 || Math.abs(pvSize - edInline) < 0.6;
+
   window.setLivePreviewMode(false);
   await sleep(150);
   const lpOffState = {

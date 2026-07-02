@@ -2057,6 +2057,18 @@ body.live-preview-active #editor-pane {
 body.live-preview-active .cm-content {
   font-family: var(--preview-font, var(--font-brand, inherit)) !important;
   letter-spacing: var(--preview-letter-spacing, var(--tracking-body, inherit)) !important;
+  /* Text SIZE and line rhythm follow the PREVIEW's settings, not the
+     editor's: --text-body / --text-line-row-space are the same variables
+     .prose paragraphs consume (applyTextSize scales them live from the
+     'Preview text size' setting), overriding the inline editor size
+     inherited from #editor. Mirrors the prose desktop/mobile split.   */
+  font-size: var(--text-body, 1.22rem) !important;
+  line-height: var(--text-line-row-space, 1.7) !important;
+}
+@media (max-width: 899px) {
+  body.live-preview-active .cm-content {
+    font-size: var(--text-body-mobile, 1.07rem) !important;
+  }
 }
 
 /* Background texture parity: same per-theme overlay recipe as #preview
