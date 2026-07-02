@@ -134,7 +134,38 @@
   window.removeCustomBackgroundImage();
   window.setBackgroundOpacity(null);
 
+  /* 10. Live Preview (experimental): decorations render, marks hide off
+         the selection line and reveal on it, the extension survives
+         replaceEditorContent (the fresh-state compartment trap), and
+         toggling off restores the pane and today's editor. */
+  window.setLivePreviewMode(true);
+  setDoc('# Hello **bold** world\n\nplain tail');
+  editor.setSelectionRange(editor.value.length, editor.value.length); // cursor on last line
+  await sleep(250);
+  const h1Line = () => document.querySelector('.cm-line.lp-h1');
+  const lpOnState = {
+    paneHidden:   getComputedStyle(document.getElementById('preview-pane')).display === 'none',
+    headingClass: !!h1Line(),
+    marksHidden:  !!h1Line() && !h1Line().textContent.includes('**') && !h1Line().textContent.includes('#'),
+    boldStyled:   !!document.querySelector('.lp-strong'),
+  };
+  editor.setSelectionRange(2, 2); // move INTO the heading line
+  await sleep(250);
+  lpOnState.marksRevealed = !!h1Line() && h1Line().textContent.includes('**') && h1Line().textContent.includes('#');
+  replaceEditorContent('# Fresh **doc**\n\ntail');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(250);
+  lpOnState.survivedReplace = !!document.querySelector('.cm-line.lp-h1');
+  window.setLivePreviewMode(false);
+  await sleep(150);
+  const lpOffState = {
+    decorationsGone: !document.querySelector('.cm-line.lp-h1'),
+    paneBack:        getComputedStyle(document.getElementById('preview-pane')).display !== 'none',
+    persistedOff:    settingsNow().livePreviewMode === false,
+  };
+
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
            replacedText, ghostCount, barHidden, supersededCount,
-           slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline };
+           slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
+           lpOnState, lpOffState };
 })()

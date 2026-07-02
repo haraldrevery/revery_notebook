@@ -32,6 +32,7 @@ let uiLanguage = window.uiLanguage; // UI Language setting (synced from lang.js)
 let selectedBackground = 'bg_6'; // Active background image key
 let slowHardwareMode = false;    // One switch for older machines — see setSlowHardwareMode
 let backgroundOpacity = null;    // null = per-theme CSS default; number 0.01–1 overrides
+let livePreviewMode = false;     // Obsidian-style in-editor rendering — see setLivePreviewMode
 const CUSTOM_BG_KEY = 'revery_custom_bg'; // data: URL of an imported background (outside the settings JSON)
 window.slowHardwareMode = false; // Mirror read by core/sync/native_api/sidebar at call time
 let editorBgGradient = false;     // true = gradient fade, false = solid colour
@@ -68,7 +69,8 @@ window.saveEditorSettings = function() {
     themeMode,
     editorBgGradient,
     slowHardwareMode,
-    backgroundOpacity
+    backgroundOpacity,
+    livePreviewMode
   };
 
   try {
@@ -138,6 +140,7 @@ function loadEditorSettings() {
     if (typeof s.backgroundOpacity === 'number' && s.backgroundOpacity > 0 && s.backgroundOpacity <= 1) {
       backgroundOpacity = s.backgroundOpacity;
     }
+    if (s.livePreviewMode !== undefined) livePreviewMode = !!s.livePreviewMode;
     if (s.themeMode !== undefined) themeMode = s.themeMode;
     if (s.editorBgGradient !== undefined) editorBgGradient = s.editorBgGradient;
     }
@@ -598,6 +601,27 @@ window.setSlowHardwareMode = function (on) {
   if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
 };
 
+/* ── Live Preview (experimental) ───────────────────────────────────────
+   Obsidian-style: formatting renders inside the editor and the side
+   preview pane hides (CSS body class — the user's own previewVisible
+   choice is untouched underneath and returns on toggle-off). The editor
+   extension is installed through the cm_setup compartment; decorations
+   are display-only, so the document text, saving and undo are never
+   affected. See LIVE_PREVIEW_DESIGN.md.                                */
+window.setLivePreviewMode = function (on) {
+  livePreviewMode = !!on;
+  window.livePreviewMode = livePreviewMode;
+  document.body.classList.toggle('live-preview-active', livePreviewMode);
+  if (typeof window.setLivePreviewExtension === 'function') {
+    window.setLivePreviewExtension(
+      (livePreviewMode && typeof window.buildLivePreviewExtension === 'function')
+        ? window.buildLivePreviewExtension()
+        : []
+    );
+  }
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+};
+
 /* Apply Custom Font Types via CSS Variables */
 
 /* Apply Custom Font Types via CSS Variables */
@@ -671,6 +695,7 @@ if (backgroundOpacity !== null) {
   document.documentElement.style.setProperty('--bg_oacity', String(backgroundOpacity));
 }
 window.setSlowHardwareMode(slowHardwareMode); // sync body class + bg suppression on boot
+window.setLivePreviewMode(livePreviewMode);   // install editor extension + hide pane if saved on
 
 function applyLoadedStates() {
   // Apply visibility to preview and editor panes based on saved state
@@ -1712,6 +1737,23 @@ const themeOptions = [
     buildSettingsMenu();
   };
   settingsDropdown.appendChild(shBtn);
+
+  // ── Live Preview Toggle (experimental)
+  const lpBtn = document.createElement('button');
+  lpBtn.className = 'menu-item';
+  const lpCheck = document.createElement('span');
+  lpCheck.className = 'menu-item-check';
+  lpCheck.textContent = livePreviewMode ? '■' : '□';
+  lpBtn.appendChild(lpCheck);
+  lpBtn.appendChild(document.createTextNode(window.t('Live Preview (experimental)')));
+  lpBtn.title = window.t('Render formatting inside the editor; markdown symbols show on the line you are editing. Hides the side preview while active.');
+  lpBtn.onclick = (e) => {
+    e.stopPropagation();
+    window.setLivePreviewMode(!livePreviewMode);
+    settingsDropdown.classList.remove('show');
+    buildSettingsMenu();
+  };
+  settingsDropdown.appendChild(lpBtn);
 
   const rcDivider = document.createElement('div');
   rcDivider.className = 'menu-divider';
