@@ -99,6 +99,54 @@
     ignoreEvent() { return true; }
   }
 
+  /* Copy button for fenced code blocks — parity with the classic
+     preview's postProcessCodeBlocks button. Reuses the same
+     .code-copy-btn class, ::after label variables and .is-copied
+     feedback, and the same clipboard strategy (navigator.clipboard
+     with an execCommand fallback). ignoreEvent() keeps CodeMirror's
+     own mouse handling away from the button.                          */
+  class CopyWidget extends WidgetType {
+    constructor(text) { super(); this.text = text; }
+    eq(other) { return other.text === this.text; }
+    toDOM() {
+      const btn = document.createElement('button');
+      btn.className = 'code-copy-btn';
+      btn.title = 'Copy code to clipboard';
+      const text = this.text;
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const fallbackCopy = (str) => {
+          const ta = document.createElement('textarea');
+          ta.value = str;
+          ta.style.top = '0'; ta.style.left = '0'; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.focus(); ta.select();
+          let ok = false;
+          try { ok = document.execCommand('copy'); } catch (_) {}
+          document.body.removeChild(ta);
+          return ok;
+        };
+        const handleFeedback = (ok) => {
+          if (ok) {
+            btn.classList.add('is-copied');
+            setTimeout(() => btn.classList.remove('is-copied'), 1600);
+          } else {
+            console.warn('Copy failed.');
+          }
+        };
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text)
+            .then(() => handleFeedback(true))
+            .catch(() => handleFeedback(fallbackCopy(text)));
+        } else {
+          handleFeedback(fallbackCopy(text));
+        }
+      });
+      return btn;
+    }
+    ignoreEvent() { return true; }
+  }
+
   /* Resolve an image reference exactly like the classic preview does
      (postProcessImages in markdown_editor_core_cm.js): absolute schemes
      pass through; in desktop mode relative paths resolve against the
@@ -175,7 +223,24 @@
           const headingCls = HEADING_LINE[name];
           if (headingCls) addLineClass(node.from, headingCls);
           else if (name === 'Blockquote')  addBlockLines(node, vr, 'lp-quote');
-          else if (name === 'FencedCode')  addBlockLines(node, vr, 'lp-codeblock');
+          else if (name === 'FencedCode') {
+            addBlockLines(node, vr, 'lp-codeblock');
+            /* Copy button on the opening fence line (one per block even
+               when the block spans multiple visible ranges). Copied text
+               is the block content without the fence lines.            */
+            const firstLine = doc.lineAt(node.from);
+            const lastLine  = doc.lineAt(Math.min(node.to, doc.length));
+            const copyKey   = firstLine.from + ':copy';
+            if (lastLine.number > firstLine.number && !seenLineDeco.has(copyKey)) {
+              seenLineDeco.add(copyKey);
+              const innerFrom = Math.min(firstLine.to + 1, node.to);
+              const innerTo   = Math.max(lastLine.from - 1, innerFrom);
+              ranges.push(Decoration.widget({
+                widget: new CopyWidget(doc.sliceString(innerFrom, innerTo)),
+                side: 1,
+              }).range(firstLine.to));
+            }
+          }
 
           const styleCls = INLINE_STYLE[name];
           if (styleCls && node.to > node.from) {

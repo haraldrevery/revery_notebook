@@ -175,6 +175,18 @@
   await sleep(250);
   lpPhase2.hrRevealsRaw = !document.querySelector('.lp-hr');
 
+  /* strikethrough (GFM ext) + fenced-code copy button */
+  replaceEditorContent('~~gone~~ text\n\n~~~\ncopy me\nline two\n~~~\n\nend');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(300);
+  const strikeEl = document.querySelector('.lp-strike');
+  lpPhase2.strikeRendered = !!strikeEl && !strikeEl.textContent.includes('~~');
+  const copyBtn = document.querySelector('.cm-content .code-copy-btn');
+  lpPhase2.copyButton = !!copyBtn;
+  if (copyBtn) copyBtn.click(); // must not throw / must not edit the doc
+  await sleep(150);
+  lpPhase2.copyClickSafe = editor.value.includes('copy me\nline two');
+
   window.setLivePreviewMode(false);
   await sleep(150);
   const lpOffState = {

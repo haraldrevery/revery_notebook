@@ -3,6 +3,7 @@ export { EditorView, keymap, Decoration, ViewPlugin, WidgetType, drawSelection, 
 export { EditorState, StateField, StateEffect, Compartment, RangeSetBuilder, Prec } from '@codemirror/state';
 export { history, historyKeymap, defaultKeymap, undo, redo } from '@codemirror/commands';
 export { markdown } from '@codemirror/lang-markdown';
+export { Strikethrough } from '@lezer/markdown'; // GFM strikethrough parser extension
 export { syntaxHighlighting, defaultHighlightStyle, syntaxTree } from '@codemirror/language';
 // language-data is intentionally omitted to keep the bundle small;
 // fenced code blocks still render, just without per-language token colours.

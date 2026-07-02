@@ -94,5 +94,6 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   assert.deepEqual(r.lpPhase2, {
     hrWidget: true, bullet: true, imageWidget: true,
     headingUpper: true, texture: true, hrRevealsRaw: true,
-  }, 'phase 2 must render hr/bullet/image widgets with preview typography and texture');
+    strikeRendered: true, copyButton: true, copyClickSafe: true,
+  }, 'phase 2 must render hr/bullet/image widgets, strikethrough, and the code copy button');
 });
