@@ -107,7 +107,34 @@
     && localStorage.getItem('revery_custom_bg') === null
     && settingsNow().selectedBackground !== 'custom';
 
+  /* 9. FULL custom-background pipeline (regression for the blob:-CSP bug):
+        a real File must decode, downscale, store, and — the part the var-
+        level probe above cannot see — actually reach the COMPUTED style of
+        #preview. Importing at theme-default opacity must also auto-bump
+        visibility so the image isn't imperceptible. */
+  const srcCanvas = document.createElement('canvas');
+  srcCanvas.width = 800; srcCanvas.height = 500;
+  const cctx = srcCanvas.getContext('2d');
+  cctx.fillStyle = '#356'; cctx.fillRect(0, 0, 800, 500);
+  cctx.fillStyle = '#fa0'; cctx.fillRect(100, 100, 600, 300);
+  const cblob = await new Promise((r) => srcCanvas.toBlob(r, 'image/png'));
+  importCustomBackgroundFile(new File([cblob], 'probe.png', { type: 'image/png' }));
+  let pipeWait = 0;
+  while (pipeWait < 6000) {
+    await sleep(150); pipeWait += 150;
+    if (settingsNow().selectedBackground === 'custom') break;
+  }
+  const previewCS = getComputedStyle(document.getElementById('preview'));
+  const pipeline = {
+    stored:   (() => { try { return !!localStorage.getItem('revery_custom_bg'); } catch (_) { return false; } })(),
+    selected: settingsNow().selectedBackground === 'custom',
+    rendered: previewCS.backgroundImage.includes('data:image'),
+    opacityBumped: settingsNow().backgroundOpacity === 0.35,
+  };
+  window.removeCustomBackgroundImage();
+  window.setBackgroundOpacity(null);
+
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
            replacedText, ghostCount, barHidden, supersededCount,
-           slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved };
+           slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline };
 })()

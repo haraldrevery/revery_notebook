@@ -539,31 +539,42 @@ window.removeCustomBackgroundImage = function () {
 
 function importCustomBackgroundFile(file) {
   if (!file || !file.type || !file.type.startsWith('image/')) return;
-  const url = URL.createObjectURL(file);
-  const img = new Image();
-  img.onload = () => {
-    URL.revokeObjectURL(url);
-    const MAX_DIM = 2560; // plenty for a blurred-behind-text background
-    const scale = Math.min(1, MAX_DIM / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
-    const w = Math.max(1, Math.round((img.naturalWidth  || 1) * scale));
-    const h = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-    let dataUrl;
-    try {
-      dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-    } catch (e) {
-      console.warn('[Background] Could not re-encode the image:', e);
-      return;
-    }
-    if (window.applyCustomBackgroundImage(dataUrl)) buildSettingsMenu();
+  /* Read via FileReader into a data: URL — NOT URL.createObjectURL. The
+     img-src CSP (both wrappers and the web deploy) allows data: but not
+     blob:, so a blob-URL image silently fails to decode. That was the
+     bug in the first version of this feature.                          */
+  const reader = new FileReader();
+  reader.onerror = () => console.warn('[Background] Could not read the chosen file.');
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX_DIM = 2560; // plenty for a behind-text background
+      const scale = Math.min(1, MAX_DIM / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+      const w = Math.max(1, Math.round((img.naturalWidth  || 1) * scale));
+      const h = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      let dataUrl;
+      try {
+        dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      } catch (e) {
+        console.warn('[Background] Could not re-encode the image:', e);
+        return;
+      }
+      if (window.applyCustomBackgroundImage(dataUrl)) {
+        /* The per-theme default overlay leaves the image at ~3%
+           visibility — right for the built-in textures, invisible for a
+           photo the user just imported. Give a clearly visible starting
+           point; the Background opacity submenu tunes it from there.  */
+        if (backgroundOpacity === null) window.setBackgroundOpacity(0.35);
+        buildSettingsMenu();
+      }
+    };
+    img.onerror = () => console.warn('[Background] Could not decode the chosen image.');
+    img.src = reader.result;
   };
-  img.onerror = () => {
-    URL.revokeObjectURL(url);
-    console.warn('[Background] Could not decode the chosen image.');
-  };
-  img.src = url;
+  reader.readAsDataURL(file);
 }
 
 /* ── Slow hardware mode ────────────────────────────────────────────────

@@ -77,4 +77,8 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   assert.equal(r.opCleared, true, 'clearing opacity must fall back to the per-theme default');
   assert.equal(r.bgApplied, true, 'custom background must apply from a data URL and persist');
   assert.equal(r.bgRemoved, true, 'removing the custom background must clean storage and fall back');
+
+  // 9. full import pipeline: File → decode → downscale → store → COMPUTED style
+  assert.deepEqual(r.pipeline, { stored: true, selected: true, rendered: true, opacityBumped: true },
+    'a real picked image must decode under the CSP and visibly render on #preview');
 });
