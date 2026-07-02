@@ -3,6 +3,7 @@ import { S, treeEl, btnViewBtn, btnToggleAll, btnSortBtn, selectedItems, _previe
 import { stripMarkdownForPreview, getFileCategory, mediaMarkdown } from './helpers.js';
 import { sortEntries, renderTree, updateMultiSelectHighlight, showContextMenu } from './tree.js';
 import { openFile, openMediaFile, openUnsupportedFile } from './fileops.js';
+import { icon } from './icons.js';
 
 let _cardGeneration = 0;
 
@@ -84,7 +85,7 @@ let _cardGeneration = 0;
     thumb.className = 'sidebar-card-thumb';
 
     if (entry.type === 'dir') {
-      thumb.textContent = '📁';
+      thumb.replaceChildren(icon('folder'));
 
     } else if (category === 'media') {
       /* Try to show the actual image */
@@ -95,14 +96,14 @@ let _cardGeneration = 0;
       try {
         img.src = window.NativeAPI.toMediaUrl(entry.path);
       } catch {
-        thumb.textContent = '🖼️';
+        thumb.replaceChildren(icon('image'));
       }
       /* Fall back to emoji if image fails to load */
-      img.onerror = () => { thumb.innerHTML = ''; thumb.textContent = '🖼️'; };
+      img.onerror = () => { thumb.replaceChildren(icon('image')); };
       thumb.appendChild(img);
 
     } else if (category === 'text') {
-      thumb.textContent = entry.name.endsWith('.md') ? '📄' : '📝';
+      thumb.replaceChildren(icon(entry.name.endsWith('.md') ? 'file' : 'file-lines'));
 
     } else {
       /* Unsupported */
@@ -338,10 +339,10 @@ treeEl.appendChild(gridEl);
     if (btnSmaller) btnSmaller.style.display = isCard ? '' : 'none';
     if (btnLarger)  btnLarger.style.display  = isCard ? '' : 'none';
     if (isCard) {
-    btnViewBtn.textContent = '🗃';
+    btnViewBtn.replaceChildren(icon('view-list'));
     btnViewBtn.title = window.t('Switch to list view');
   } else {
-    btnViewBtn.textContent = '🧾';
+    btnViewBtn.replaceChildren(icon('view-cards'));
     btnViewBtn.title = window.t('Switch to card view');
   }
 }

@@ -1849,6 +1849,18 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   text-overflow: ellipsis;
 }
 
+/* ── Inline SVG icons ─────────────────────────────────────────────────
+   Replace emoji glyphs so icon rendering never depends on the system
+   emoji font (which ignores the app font and may render in color).
+   Sized by the surrounding font-size, colored by currentColor.        */
+.rv-icon {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  display: inline-block;
+  pointer-events: none; /* clicks land on the row/button, like .sidebar-icon */
+}
+
 .sidebar-btn {
   background: transparent;
   border: none;

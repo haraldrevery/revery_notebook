@@ -9,7 +9,96 @@ let findCaseSensitive = false;
 let findUseRegex = false;
 
 
-/* ── Security: ReDoS Guard (synchronous, no nested regexes) ───────────── */
+/* ── Regex search worker ────────────────────────────────────────────────
+   User-supplied regular expressions run in a dedicated Web Worker with a
+   hard time budget: a catastrophic pattern (ReDoS) can never freeze the
+   UI, because on timeout the worker THREAD is terminated outright and a
+   fresh worker is created for the next search. This replaces the old
+   isSafeRegex heuristic as the primary defence — the heuristic rejected
+   perfectly safe patterns like (a|b)+ — but the heuristic is kept below
+   as the guard for environments where Workers are unavailable (then the
+   old fully-synchronous code path runs instead).                        */
+const FIND_WORKER_URL  = 'jvscrpt_and_css_extra/find_worker.js';
+const FIND_TIMEOUT_MS  = 1500;
+
+let _findWorker    = null;   // lazily (re)created after construction/timeout
+let _workerBroken  = false;  // Worker unusable on this platform → sync fallback
+let _workerReqId   = 0;
+let _workerPending = null;   // { id, resolve, timer } — one request in flight
+
+function _getFindWorker() {
+  if (_workerBroken) return null;
+  if (_findWorker) return _findWorker;
+  try {
+    _findWorker = new Worker(FIND_WORKER_URL);
+  } catch (err) {
+    console.warn('[Find] Web Worker unavailable — regex search uses the sync fallback with the conservative pattern guard:', err);
+    _workerBroken = true;
+    return null;
+  }
+  _findWorker.addEventListener('message', (e) => {
+    const p = _workerPending;
+    if (!p || !e.data || e.data.id !== p.id) return; // stale or probe reply
+    clearTimeout(p.timer);
+    _workerPending = null;
+    p.resolve(e.data);
+  });
+  _findWorker.addEventListener('error', (err) => {
+    /* Script failed to load or crashed — permanent fallback. */
+    console.warn('[Find] Worker failed — regex search uses the sync fallback:', (err && err.message) || err);
+    _workerBroken = true;
+    _settlePending({ ok: false, error: 'worker-error' });
+    try { _findWorker.terminate(); } catch (_) {}
+    _findWorker = null;
+  });
+  return _findWorker;
+}
+
+function _settlePending(result) {
+  const p = _workerPending;
+  if (!p) return;
+  clearTimeout(p.timer);
+  _workerPending = null;
+  p.resolve(result);
+}
+
+/* Post one job to the worker. A previous in-flight job is superseded (its
+   promise resolves { ok:false, error:'superseded' } and its eventual reply
+   is ignored). On timeout the worker is killed and rebuilt on next use.  */
+function workerRequest(payload) {
+  const w = _getFindWorker();
+  if (!w) return Promise.resolve({ ok: false, error: 'unavailable' });
+  _settlePending({ ok: false, error: 'superseded' });
+  return new Promise((resolve) => {
+    const id = ++_workerReqId;
+    const timer = setTimeout(() => {
+      _workerPending = null;
+      try { _findWorker.terminate(); } catch (_) {}
+      _findWorker = null;
+      resolve({ ok: false, error: 'timeout' });
+    }, FIND_TIMEOUT_MS);
+    _workerPending = { id, resolve, timer };
+    w.postMessage(Object.assign({ id }, payload));
+  });
+}
+
+/* Eager availability probe: constructing the worker at startup surfaces
+   platform support in the console once and removes first-search latency.
+   The probe reply (id 0) is ignored by the pending-request listener.    */
+(function probeFindWorker() {
+  const w = _getFindWorker();
+  if (!w) return;
+  const onProbe = (e) => {
+    if (e.data && e.data.id === 0) {
+      console.info('[Find] Regex search worker ready.');
+      w.removeEventListener('message', onProbe);
+    }
+  };
+  w.addEventListener('message', onProbe);
+  w.postMessage({ id: 0, op: 'ping' });
+})();
+
+/* ── Fallback guard: ReDoS heuristic (sync path only) ─────────────────── */
 function isSafeRegex(query) {
   // 1. Absolute length limit – anything longer than 100 chars is rejected
   if (query.length > 100) return false;
@@ -130,61 +219,16 @@ function closeFindBar() {
 
 
 /* ── Core search ──────────────────────────────────────────────────────── */
-function runFind() {
-  const query = findInput.value;
-  findMatches    = [];
+
+/* Generation counter: worker results arriving after the user has already
+   typed more (or toggled a mode) are stale and must not touch the UI.   */
+let _findGeneration = 0;
+
+/* Shared tail of every search: store matches, pick the one nearest the
+   cursor, update counter + CM decorations.                              */
+function _applyFindResults(matches) {
+  findMatches    = matches;
   findCurrentIdx = -1;
-
-  if (!query) {
-    updateFindCount();
-    return;
-  }
-
-  const text = editor.value;
-  let flags = 'g';
-  if (!findCaseSensitive) flags += 'i';
-
-let searchRegex;
-    if (findUseRegex) {
-    // ── MITIGATION: ReDoS Heuristic Guard ──
-    if (!isSafeRegex(query)) {
-      // Optionally show a brief non‑blocking warning
-    if (typeof window.showStatusWarning === 'function') {
-        window.showStatusWarning('regex-abort',
-          'Regex too complex – search aborted.',
-          { priority: 20, ttl: 2000 }); // expiry reveals any sticky warning beneath
-      }
-      updateFindCount(); // Abort search to prevent UI freeze
-      return;
-    }
-    
-    try {
-      searchRegex = new RegExp(query, flags);
-    } catch (e) {
-      updateFindCount(); // Invalid regex, abort search
-      return;
-    }
-  } else {
-    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    searchRegex = new RegExp(escapedQuery, flags);
-  }
-
-  // Prevent infinite loops with zero-length matches
-  if (searchRegex.test("")) {
-    updateFindCount(); 
-    return;
-  }
-
-  searchRegex.lastIndex = 0;
-  let match;
-  while ((match = searchRegex.exec(text)) !== null) {
-    if (match[0].length > 0) {
-      findMatches.push({ index: match.index, length: match[0].length });
-    }
-    if (searchRegex.lastIndex === match.index) {
-      searchRegex.lastIndex++;
-    }
-  }
 
   if (findMatches.length > 0) {
     /* Start at whichever match is closest to the current cursor position */
@@ -201,6 +245,93 @@ let searchRegex;
   if (typeof window.setFindHighlights === "function") {
     window.setFindHighlights(findMatches, findCurrentIdx);
   }
+}
+
+function runFind() {
+  const query = findInput.value;
+  findMatches    = [];
+  findCurrentIdx = -1;
+  const gen = ++_findGeneration;
+
+  if (!query) {
+    updateFindCount();
+    return;
+  }
+
+  const text = editor.value;
+  let flags = 'g';
+  if (!findCaseSensitive) flags += 'i';
+
+  /* ── Regex mode: run in the worker under a hard timeout ── */
+  if (findUseRegex && !_workerBroken) {
+    workerRequest({ op: 'find', text, query, flags }).then((res) => {
+      if (gen !== _findGeneration) return;          // superseded by newer input
+      if (!res.ok) {
+        if (res.error === 'timeout') {
+          if (typeof window.showStatusWarning === 'function') {
+            window.showStatusWarning('regex-abort',
+              'Search took too long – aborted.',
+              { priority: 20, ttl: 2000 }); // expiry reveals any sticky warning beneath
+          }
+          _applyFindResults([]);
+        } else if (res.error === 'syntax') {
+          _applyFindResults([]);                    // invalid regex — same as before
+        } else if (res.error === 'unavailable' || res.error === 'worker-error') {
+          runFind();                                // _workerBroken now set → sync path
+        }
+        /* 'superseded': a newer runFind owns the UI — do nothing */
+        return;
+      }
+      _applyFindResults(res.matches);
+    });
+    return;
+  }
+
+  /* ── Sync path: literal search, or regex when Workers are unavailable ── */
+  let searchRegex;
+    if (findUseRegex) {
+    // ── MITIGATION: ReDoS Heuristic Guard (no worker to terminate here) ──
+    if (!isSafeRegex(query)) {
+      // Optionally show a brief non‑blocking warning
+    if (typeof window.showStatusWarning === 'function') {
+        window.showStatusWarning('regex-abort',
+          'Regex too complex – search aborted.',
+          { priority: 20, ttl: 2000 }); // expiry reveals any sticky warning beneath
+      }
+      updateFindCount(); // Abort search to prevent UI freeze
+      return;
+    }
+
+    try {
+      searchRegex = new RegExp(query, flags);
+    } catch (e) {
+      updateFindCount(); // Invalid regex, abort search
+      return;
+    }
+  } else {
+    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    searchRegex = new RegExp(escapedQuery, flags);
+  }
+
+  // Prevent infinite loops with zero-length matches
+  if (searchRegex.test("")) {
+    updateFindCount();
+    return;
+  }
+
+  searchRegex.lastIndex = 0;
+  const matches = [];
+  let match;
+  while ((match = searchRegex.exec(text)) !== null) {
+    if (match[0].length > 0) {
+      matches.push({ index: match.index, length: match[0].length });
+    }
+    if (searchRegex.lastIndex === match.index) {
+      searchRegex.lastIndex++;
+    }
+  }
+
+  _applyFindResults(matches);
 }
 
 
@@ -281,9 +412,12 @@ function replaceCurrent() {
   let replacement = replaceInput.value;
 
   if (findUseRegex) {
-    // ── MITIGATION: ReDoS Heuristic Guard ──
-    if (!isSafeRegex(findInput.value)) return;
-    
+    /* Re-executing the pattern on a string it already matched (within the
+       worker's time budget) is bounded work, so this stays synchronous.
+       The heuristic guard only applies on the no-worker fallback path,
+       where nothing else protects the UI thread.                        */
+    if (_workerBroken && !isSafeRegex(findInput.value)) return;
+
     const matchedStr = editor.value.substring(start, end);
     let flags = '';
     if (!findCaseSensitive) flags += 'i';
@@ -302,6 +436,25 @@ function replaceCurrent() {
   runFind();
 }
 
+/* Shared tail of Replace All: swap the text, move the cursor to the end,
+   re-render, persist (web mode) and re-index the matches.               */
+function _applyReplaceAllResult(newText) {
+  editor.value = newText;
+
+  const newCursorPos = editor.value.length;
+  editor.setSelectionRange(newCursorPos, newCursorPos);
+
+  render();
+  countWords();
+  if (!(window.NativeAPI && window.NativeAPI.isDesktop)) {
+    try {
+      localStorage.setItem(AUTOSAVE_KEY, editor.value);
+    } catch (e) { }
+  }
+
+  runFind();
+}
+
 function replaceAll() {
   const query = findInput.value;
   const replacement = replaceInput.value;
@@ -311,6 +464,31 @@ function replaceAll() {
   let flags = 'g';
   if (!findCaseSensitive) flags += 'i';
 
+  /* ── Regex mode: full-text replace runs in the worker (hard timeout) ── */
+  if (findUseRegex && !_workerBroken) {
+    const textBefore = editor.value;
+    workerRequest({ op: 'replaceAll', text: textBefore, query, flags, replacement }).then((res) => {
+      if (!res.ok) {
+        if (res.error === 'timeout' && typeof window.showStatusWarning === 'function') {
+          window.showStatusWarning('regex-abort',
+            'Replace took too long – aborted.',
+            { priority: 20, ttl: 2000 });
+        } else if (res.error === 'unavailable' || res.error === 'worker-error') {
+          replaceAll();                            // _workerBroken now set → sync path
+        }
+        return;
+      }
+      /* The user kept typing while the worker ran — applying the result
+         would silently destroy those keystrokes. Drop it; they can click
+         Replace All again.                                              */
+      if (editor.value !== textBefore) return;
+      if (res.text === textBefore) return;         // nothing matched
+      _applyReplaceAllResult(res.text);
+    });
+    return;
+  }
+
+  /* ── Sync path: literal replace, or regex when Workers are unavailable ── */
   let globalRegex;
   if (findUseRegex) {
     if (!isSafeRegex(query)) return;
@@ -328,20 +506,7 @@ function replaceAll() {
 
   if (newText === editor.value) return;
 
-  editor.value = newText;
-
-  const newCursorPos = editor.value.length;
-  editor.setSelectionRange(newCursorPos, newCursorPos);
-
-  render();
-  countWords();
-  if (!(window.NativeAPI && window.NativeAPI.isDesktop)) {
-    try {
-      localStorage.setItem(AUTOSAVE_KEY, editor.value);
-    } catch (e) { }
-  }
-
-  runFind();
+  _applyReplaceAllResult(newText);
 }
 
 
