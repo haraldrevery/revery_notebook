@@ -95,5 +95,6 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     hrWidget: true, bullet: true, imageWidget: true,
     headingUpper: true, texture: true, hrRevealsRaw: true,
     strikeRendered: true, copyButton: true, copyClickSafe: true,
-  }, 'phase 2 must render hr/bullet/image widgets, strikethrough, and the code copy button');
+    taskBoxes: true, taskDoneStyled: true, taskToggled: true,
+  }, 'phase 2+ must render widgets, strikethrough, copy button, and toggleable task checkboxes');
 });

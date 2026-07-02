@@ -27,7 +27,7 @@ const {
     EditorView, keymap, Decoration, drawSelection, placeholder,
     EditorState, StateField, StateEffect, Compartment, RangeSetBuilder, Prec,
     history, historyKeymap, defaultKeymap,
-    markdown, Strikethrough, syntaxHighlighting, defaultHighlightStyle,
+    markdown, Strikethrough, TaskList, syntaxHighlighting, defaultHighlightStyle,
     lineNumbers
   } = CM;  // Note: language-data pack omitted (see codemirror-bundle.js)
 
@@ -274,7 +274,7 @@ const lineNumbersCompartment = new Compartment();
          never produces Strikethrough nodes, so ~~text~~ neither rendered
          in live preview nor struck through in the classic editor (bold
          and italic always did — this brings ~~ to parity).             */
-      markdown({ extensions: [Strikethrough] }),
+      markdown({ extensions: [Strikethrough, TaskList] }),
       EditorView.contentAttributes.of({ spellcheck: 'true' }),
       placeholderCompartment.of(placeholder('Start writing\u2026')),
       lineNumbersCompartment.of([]), // Initialize empty, Settings will toggle this
