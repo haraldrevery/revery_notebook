@@ -89,4 +89,10 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   }, 'live preview must decorate, hide marks off-line, reveal them on the edited line, and survive file switches');
   assert.deepEqual(r.lpOffState, { decorationsGone: true, paneBack: true, persistedOff: true },
     'toggling live preview off must fully restore the classic editor');
+
+  // 11. phase 2: preview-parity rendering
+  assert.deepEqual(r.lpPhase2, {
+    hrWidget: true, bullet: true, imageWidget: true,
+    headingUpper: true, texture: true, hrRevealsRaw: true,
+  }, 'phase 2 must render hr/bullet/image widgets with preview typography and texture');
 });

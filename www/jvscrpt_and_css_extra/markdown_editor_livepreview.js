@@ -23,7 +23,7 @@
     console.warn('[LivePreview] CM bundle lacks required exports — feature unavailable.');
     return;
   }
-  const { Decoration, ViewPlugin, syntaxTree } = CM;
+  const { Decoration, ViewPlugin, WidgetType, syntaxTree } = CM;
 
   /* Node-type tables (names from the lezer markdown grammar). */
   const HEADING_LINE = {
@@ -52,6 +52,79 @@
     return markDecoCache[cls] || (markDecoCache[cls] = Decoration.mark({ class: cls }));
   }
   const hideDeco = Decoration.replace({});
+
+  /* ── Phase-2 widgets ──────────────────────────────────────────────────
+     Inline widgets only: CodeMirror forbids BLOCK decorations from view
+     plugins, so the image renders as an inline element that grows its
+     line — visually equivalent for the common image-on-its-own-line case. */
+  class HrWidget extends WidgetType {
+    toDOM() {
+      const el = document.createElement('span');
+      el.className = 'lp-hr';
+      return el;
+    }
+    eq() { return true; }
+  }
+  const hrDeco = Decoration.replace({ widget: new HrWidget() });
+
+  class BulletWidget extends WidgetType {
+    toDOM() {
+      const el = document.createElement('span');
+      el.className = 'lp-bullet';
+      el.textContent = '•';
+      return el;
+    }
+    eq() { return true; }
+  }
+  const bulletDeco = Decoration.replace({ widget: new BulletWidget() });
+
+  class ImageWidget extends WidgetType {
+    constructor(src, alt) { super(); this.src = src; this.alt = alt; }
+    eq(other) { return other.src === this.src && other.alt === this.alt; }
+    toDOM() {
+      const wrap = document.createElement('span');
+      wrap.className = 'lp-image-widget';
+      const img = document.createElement('img');
+      img.alt = this.alt;
+      img.onerror = () => {
+        const fb = document.createElement('span');
+        fb.className = 'lp-image-fallback';
+        fb.textContent = '[image: ' + (this.alt || this.src) + ']';
+        wrap.replaceChildren(fb);
+      };
+      img.src = this.src;
+      wrap.appendChild(img);
+      return wrap;
+    }
+    ignoreEvent() { return true; }
+  }
+
+  /* Resolve an image reference exactly like the classic preview does
+     (postProcessImages in markdown_editor_core_cm.js): absolute schemes
+     pass through; in desktop mode relative paths resolve against the
+     active file's directory (else the project root) and MUST stay inside
+     the project root — Electron serves unrestricted file:// URLs, so the
+     containment guard is a security property, not a nicety. Web mode
+     leaves relative paths for the browser, same as the preview.        */
+  function resolveImageSrc(raw) {
+    if (!raw) return null;
+    if (/^(https?:|data:|file:|asset:|tauri:)/i.test(raw)) return raw;
+    if (!(window.NativeAPI && window.NativeAPI.isDesktop)) return raw;
+    if (typeof resolveRelPath !== 'function') return null;
+    const activePath = (typeof window.sidebarGetActiveFilePath === 'function')
+      ? window.sidebarGetActiveFilePath() : null;
+    const rootPath = (typeof window.sidebarGetRootPath === 'function')
+      ? window.sidebarGetRootPath() : null;
+    const baseDir = activePath
+      ? activePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
+      : (rootPath || '').replace(/\\/g, '/');
+    if (!baseDir || !rootPath) return null;
+    const abs = resolveRelPath(baseDir, raw);
+    const normRoot = rootPath.replace(/\\/g, '/').replace(/\/$/, '');
+    const normAbs  = abs.replace(/\\/g, '/');
+    if (!normAbs.startsWith(normRoot + '/') && normAbs !== normRoot) return null;
+    return window.NativeAPI.toMediaUrl(abs);
+  }
 
   /** Line numbers touched by any selection range — marks stay visible there. */
   function selectionLines(state) {
@@ -107,6 +180,38 @@
           const styleCls = INLINE_STYLE[name];
           if (styleCls && node.to > node.from) {
             ranges.push(markDeco(styleCls).range(node.from, node.to));
+          }
+
+          if (name === 'HorizontalRule') {
+            if (!revealed.has(doc.lineAt(node.from).number) && node.to > node.from) {
+              ranges.push(hrDeco.range(node.from, node.to));
+            }
+            return;
+          }
+
+          if (name === 'ListMark') {
+            const text = doc.sliceString(node.from, node.to);
+            if (/^[-*+]$/.test(text) && !revealed.has(doc.lineAt(node.from).number)) {
+              ranges.push(bulletDeco.range(node.from, node.to));
+            }
+            return;
+          }
+
+          if (name === 'Image') {
+            /* Render the actual image after the syntax (which the phase-1
+               mark hiding collapses to the alt text off-line). The widget
+               stays even while the line is selected — Obsidian behavior. */
+            const m = /^!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?/.exec(doc.sliceString(node.from, node.to));
+            if (m) {
+              const src = resolveImageSrc(m[2]);
+              if (src) {
+                ranges.push(Decoration.widget({
+                  widget: new ImageWidget(src, m[1] || ''),
+                  side: 1,
+                }).range(node.to));
+              }
+            }
+            /* fall through: Image is also in INLINE_STYLE (handled above) */
           }
 
           if (!HIDE.has(name)) return;

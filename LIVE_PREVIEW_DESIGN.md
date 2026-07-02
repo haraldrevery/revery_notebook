@@ -114,6 +114,21 @@ loaded after cm_setup.js. No sidebar-bundle involvement.
 4. Hands-on soak by the user with real notes before this leaves
    "experimental" labeling.
 
+## 6b. Phase 2 — delivered
+
+Visual convergence with the classic preview shipped: preview typography
+(`--preview-font` + the prose uppercase/tracking/weight-400 heading scale)
+on the editor content, the per-theme background-texture overlay recipe on
+the editor pane (opacity setting and slow-hardware suppression apply
+automatically via the shared variables), horizontal rules and unordered
+bullets as inline widgets, and real inline image widgets using the same
+path resolution AND root-containment guard as postProcessImages. Center
+Headers parity included. Note: CodeMirror forbids block decorations from
+view plugins, so image widgets are inline (the line grows) — equivalent
+for the common image-on-its-own-line case. Phase 3 candidates: GFM
+strikethrough (needs markdown() config change), task-list checkboxes,
+fence syntax highlighting.
+
 ## 7. Order of work
 
 Phase 0 bundle exports → cm_setup compartment + setState re-dispatch →
