@@ -30,6 +30,8 @@ let editorFontType = 'harald'; // Editor font style ('harald' is default)
 let previewFontType = 'harald'; // Preview font style ('harald' is default)
 let uiLanguage = window.uiLanguage; // UI Language setting (synced from lang.js)
 let selectedBackground = 'bg_6'; // Active background image key
+let slowHardwareMode = false;    // One switch for older machines — see setSlowHardwareMode
+window.slowHardwareMode = false; // Mirror read by core/sync/native_api/sidebar at call time
 let editorBgGradient = false;     // true = gradient fade, false = solid colour
 
 /* ── Background image options ─────────────────────────────────────────────
@@ -62,7 +64,8 @@ window.saveEditorSettings = function() {
     centerHeaders: window.centerHeaders,
     selectedBackground,
     themeMode,
-    editorBgGradient
+    editorBgGradient,
+    slowHardwareMode
   };
 
   try {
@@ -128,6 +131,7 @@ function loadEditorSettings() {
       }
     if (s.centerHeaders !== undefined) window.centerHeaders = s.centerHeaders;
     if (s.selectedBackground !== undefined) selectedBackground = s.selectedBackground;
+    if (s.slowHardwareMode !== undefined) { slowHardwareMode = !!s.slowHardwareMode; window.slowHardwareMode = slowHardwareMode; }
     if (s.themeMode !== undefined) themeMode = s.themeMode;
     if (s.editorBgGradient !== undefined) editorBgGradient = s.editorBgGradient;
     }
@@ -454,15 +458,39 @@ applyEditorPadding();
 
 
 
-/* Apply background image to the preview area via CSS variable */
+/* Apply background image to the preview area via CSS variable.
+   Slow hardware mode suppresses the image (large JPEG decode + composite)
+   without touching the user's selectedBackground choice — turning the mode
+   off restores their background.                                          */
 function applyBackground() {
   const opt = BACKGROUND_OPTIONS.find(o => o.val === selectedBackground);
-  if (!opt || opt.val === 'none') {
+  if (slowHardwareMode || !opt || opt.val === 'none') {
     document.documentElement.style.removeProperty('--preview-bg-image');
   } else {
     document.documentElement.style.setProperty('--preview-bg-image', `url('${opt.url}')`);
   }
 }
+
+/* ── Slow hardware mode ────────────────────────────────────────────────
+   One switch for older machines (slow HDD, low RAM, weak CPU/GPU). It
+   only reduces work FREQUENCY and visual load — every disk write keeps
+   the exact same atomic-write + fsync durability guarantees. Effects:
+     • sidebar auto-save debounce 1.5s→4s, forced save 10s→20s
+     • crash-backup debounce 2s→5s, forced backup 15s→30s (native_api)
+       (worst case lost typing on a hard crash grows from ~2s to ~5s)
+     • preview render delay floored at 400 ms (user setting untouched)
+     • background image disabled (solid color)
+     • file-card text previews and image thumbnails skipped
+     • tree renders in smaller chunks so slow CPUs stay responsive
+   Everything reads window.slowHardwareMode at call time, so toggling
+   takes effect immediately — no restart needed.                        */
+window.setSlowHardwareMode = function (on) {
+  slowHardwareMode = !!on;
+  window.slowHardwareMode = slowHardwareMode;
+  document.body.classList.toggle('slow-hw-active', slowHardwareMode);
+  applyBackground();
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+};
 
 /* Apply Custom Font Types via CSS Variables */
 
@@ -533,6 +561,7 @@ applyFontTypes(); // Execute font assignment on boot
 applyCenterHeaders(); // <-- ADD THIS LINE to apply the saved setting on page load
 applyBackground();
 applyEditorBgStyle();
+window.setSlowHardwareMode(slowHardwareMode); // sync body class + bg suppression on boot
 
 function applyLoadedStates() {
   // Apply visibility to preview and editor panes based on saved state
@@ -1478,6 +1507,23 @@ const themeOptions = [
   delayWrapper.appendChild(delaySub);
   attachSubmenuHandlers(delayWrapper, delaySub);
   settingsDropdown.appendChild(delayWrapper);
+
+  // ── Slow Hardware Mode Toggle (groups with the CPU delay above)
+  const shBtn = document.createElement('button');
+  shBtn.className = 'menu-item';
+  const shCheck = document.createElement('span');
+  shCheck.className = 'menu-item-check';
+  shCheck.textContent = slowHardwareMode ? '■' : '□';
+  shBtn.appendChild(shCheck);
+  shBtn.appendChild(document.createTextNode(window.t('Slow Hardware Mode')));
+  shBtn.title = window.t('For older machines: fewer disk writes, calmer rendering, no background image. Saves keep full crash-safety.');
+  shBtn.onclick = (e) => {
+    e.stopPropagation();
+    window.setSlowHardwareMode(!slowHardwareMode);
+    settingsDropdown.classList.remove('show');
+    buildSettingsMenu();
+  };
+  settingsDropdown.appendChild(shBtn);
 
   const rcDivider = document.createElement('div');
   rcDivider.className = 'menu-divider';

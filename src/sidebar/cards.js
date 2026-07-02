@@ -87,6 +87,10 @@ let _cardGeneration = 0;
     if (entry.type === 'dir') {
       thumb.replaceChildren(icon('folder'));
 
+    } else if (category === 'media' && window.slowHardwareMode) {
+      /* Slow hardware mode: skip the JPEG decode entirely — icon only */
+      thumb.replaceChildren(icon('image'));
+
     } else if (category === 'media') {
       /* Try to show the actual image */
       const img = document.createElement('img');
@@ -126,8 +130,10 @@ let _cardGeneration = 0;
     const previewEl = document.createElement('div');
     previewEl.className = 'sidebar-card-preview';
 
-    if (category === 'text') {
-      /* Fire-and-forget preview load — card shows immediately */
+    if (category === 'text' && !window.slowHardwareMode) {
+      /* Fire-and-forget preview load — card shows immediately.
+         Skipped in slow hardware mode: opening a folder in card view
+         would otherwise read every text file in it off a slow disk. */
       loadCardPreview(entry.path, previewEl, generation);
     } else if (entry.type === 'dir') {
       previewEl.textContent = 'Folder';

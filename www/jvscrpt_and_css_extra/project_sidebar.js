@@ -1031,8 +1031,12 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
 
   // src/sidebar/save.js
   var _autoSaveTimer = null;
-  var AUTOSAVE_DELAY_MS = 1500;
-  var AUTOSAVE_MAX_WAIT_MS = 1e4;
+  function autosaveDelayMs() {
+    return window.slowHardwareMode ? 4e3 : 1500;
+  }
+  function autosaveMaxWaitMs() {
+    return window.slowHardwareMode ? 2e4 : 1e4;
+  }
   var AUTOSAVE_FAILURE_COOLDOWN_MS = 3e4;
   function cancelPendingAutoSave() {
     clearTimeout(_autoSaveTimer);
@@ -1215,12 +1219,12 @@ ${pathToSave}`,
       return;
     }
     if (_firstDirtyTime === 0) _firstDirtyTime = Date.now();
-    if (Date.now() - _firstDirtyTime >= AUTOSAVE_MAX_WAIT_MS) {
+    if (Date.now() - _firstDirtyTime >= autosaveMaxWaitMs()) {
       _firstDirtyTime = Date.now();
       saveActiveFile();
       return;
     }
-    _autoSaveTimer = setTimeout(saveActiveFile, AUTOSAVE_DELAY_MS);
+    _autoSaveTimer = setTimeout(saveActiveFile, autosaveDelayMs());
   }
   function initSaveEngine() {
     if (docTitleEl) {
@@ -2269,7 +2273,7 @@ ${filePath}`,
       return;
     }
     entries = sortEntries(entries);
-    const CHUNK = 100;
+    const CHUNK = window.slowHardwareMode ? 40 : 100;
     for (let i = 0; i < entries.length; i++) {
       if (i > 0 && i % CHUNK === 0) {
         await new Promise((r) => setTimeout(r, 0));
@@ -2600,6 +2604,8 @@ ${filePath}`,
     thumb.className = "sidebar-card-thumb";
     if (entry.type === "dir") {
       thumb.replaceChildren(icon("folder"));
+    } else if (category === "media" && window.slowHardwareMode) {
+      thumb.replaceChildren(icon("image"));
     } else if (category === "media") {
       const img = document.createElement("img");
       img.alt = entry.name;
@@ -2627,7 +2633,7 @@ ${filePath}`,
     titleEl.title = entry.name;
     const previewEl = document.createElement("div");
     previewEl.className = "sidebar-card-preview";
-    if (category === "text") {
+    if (category === "text" && !window.slowHardwareMode) {
       loadCardPreview(entry.path, previewEl, generation);
     } else if (entry.type === "dir") {
       previewEl.textContent = "Folder";

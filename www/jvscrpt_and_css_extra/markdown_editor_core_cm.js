@@ -784,7 +784,10 @@ editor.addEventListener('input', () => {
       }
       
     }
-  }, renderDelay);
+    /* Slow hardware mode floors the debounce at 400 ms so weak CPUs are
+       never asked to re-render (markdown-it + KaTeX + hljs) per keystroke.
+       The user's own renderDelay setting is respected when higher.       */
+  }, window.slowHardwareMode ? Math.max(renderDelay, 400) : renderDelay);
 });
 
 render(); countWords();

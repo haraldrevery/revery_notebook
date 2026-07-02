@@ -42,8 +42,13 @@
     _volatileChain = run.then(() => {}, () => {});
     return run;
   }
-  const VOLATILE_DEBOUNCE_MS  = 2000;
-  const VOLATILE_MAX_WAIT_MS  = 15000; // Force volatile backup after 15 s of continuous typing
+  /* Crash-backup cadence. Slow hardware mode stretches the intervals so a
+     spinning disk isn't hit with fsync'd writes every couple of seconds —
+     each write keeps the identical atomic + fsync durability; only the
+     worst-case lost-typing window on a hard crash grows (~2s → ~5s).
+     Read at call time so toggling the mode applies immediately.          */
+  function volatileDebounceMs() { return window.slowHardwareMode ? 5000  : 2000; }
+  function volatileMaxWaitMs()  { return window.slowHardwareMode ? 30000 : 15000; } // force backup during continuous typing
 
 function flushVolatile() {
     clearTimeout(_volatileTimer);        _volatileTimer = null;
@@ -134,11 +139,11 @@ function debounceVolatile(path, content) {
     _volatilePending = { path, content };
 
     clearTimeout(_volatileTimer);
-    _volatileTimer = setTimeout(flushVolatile, VOLATILE_DEBOUNCE_MS);
+    _volatileTimer = setTimeout(flushVolatile, volatileDebounceMs());
 
     if (!_volatileMaxWaitTimer) {
       // Does NOT reset on subsequent calls — bounds worst-case backup latency.
-      _volatileMaxWaitTimer = setTimeout(flushVolatile, VOLATILE_MAX_WAIT_MS);
+      _volatileMaxWaitTimer = setTimeout(flushVolatile, volatileMaxWaitMs());
     }
   }
 

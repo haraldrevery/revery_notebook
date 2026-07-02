@@ -64,4 +64,11 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
 
   // 6. superseding a catastrophic search gets a fresh worker immediately
   assert.equal(r.supersededCount, 4, 'search after superseding must not queue behind the old job');
+
+  // 7. slow hardware mode: flag, body class, background suppression, persistence
+  assert.deepEqual(r.slowOn,  { flag: true,  bodyClass: true,  bgGone: true,     persisted: true },
+    'enabling slow hardware mode must apply and persist');
+  // (off-state fields are success-booleans: flag/persisted verify `=== false`)
+  assert.deepEqual(r.slowOff, { flag: true, bodyClass: false, bgRestored: true, persisted: true },
+    'disabling slow hardware mode must restore the user background and persist');
 });

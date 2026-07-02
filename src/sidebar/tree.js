@@ -275,7 +275,8 @@ async function renderNode(containerEl, dirPath, depth, generation = 0) {   // �
   /* Apply user-selected sort (dirs always precede files within each group) */
   entries = sortEntries(entries);
 
-  const CHUNK = 100; // yield to the browser every N items   // ← NEW
+  /* Smaller chunks in slow hardware mode = more paint yields on weak CPUs */
+  const CHUNK = window.slowHardwareMode ? 40 : 100; // yield to the browser every N items
 
   for (let i = 0; i < entries.length; i++) {   // ← for..of → indexed for loop
     /* Yield every CHUNK entries so the browser can paint and stay responsive */

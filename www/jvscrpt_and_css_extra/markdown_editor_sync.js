@@ -178,7 +178,9 @@ window.triggerForcedSync = function() {
   clearTimeout(forcedSyncTimer);
   // Use the same user‑adjustable delay as the main render debounce.
   // Fallback to 1000ms if renderDelay is undefined (should never happen).
-  const delay = (typeof renderDelay !== 'undefined') ? renderDelay : 1000;
+  // Slow hardware mode applies the same 400 ms floor as the main render.
+  let delay = (typeof renderDelay !== 'undefined') ? renderDelay : 1000;
+  if (window.slowHardwareMode) delay = Math.max(delay, 400);
   forcedSyncTimer = setTimeout(() => {
     window.forceSyncToCursor();
   }, delay);

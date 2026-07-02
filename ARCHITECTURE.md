@@ -592,6 +592,30 @@ npm install
 
 ---
 
+## Slow Hardware Mode
+
+Settings → "Slow Hardware Mode" (persisted as `slowHardwareMode` in
+`revery_md_settings`; canonical setter `window.setSlowHardwareMode()` in
+markdown_editor_menus.js). One switch for machines with slow disks, little
+RAM, or weak CPUs/GPUs. **It only reduces work frequency and visual load —
+every disk write keeps the identical atomic-write + fsync durability.**
+
+| Lever | Normal | Slow mode | Where |
+|---|---|---|---|
+| Sidebar auto-save debounce / forced | 1.5 s / 10 s | 4 s / 20 s | src/sidebar/save.js |
+| Crash-backup debounce / forced | 2 s / 15 s | 5 s / 30 s | native_api.js |
+| Preview render debounce | user setting | floored at 400 ms | core_cm.js + sync.js |
+| Background image | user choice | suppressed (choice kept) | menus.js applyBackground |
+| Card view text previews / image thumbs | loaded | skipped (icons only) | src/sidebar/cards.js |
+| Tree render chunk size | 100 rows/yield | 40 rows/yield | src/sidebar/tree.js |
+
+Every consumer reads `window.slowHardwareMode` at call time, so toggling
+applies immediately. The only safety trade-off is the crash-backup window:
+a hard crash mid-typing can lose ~5 s of keystrokes instead of ~2 s (the
+saved file itself is never at risk).
+
+---
+
 ## Testing
 
 The data-safety layer is covered by automated tests. Run them before and

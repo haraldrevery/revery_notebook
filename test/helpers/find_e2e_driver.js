@@ -68,6 +68,27 @@
   await sleep(600);
   const supersededCount = findMatches.length;
 
+  /* 7. Slow hardware mode: the canonical setter must flip the flag, the
+        body class, suppress the background image without losing the
+        user's choice, and persist through the settings roundtrip. */
+  window.setSlowHardwareMode(true);
+  const readSetting = () =>
+    JSON.parse(localStorage.getItem('revery_md_settings') || '{}').slowHardwareMode;
+  const slowOn = {
+    flag:      window.slowHardwareMode === true,
+    bodyClass: document.body.classList.contains('slow-hw-active'),
+    bgGone:    document.documentElement.style.getPropertyValue('--preview-bg-image') === '',
+    persisted: readSetting() === true,
+  };
+  window.setSlowHardwareMode(false);
+  const slowOff = {
+    flag:       window.slowHardwareMode === false,
+    bodyClass:  document.body.classList.contains('slow-hw-active'),
+    bgRestored: document.documentElement.style.getPropertyValue('--preview-bg-image').includes('bg_'),
+    persisted:  readSetting() === false,
+  };
+
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
-           replacedText, ghostCount, barHidden, supersededCount };
+           replacedText, ghostCount, barHidden, supersededCount,
+           slowOn, slowOff };
 })()

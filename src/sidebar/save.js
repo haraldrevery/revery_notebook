@@ -12,8 +12,12 @@ import { recordProjectOpen } from './projects.js';
 
 /* ── Save-engine local state ─────────────────────────────────────── */
 let _autoSaveTimer = null;
-const AUTOSAVE_DELAY_MS              = 1500;
-const AUTOSAVE_MAX_WAIT_MS           = 10000; // Force save after 10 s of continuous editing
+/* Auto-save cadence. Slow hardware mode stretches both intervals so a
+   slow disk sees fewer fsync'd writes — each write keeps the identical
+   atomic + fsync durability. Read at call time: toggling the setting
+   applies to the very next keystroke, no restart needed.               */
+function autosaveDelayMs()   { return window.slowHardwareMode ? 4000  : 1500; }
+function autosaveMaxWaitMs() { return window.slowHardwareMode ? 20000 : 10000; } // force save during continuous editing
 const AUTOSAVE_FAILURE_COOLDOWN_MS   = 30000; // After a save failure, suppress
                                               // automatic retries for 30 s.
 
@@ -275,8 +279,8 @@ return savePromise;
 
 
 
-  /** Schedules an auto-save after AUTOSAVE_DELAY_MS of inactivity, but
-      forces a save once AUTOSAVE_MAX_WAIT_MS has elapsed since the
+  /** Schedules an auto-save after autosaveDelayMs() of inactivity, but
+      forces a save once autosaveMaxWaitMs() has elapsed since the
       document first became dirty. Prevents indefinite postponement
       during continuous typing. */
   function scheduleAutoSave() {
@@ -296,7 +300,7 @@ return savePromise;
     }
     if (_firstDirtyTime === 0) _firstDirtyTime = Date.now();
 
-    if (Date.now() - _firstDirtyTime >= AUTOSAVE_MAX_WAIT_MS) {
+    if (Date.now() - _firstDirtyTime >= autosaveMaxWaitMs()) {
       // Cap reached: save immediately. saveActiveFile() will call
       // markClean() on success, which resets _firstDirtyTime.
       //
@@ -311,7 +315,7 @@ return savePromise;
       return;
     }
 
-    _autoSaveTimer = setTimeout(saveActiveFile, AUTOSAVE_DELAY_MS);
+    _autoSaveTimer = setTimeout(saveActiveFile, autosaveDelayMs());
   }
 
 export { markDirty, markClean, saveActiveFile, scheduleAutoSave };
