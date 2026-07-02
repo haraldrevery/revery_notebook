@@ -46,5 +46,28 @@
   await sleep(500);
   const replacedText = editor.value;
 
-  return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount, replacedText };
+  /* 5. Closing the bar mid-flight must invalidate the in-flight search:
+        no ghost matches or highlights may appear afterwards. A ~2 MB
+        document keeps the worker busy long enough for the close to win. */
+  openFindBar();
+  setDoc(('lorem ipsum dolor sit amet ').repeat(80000));
+  type('(lorem|dolor)');
+  closeFindBar();                       // same tick — result still in flight
+  await sleep(800);
+  const ghostCount  = findMatches.length;
+  const barHidden   = findBar.style.display === 'none';
+
+  /* 6. Superseding a catastrophic search must not poison the next one:
+        the fresh-worker path must return the new search's matches. */
+  openFindBar();
+  setDoc('a'.repeat(34) + 'X');
+  type('(a+)+$');                       // catastrophic — starts burning CPU
+  await sleep(150);                     // let the worker actually start it
+  setDoc('m1 m2 m3 m4');
+  type('m\\d');                         // supersedes → fresh worker
+  await sleep(600);
+  const supersededCount = findMatches.length;
+
+  return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
+           replacedText, ghostCount, barHidden, supersededCount };
 })()

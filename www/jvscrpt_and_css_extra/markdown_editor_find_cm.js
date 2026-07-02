@@ -66,9 +66,20 @@ function _settlePending(result) {
    promise resolves { ok:false, error:'superseded' } and its eventual reply
    is ignored). On timeout the worker is killed and rebuilt on next use.  */
 function workerRequest(payload) {
-  const w = _getFindWorker();
+  let w = _getFindWorker();
   if (!w) return Promise.resolve({ ok: false, error: 'unavailable' });
-  _settlePending({ ok: false, error: 'superseded' });
+  if (_workerPending) {
+    /* The superseded JOB may still be running inside the single-threaded
+       worker; a new job would queue behind it and burn its own time budget
+       waiting (a slow-but-legitimate old search could then falsely time out
+       a fast new one). Kill the worker and post to a fresh one instead —
+       startup cost is negligible (same-origin file, cached).             */
+    _settlePending({ ok: false, error: 'superseded' });
+    try { _findWorker.terminate(); } catch (_) {}
+    _findWorker = null;
+    w = _getFindWorker();
+    if (!w) return Promise.resolve({ ok: false, error: 'unavailable' });
+  }
   return new Promise((resolve) => {
     const id = ++_workerReqId;
     const timer = setTimeout(() => {
@@ -207,6 +218,9 @@ function openFindBar() {
 }
 
 function closeFindBar() {
+  /* Invalidate any in-flight worker search — its result must not repaint
+     highlights or repopulate findMatches after the bar is closed. */
+  _findGeneration++;
   findBar.style.display = 'none';
   findMatches    = [];
   findCurrentIdx = -1;

@@ -57,4 +57,11 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
 
   // 4. Replace All through the worker with $& substitution
   assert.equal(r.replacedText, '<x1> <y2> <z3>');
+
+  // 5. closing the bar mid-flight invalidates the search — no ghost results
+  assert.equal(r.ghostCount, 0, 'in-flight result must not apply after closeFindBar');
+  assert.equal(r.barHidden, true);
+
+  // 6. superseding a catastrophic search gets a fresh worker immediately
+  assert.equal(r.supersededCount, 4, 'search after superseding must not queue behind the old job');
 });
