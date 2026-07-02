@@ -266,6 +266,40 @@
   lpPhase2.familyRestores = defaultClicked && famOf('.cm-content') === famBefore
     && famOf('.cm-content') === famOf('#preview p');
 
+  /* Reader padding drives LP column width; tables render + click-to-edit;
+     fenced code gets language token colors. */
+  const clickSetting = (wrapperText, optionText) => {
+    const wrapper = Array.from(document.querySelectorAll('#settings-dropdown .menu-item'))
+      .find(el => el.textContent.includes(wrapperText));
+    const btn = wrapper && Array.from(wrapper.querySelectorAll('.submenu button'))
+      .find(b => b.textContent.toLowerCase().includes(optionText));
+    if (btn) { btn.click(); return true; }
+    return false;
+  };
+  replaceEditorContent('| Col A | Col B |\n|---|---|\n| **bold** | plain |\n\n```javascript\nconst x = 1;\nreturn x;\n```\n\ntail line');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(600); // async language load + parse
+  lpPhase2.tableRendered  = !!document.querySelector('.lp-table')
+    && !!document.querySelector('.lp-table th')
+    && !!document.querySelector('.lp-table td strong');
+  const tableWidget = document.querySelector('.lp-table-widget');
+  if (tableWidget) tableWidget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  await sleep(250);
+  lpPhase2.tableClickReveals = !document.querySelector('.lp-table');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(250);
+  lpPhase2.tableReturns = !!document.querySelector('.lp-table');
+  lpPhase2.fenceColored = !!document.querySelector('.cm-line.lp-codeblock span[class*="\u037c"]');
+
+  const rpClicked = clickSetting('Reader padding', '50');
+  await sleep(300);
+  const cmMaxW = getComputedStyle(document.querySelector('.cm-content')).maxWidth;
+  lpPhase2.readerPadding = rpClicked && Math.abs(parseFloat(cmMaxW) - window.innerWidth * 0.5) < 3;
+  clickSetting('Reader padding', '100%'); // label of the val:'default' option
+  await sleep(200);
+  lpPhase2.readerPaddingResets =
+    getComputedStyle(document.querySelector('.cm-content')).maxWidth === 'none';
+
   window.setLivePreviewMode(false);
   await sleep(150);
   const lpOffState = {

@@ -100,5 +100,7 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     fmProtected: true, mathRevealsRaw: true,
     sizeMatchesPreview: true, sizeNotEditorBound: true,
     familyFollows: true, familyRestores: true, katexSizeParity: true,
+    tableRendered: true, tableClickReveals: true, tableReturns: true,
+    fenceColored: true, readerPadding: true, readerPaddingResets: true,
   }, 'phase 2+ must render widgets, strikethrough, copy button, task checkboxes, KaTeX math, and protect frontmatter');
 });

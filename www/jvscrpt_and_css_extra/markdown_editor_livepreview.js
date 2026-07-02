@@ -23,7 +23,7 @@
     console.warn('[LivePreview] CM bundle lacks required exports — feature unavailable.');
     return;
   }
-  const { Decoration, ViewPlugin, WidgetType, syntaxTree } = CM;
+  const { Decoration, ViewPlugin, WidgetType, syntaxTree, StateField, EditorView } = CM;
 
   /* Node-type tables (names from the lezer markdown grammar). */
   const HEADING_LINE = {
@@ -483,7 +483,124 @@
     decorations: (v) => v.decorations,
   });
 
+  /* ── Tables ───────────────────────────────────────────────────────────
+     Rendered tables need BLOCK replace decorations (they span lines),
+     which CodeMirror forbids from view plugins — so they live in a
+     StateField instead. Whole-document tree walk on doc changes; on
+     selection-only changes the cached ranges decide whether a rebuild
+     is needed at all (keystrokes outside tables cost nothing). Cell
+     content renders through the SAME markdown-it + DOMPurify pipeline
+     as the classic preview. Clicking a table places the cursor inside
+     it, which reveals the raw markdown for editing.                   */
+  class TableWidget extends WidgetType {
+    constructor(headHtml, rowsHtml) { super(); this.headHtml = headHtml; this.rowsHtml = rowsHtml; }
+    eq(other) { return other.headHtml === this.headHtml && other.rowsHtml === this.rowsHtml; }
+    toDOM() {
+      const wrap = document.createElement('div');
+      wrap.className = 'lp-table-widget';
+      const table = document.createElement('table');
+      table.className = 'lp-table';
+      table.innerHTML = this.headHtml + this.rowsHtml; // sanitized at build
+      wrap.appendChild(table);
+      wrap.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const view = window.cmView;
+        if (!view) return;
+        let pos;
+        try { pos = view.posAtDOM(wrap); } catch (_) { return; }
+        view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+        view.focus();
+      });
+      return wrap;
+    }
+    ignoreEvent() { return false; }
+  }
+
+  function renderCellHtml(text) {
+    const trimmed = text.trim();
+    try {
+      if (typeof md !== 'undefined' && typeof DOMPurify !== 'undefined') {
+        return DOMPurify.sanitize(md.renderInline(trimmed));
+      }
+    } catch (_) { /* fall through to plain text */ }
+    const esc = document.createElement('span');
+    esc.textContent = trimmed;
+    return esc.innerHTML;
+  }
+
+  function buildTableDecos(state) {
+    const doc = state.doc;
+    const ranges = [];
+    const tableRanges = [];
+    const selRanges = state.selection.ranges;
+    const intersectsSelection = (from, to) =>
+      selRanges.some((r) => r.from <= to && r.to >= from);
+
+    syntaxTree(state).iterate({
+      enter: (node) => {
+        if (node.name !== 'Table') return;
+        tableRanges.push({ from: node.from, to: node.to });
+        if (intersectsSelection(node.from, node.to)) return false; // editing → raw
+        /* Collect header/body rows from the tree. */
+        let headHtml = '';
+        const bodyRows = [];
+        const table = node.node;
+        for (let row = table.firstChild; row; row = row.nextSibling) {
+          if (row.name !== 'TableHeader' && row.name !== 'TableRow') continue;
+          const cells = [];
+          for (let cell = row.firstChild; cell; cell = cell.nextSibling) {
+            if (cell.name === 'TableCell') {
+              cells.push(renderCellHtml(doc.sliceString(cell.from, cell.to)));
+            }
+          }
+          const tag = row.name === 'TableHeader' ? 'th' : 'td';
+          const rowHtml = '<tr>' + cells.map((c) => '<' + tag + '>' + c + '</' + tag + '>').join('') + '</tr>';
+          if (row.name === 'TableHeader') headHtml = '<thead>' + rowHtml + '</thead>';
+          else bodyRows.push(rowHtml);
+        }
+        /* Block replace must cover whole lines. */
+        const from = doc.lineAt(node.from).from;
+        const to   = doc.lineAt(Math.min(node.to, doc.length)).to;
+        ranges.push(Decoration.replace({
+          widget: new TableWidget(headHtml, '<tbody>' + bodyRows.join('') + '</tbody>'),
+          block: true,
+        }).range(from, to));
+        return false; // don't descend further
+      },
+    });
+    return { deco: Decoration.set(ranges, true), tableRanges };
+  }
+
+  function safeBuildTables(state) {
+    try {
+      return buildTableDecos(state);
+    } catch (err) {
+      if (!_warnedOnce) {
+        _warnedOnce = true;
+        console.warn('[LivePreview] table build failed — rendering raw markdown:', err);
+      }
+      return { deco: Decoration.none, tableRanges: [] };
+    }
+  }
+
+  const tableField = StateField.define({
+    create(state) { return safeBuildTables(state); },
+    update(value, tr) {
+      if (tr.docChanged) return safeBuildTables(tr.state);
+      if (tr.selection) {
+        /* Rebuild only when the selection change can affect a table's
+           revealed/rendered state — otherwise map and keep. */
+        const touches = value.tableRanges.some((t2) =>
+          tr.state.selection.ranges.some((r) => r.from <= t2.to && r.to >= t2.from)
+          || tr.startState.selection.ranges.some((r) => r.from <= t2.to && r.to >= t2.from));
+        if (touches) return safeBuildTables(tr.state);
+      }
+      return value;
+    },
+    provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
+  });
+
   window.buildLivePreviewExtension = function () {
-    return [livePreviewPlugin];
+    return [livePreviewPlugin, tableField];
   };
 })();

@@ -2070,6 +2070,37 @@ body.live-preview-active .cm-content {
     font-size: var(--text-body-mobile, 1.07rem) !important;
   }
 }
+/* Content column width follows the 'Reader padding' setting, exactly
+   like the preview/reader (--reader-max-width, e.g. 40vw; 'default'
+   removes the cap). Centered the same way.                            */
+body.live-preview-active #editor .cm-content {
+  max-width: var(--reader-max-width, none);
+  margin-left: auto;
+  margin-right: auto;
+}
+body.live-preview-active #editor .cm-scroller {
+  justify-content: center;
+}
+
+/* Rendered tables (StateField block widgets) — mirrors .prose table. */
+.lp-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+  font-size: 0.95em;
+}
+.lp-table th {
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.9em;
+  text-align: left;
+}
+.lp-table th, .lp-table td {
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  padding: 0.35em 0.6em;
+}
+.lp-table-widget { cursor: pointer; display: block; }
 
 /* Background texture parity: same per-theme overlay recipe as #preview
    (the --bg_oacity opacity setting and slow-hardware suppression operate
