@@ -143,8 +143,16 @@ cannot cross lines from a view plugin — the classic preview covers
 them). YAML frontmatter became a protected region (CommonMark would
 misparse the fences as a thematic break and 'key: value' + '---' as a
 Setext heading): no decorations inside, dim mono styling instead.
-Remaining phase 3 candidate: fence syntax highlighting (needs the
-language-data pack the bundle deliberately omits — weigh size first).
+Phase 3 delivered: fence syntax
+highlighting via a curated 23-language set of @codemirror/legacy-modes
+stream parsers (+155 KB bundle, not the multi-MB language-data pack) —
+colors apply in the classic editor too; TABLES render via a StateField
+(block decorations are forbidden from view plugins — the field caches
+table ranges so selection-only changes outside tables cost nothing),
+cells go through the same markdown-it + DOMPurify pipeline as the
+preview, and clicking a table places the cursor inside to edit raw;
+the 'Reader padding' setting now drives the live-preview column width
+(--reader-max-width, centered) exactly like reader mode.
 
 ## 7. Order of work
 
