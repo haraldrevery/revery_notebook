@@ -623,6 +623,34 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
   }
 
+  // src/sidebar/icons.js
+  var ICONS = {
+    "folder": '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+    "folder-open": '<path d="M22 11v-1a2 2 0 0 0-2-2h-9L9 5H5a2 2 0 0 0-2 2v12"/><path d="M3 19l2.6-6.3A2 2 0 0 1 7.4 11H21.5a1 1 0 0 1 .95 1.3L20.4 19a2 2 0 0 1-1.9 1.4H4.5A1.5 1.5 0 0 1 3 19z"/>',
+    "folder-plus": '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="10" x2="12" y2="16"/><line x1="9" y1="13" x2="15" y2="13"/>',
+    "file": '<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>',
+    "file-lines": '<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/>',
+    "file-plus": '<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/>',
+    "image": '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+    "paperclip": '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+    "view-cards": '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    "view-list": '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+    "sliders": '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'
+  };
+  function icon(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("class", "rv-icon");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = ICONS[name] || "";
+    return svg;
+  }
+
   // src/sidebar/watcher.js
   var _watchedPath = null;
   function startWatchingFile(filePath) {
@@ -880,7 +908,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     menu.appendChild(sep);
     const browseBtn = document.createElement("button");
     browseBtn.className = "revery-projects-action";
-    browseBtn.textContent = "\u{1F4C2}  Browse for folder\u2026";
+    browseBtn.replaceChildren(icon("folder-open"), "  Browse for folder\u2026");
     browseBtn.addEventListener("click", () => {
       menu.remove();
       promptOpenFolder();
@@ -888,7 +916,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     menu.appendChild(browseBtn);
     const manageBtn = document.createElement("button");
     manageBtn.className = "revery-projects-action";
-    manageBtn.textContent = "\u2699  Manage projects\u2026";
+    manageBtn.replaceChildren(icon("sliders"), "  Manage projects\u2026");
     manageBtn.addEventListener("click", () => {
       menu.remove();
       showManageProjectsModal();
@@ -2285,11 +2313,11 @@ ${filePath}`,
       } else {
         const category = getFileCategory(entry.name);
         if (category === "text") {
-          iconEl.textContent = entry.name.endsWith(".md") ? "\u{1F4C4}" : "\u{1F4DD}";
+          iconEl.replaceChildren(icon(entry.name.endsWith(".md") ? "file" : "file-lines"));
         } else if (category === "media") {
-          iconEl.textContent = "\u{1F5BC}\uFE0F";
+          iconEl.replaceChildren(icon("image"));
         } else {
-          iconEl.textContent = "\u{1F4CE}";
+          iconEl.replaceChildren(icon("paperclip"));
         }
         itemEl.classList.add("sidebar-file");
         if (category === "media") itemEl.classList.add("sidebar-media");
@@ -2571,7 +2599,7 @@ ${filePath}`,
     const thumb = document.createElement("div");
     thumb.className = "sidebar-card-thumb";
     if (entry.type === "dir") {
-      thumb.textContent = "\u{1F4C1}";
+      thumb.replaceChildren(icon("folder"));
     } else if (category === "media") {
       const img = document.createElement("img");
       img.alt = entry.name;
@@ -2579,15 +2607,14 @@ ${filePath}`,
       try {
         img.src = window.NativeAPI.toMediaUrl(entry.path);
       } catch {
-        thumb.textContent = "\u{1F5BC}\uFE0F";
+        thumb.replaceChildren(icon("image"));
       }
       img.onerror = () => {
-        thumb.innerHTML = "";
-        thumb.textContent = "\u{1F5BC}\uFE0F";
+        thumb.replaceChildren(icon("image"));
       };
       thumb.appendChild(img);
     } else if (category === "text") {
-      thumb.textContent = entry.name.endsWith(".md") ? "\u{1F4C4}" : "\u{1F4DD}";
+      thumb.replaceChildren(icon(entry.name.endsWith(".md") ? "file" : "file-lines"));
     } else {
       thumb.style.cssText += "opacity:0.4;";
       thumb.textContent = "?";
@@ -2762,10 +2789,10 @@ ${filePath}`,
     if (btnSmaller) btnSmaller.style.display = isCard ? "" : "none";
     if (btnLarger) btnLarger.style.display = isCard ? "" : "none";
     if (isCard) {
-      btnViewBtn.textContent = "\u{1F5C3}";
+      btnViewBtn.replaceChildren(icon("view-list"));
       btnViewBtn.title = window.t("Switch to list view");
     } else {
-      btnViewBtn.textContent = "\u{1F9FE}";
+      btnViewBtn.replaceChildren(icon("view-cards"));
       btnViewBtn.title = window.t("Switch to card view");
     }
   }

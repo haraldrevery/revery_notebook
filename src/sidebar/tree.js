@@ -2,6 +2,7 @@
    helpers, context menu, active-file highlighting. */
 import { S, treeEl, btnSortBtn, btnToggleAll, expandedDirs, selectedItems, _previewCache } from './state.js';
 import { getFileCategory, mediaMarkdown } from './helpers.js';
+import { icon } from './icons.js';
 import { renderCards, highlightActiveFileCards } from './cards.js';
 import { openFile, openMediaFile, openUnsupportedFile, createNewFile, createNewFolder,
          renameNode, deleteNode, renameSelectedNodes, deleteSelectedNodes } from './fileops.js';
@@ -335,11 +336,11 @@ async function renderNode(containerEl, dirPath, depth, generation = 0) {   // �
 
         /* Icon by category */
         if (category === 'text') {
-          iconEl.textContent = entry.name.endsWith('.md') ? '📄' : '📝';
+          iconEl.replaceChildren(icon(entry.name.endsWith('.md') ? 'file' : 'file-lines'));
         } else if (category === 'media') {
-          iconEl.textContent = '🖼️';
+          iconEl.replaceChildren(icon('image'));
         } else {
-          iconEl.textContent = '📎';
+          iconEl.replaceChildren(icon('paperclip'));
         }
 
         itemEl.classList.add('sidebar-file');

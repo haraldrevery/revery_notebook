@@ -3,6 +3,7 @@ import { S, btnProjectsBtn, docTitleEl } from './state.js';
 import { showInputDialog } from './dialogs.js';
 import { saveActiveFile, markClean } from './save.js';
 import { openFolder, promptOpenFolder } from './fileops.js';
+import { icon } from './icons.js';
 
   /* ══════════════════════════════════════════════════════════════════
      PROJECT HISTORY  (recently opened project folders)
@@ -136,14 +137,14 @@ async function saveProjects(arr) {
     /* ── Browse for a new folder ── */
     const browseBtn = document.createElement('button');
     browseBtn.className   = 'revery-projects-action';
-    browseBtn.textContent = '📂  Browse for folder…';
+    browseBtn.replaceChildren(icon('folder-open'), '  Browse for folder…');
     browseBtn.addEventListener('click', () => { menu.remove(); promptOpenFolder(); });
     menu.appendChild(browseBtn);
 
     /* ── Manage projects ── */
     const manageBtn = document.createElement('button');
     manageBtn.className   = 'revery-projects-action';
-    manageBtn.textContent = '⚙  Manage projects…';
+    manageBtn.replaceChildren(icon('sliders'), '  Manage projects…');
     manageBtn.addEventListener('click', () => { menu.remove(); showManageProjectsModal(); });
     menu.appendChild(manageBtn);
 
