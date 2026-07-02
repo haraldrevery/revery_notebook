@@ -36,3 +36,9 @@ Users can pick an installer that is either an Electron or a Tauri wrapper, eithe
 - Obsidian-style Live Preview, instead of a raw text and a live preview side by side, they can be in the same panel. This mode can be toggled on/off in the settings for users who prefer the old (current) way.
 
 - About, legal and user guide text update (so it's up to date and accurate).
+
+- Maybe a search bar for the project folder? Might be too difficult to get it right (don't want to clutter the UI even more).
+
+- Quality of life user experience, check how importing and drag and drop images work. Make it easier for users to work with images in their documents (a little vaguely defined). 
+
+- In Obsidian, when clicking on the rendered YAML part in the text, a drop menu (scrollable) with all existing tags of the project is shown, in that way user doesn't have to type every single time they want to use a standard YAML data for something. This would be a nice feature, but I have no idea if it can be implemented without conflicting with the codemirror.
