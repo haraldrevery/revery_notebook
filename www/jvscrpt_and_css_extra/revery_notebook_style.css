@@ -2050,33 +2050,118 @@ body.live-preview-active #editor-pane {
   flex: 1 1 auto !important;
 }
 
-.cm-line.lp-h1 { font-size: 1.7em;  font-weight: 700; line-height: 1.25; }
-.cm-line.lp-h2 { font-size: 1.45em; font-weight: 700; line-height: 1.25; }
-.cm-line.lp-h3 { font-size: 1.25em; font-weight: 600; line-height: 1.3; }
-.cm-line.lp-h4 { font-size: 1.12em; font-weight: 600; }
-.cm-line.lp-h5 { font-size: 1.02em; font-weight: 700; }
-.cm-line.lp-h6 { font-size: 0.95em; font-weight: 700; letter-spacing: 0.04em; }
+/* Phase 2: converge on the classic preview's look. Typography mirrors
+   .prose in css_aesthetics/input_prose.css (uppercase, tracking-wider,
+   weight 400, the text-5xl…base scale); prose block MARGINS become line
+   PADDING here (a CM line has no margins), scaled to stay editor-sane. */
+body.live-preview-active .cm-content {
+  font-family: var(--preview-font, var(--font-brand, inherit)) !important;
+  letter-spacing: var(--preview-letter-spacing, var(--tracking-body, inherit)) !important;
+}
+
+/* Background texture parity: same per-theme overlay recipe as #preview
+   (the --bg_oacity opacity setting and slow-hardware suppression operate
+   on the shared variables, so both apply here automatically).          */
+body.live-preview-active #editor-pane {
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+[data-theme="dark"] body.live-preview-active #editor-pane {
+  background-image:
+    linear-gradient(rgba(10, 10, 10, calc(1 - var(--bg_oacity))), rgba(10, 10, 10, calc(1 - var(--bg_oacity)))),
+    var(--preview-bg-image, none);
+}
+[data-theme="light"] body.live-preview-active #editor-pane {
+  background-image:
+    linear-gradient(rgba(250, 250, 248, calc(1 - var(--bg_oacity))), rgba(250, 250, 248, calc(1 - var(--bg_oacity)))),
+    var(--preview-bg-image, none);
+}
+[data-theme="paper"] body.live-preview-active #editor-pane {
+  background-image:
+    linear-gradient(rgba(244, 239, 228, calc(1 - var(--bg_oacity))), rgba(244, 239, 228, calc(1 - var(--bg_oacity)))),
+    var(--preview-bg-image, none);
+}
+[data-theme="forest"] body.live-preview-active #editor-pane {
+  background-image:
+    linear-gradient(rgba(14, 26, 17, calc(1 - var(--bg_oacity))), rgba(14, 26, 17, calc(1 - var(--bg_oacity)))),
+    var(--preview-bg-image, none);
+}
+
+.cm-line.lp-h1, .cm-line.lp-h2, .cm-line.lp-h3,
+.cm-line.lp-h4, .cm-line.lp-h5, .cm-line.lp-h6 {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wider, 0.05em);
+  font-weight: 400;
+}
+/* Parity with the preview's 'Center Headers' setting. */
+body.center-headers-active .cm-line.lp-h1,
+body.center-headers-active .cm-line.lp-h2,
+body.center-headers-active .cm-line.lp-h3,
+body.center-headers-active .cm-line.lp-h4,
+body.center-headers-active .cm-line.lp-h5,
+body.center-headers-active .cm-line.lp-h6 {
+  text-align: center;
+}
+.cm-line.lp-h1 { font-size: 3em;     padding-top: 1.2em; padding-bottom: 0.35em; }
+.cm-line.lp-h2 { font-size: 2.25em;  padding-top: 1em;   padding-bottom: 0.3em; }
+.cm-line.lp-h3 { font-size: 1.5em;   padding-top: 0.9em; padding-bottom: 0.25em; }
+.cm-line.lp-h4 { font-size: 1.25em;  padding-top: 0.8em; padding-bottom: 0.2em; }
+.cm-line.lp-h5 { font-size: 1.125em; padding-top: 0.7em; }
+.cm-line.lp-h6 { font-size: 1em;     padding-top: 0.6em; }
 
 .lp-strong { font-weight: 700; }
 .lp-em     { font-style: italic; }
 .lp-strike { text-decoration: line-through; opacity: 0.75; }
+/* Mirrors .prose code (mono, weight 400, subtle bg, .25rem radius). */
 .lp-code {
   font-family: var(--font-mono, monospace);
-  font-size: 0.92em;
-  background: rgba(128, 128, 128, 0.16);
-  border-radius: 3px;
-  padding: 0 3px;
+  font-weight: 400;
+  font-size: 0.95em;
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.25rem;
+}
+[data-theme="light"] .lp-code, [data-theme="paper"] .lp-code {
+  background: rgba(0, 0, 0, 0.05);
 }
 /* Link-styled text only — clicking never navigates (app link policy). */
 .lp-link { color: var(--accent, #7a8ee0); text-decoration: underline; }
 
+/* Mirrors the preview blockquote: bar + italic. */
 .cm-line.lp-quote {
-  border-left: 3px solid var(--border, rgba(128, 128, 128, 0.45));
-  padding-left: 10px;
-  opacity: 0.85;
+  border-left: 0.25rem solid var(--border, rgba(128, 128, 128, 0.45));
+  padding-left: 1em;
+  font-style: italic;
+  opacity: 0.9;
 }
 .cm-line.lp-codeblock {
-  background: rgba(128, 128, 128, 0.09);
+  background: rgba(0, 0, 0, 0.25);
   font-family: var(--font-mono, monospace);
   font-size: 0.92em;
+}
+[data-theme="light"] .cm-line.lp-codeblock, [data-theme="paper"] .cm-line.lp-codeblock {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Widgets (phase 2) */
+.lp-hr {
+  display: inline-block;
+  width: 100%;
+  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.4));
+  margin: 0.55em 0;
+  vertical-align: middle;
+}
+.lp-bullet { opacity: 0.85; }
+.lp-image-widget img {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: 3px;
+  margin: 0.35em 0;
+}
+.lp-image-fallback {
+  font-size: 0.85em;
+  opacity: 0.6;
+  font-style: italic;
 }

@@ -25,9 +25,9 @@
       "Read(./www/fonts/**)",
       "Glob(./www/fonts/**)",
       "Grep(./www/fonts/**)"
+    ],
+    "allow": [
+      "Bash(python3 -)"
     ]
   }
 }
-
-
-

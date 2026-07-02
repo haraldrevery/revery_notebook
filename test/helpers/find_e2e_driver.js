@@ -156,6 +156,25 @@
   editor.setSelectionRange(editor.value.length, editor.value.length);
   await sleep(250);
   lpOnState.survivedReplace = !!document.querySelector('.cm-line.lp-h1');
+  /* Phase 2: hr/image/bullet widgets, preview typography + texture */
+  const PIXEL2 = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+  replaceEditorContent('# Style\n\n---\n\n- item one\n\n![tiny](' + PIXEL2 + ')\n\nend line');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(400);
+  const h1El = document.querySelector('.cm-line.lp-h1');
+  const lpPhase2 = {
+    hrWidget:     !!document.querySelector('.lp-hr'),
+    bullet:       !!document.querySelector('.lp-bullet'),
+    imageWidget:  !!document.querySelector('.lp-image-widget img'),
+    headingUpper: !!h1El && getComputedStyle(h1El).textTransform === 'uppercase',
+    texture:      getComputedStyle(document.getElementById('editor-pane')).backgroundImage.includes('bg_'),
+  };
+  /* cursor onto the hr line → raw dashes return */
+  const hrPos = editor.value.indexOf('---');
+  editor.setSelectionRange(hrPos, hrPos);
+  await sleep(250);
+  lpPhase2.hrRevealsRaw = !document.querySelector('.lp-hr');
+
   window.setLivePreviewMode(false);
   await sleep(150);
   const lpOffState = {
@@ -167,5 +186,5 @@
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
-           lpOnState, lpOffState };
+           lpOnState, lpOffState, lpPhase2 };
 })()
