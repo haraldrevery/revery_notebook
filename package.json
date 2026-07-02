@@ -18,7 +18,8 @@
     "start:tauri": "tauri dev   --config tauri/tauri.conf.json",
     "build:tauri": "tauri build --config tauri/tauri.conf.json",
     "test": "node --test \"test/**/*.test.js\"",
-    "test:rust": "cargo test --manifest-path tauri/Cargo.toml"
+    "test:rust": "cargo test --manifest-path tauri/Cargo.toml",
+    "build:sidebar": "node build_tools/build_sidebar.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
