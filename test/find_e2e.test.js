@@ -108,4 +108,7 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     clickUnderPointer: true,
     readerPadding: true, readerPaddingResets: true,
   }, 'v2 blocks must render through the preview pipeline with computed-style parity: headers, code font+colors, hidden fences, image sizing, tables, multi-line math');
+
+  // 12. zip export is desktop-only — absent from the File menu in web mode
+  assert.equal(r.zipEntryHidden, true, 'Zip Project Export must be hidden in web mode');
 });

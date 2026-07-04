@@ -50,6 +50,7 @@ const {
   purgeOldVolatileFiles: purgeVolatileDir,
   createSettingsStore,
 } = require('./fs_core');
+const { buildZip } = require('./zip_core');
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 const getSettingsFile = () => path.join(app.getPath('userData'), 'revery_settings.json');
@@ -708,6 +709,32 @@ ipcMain.handle('dialog:save-file', async (_event, defaultFilename, content, opti
     currentRootPath = newDir;
   }
   return { saved: true, filePath: result.filePath, newRootPath: newDir };
+});
+
+/* ── Zip project export ───────────────────────────────────────────────────
+   Reads ONLY inside the trusted project root (zip_core.walkProject skips
+   symlinks, so a link can't leak outside files into the archive). The
+   destination comes exclusively from the OS save dialog below — the
+   renderer passes nothing. The archive is written through the same
+   atomicWriteFile path as documents, so a crash can never leave a
+   truncated zip at the destination. No password option by design:
+   classic zip encryption is cryptographically broken and would only
+   pretend to protect the notes. */
+ipcMain.handle('project:export-zip', async () => {
+  const root = requireRoot();
+  const folderName = path.basename(root) || 'project';
+  const stamp = new Date().toISOString().slice(0, 10);
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: `${folderName}_${stamp}.zip`,
+    filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+
+  const dest = validatePath(result.filePath);
+  const { buffer, entries, bytes } = buildZip(root, { excludePath: dest });
+  atomicWriteFile(dest, buffer);
+  return { ok: true, path: dest, entries, bytes };
 });
 
 /* ── Window lifecycle ─────────────────────────────────────────────────── */

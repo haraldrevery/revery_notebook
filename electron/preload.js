@@ -96,6 +96,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleMaximizeWindow: () =>
     ipcRenderer.invoke('window:toggle-maximize'),
 
+  /** Export the whole project folder as a .zip (save dialog lives in main). */
+  exportProjectZip: () =>
+    ipcRenderer.invoke('project:export-zip'),
+
 /**
    * Request a close.  Triggers the existing 'window:close-request' flow
    * so the quit-confirmation modal appears — same as clicking the OS button.

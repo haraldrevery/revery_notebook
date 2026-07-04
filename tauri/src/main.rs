@@ -1402,6 +1402,225 @@ async fn save_file(
 }
 
 
+/* ══════════════════════════════════════════════════════════════════════════
+   ZIP PROJECT EXPORT
+   Reads only inside the trusted project root; the destination comes
+   exclusively from the OS save dialog (never the renderer). No password
+   option by design: classic zip encryption is cryptographically broken
+   and would only pretend to protect the notes.
+══════════════════════════════════════════════════════════════════════════ */
+
+#[derive(Serialize)]
+struct ZipExportResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ok: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canceled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entries: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes: Option<u64>,
+}
+
+const ZIP_MAX_ENTRIES: usize = 65_000; // classic zip limit is 65535 (no zip64)
+const ZIP_MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Recursively collect project entries for zip export.
+/// Symlinks are SKIPPED (symlink_metadata, never followed) so a link inside
+/// the project can never leak content from outside the root into the
+/// archive. `exclude` is the destination zip itself, for when the user
+/// saves the archive inside their own project folder.
+fn walk_project_for_zip(
+    dir: &Path,
+    rel: &str,
+    exclude: Option<&Path>,
+    files: &mut Vec<(String, PathBuf)>,
+    dirs: &mut Vec<String>,
+    total_bytes: &mut u64,
+) -> Result<(), String> {
+    let read = std::fs::read_dir(dir)
+        .map_err(|e| format!("Could not read {}: {e}", dir.display()))?;
+    let mut children: Vec<_> = read.filter_map(|e| e.ok()).collect();
+    children.sort_by_key(|e| e.file_name()); // deterministic archive layout
+
+    for entry in children {
+        let path = entry.path();
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue, // vanished mid-walk — skip, never fail the export
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if let Some(ex) = exclude {
+            if path == ex {
+                continue;
+            }
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let rel_child = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+
+        if meta.is_dir() {
+            dirs.push(rel_child.clone());
+            if files.len() + dirs.len() > ZIP_MAX_ENTRIES {
+                return Err(format!(
+                    "Project has too many items for zip export (limit {ZIP_MAX_ENTRIES})."
+                ));
+            }
+            walk_project_for_zip(&path, &rel_child, exclude, files, dirs, total_bytes)?;
+        } else if meta.is_file() {
+            *total_bytes += meta.len();
+            if *total_bytes > ZIP_MAX_TOTAL_BYTES {
+                return Err("Project is too large for zip export (limit 512 MB).".into());
+            }
+            files.push((rel_child, path));
+            if files.len() + dirs.len() > ZIP_MAX_ENTRIES {
+                return Err(format!(
+                    "Project has too many items for zip export (limit {ZIP_MAX_ENTRIES})."
+                ));
+            }
+        }
+        // other kinds (sockets, fifos…) are silently skipped
+    }
+    Ok(())
+}
+
+/// Build the archive bytes for a project root (deflate via the zip crate).
+fn build_project_zip(
+    root: &Path,
+    exclude: Option<&Path>,
+) -> Result<(Vec<u8>, usize, u64), String> {
+    use std::io::Write;
+
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    let mut dirs: Vec<String> = Vec::new();
+    let mut total: u64 = 0;
+    walk_project_for_zip(root, "", exclude, &mut files, &mut dirs, &mut total)?;
+
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+
+    // Directory entries first — preserves empty folders on extract.
+    for d in &dirs {
+        w.add_directory(d, opts)
+            .map_err(|e| format!("zip dir entry failed: {e}"))?;
+    }
+    for (rel, abs) in &files {
+        w.start_file(rel, opts)
+            .map_err(|e| format!("zip entry failed: {e}"))?;
+        let data = std::fs::read(abs)
+            .map_err(|e| format!("Could not read {}: {e}", abs.display()))?;
+        w.write_all(&data)
+            .map_err(|e| format!("zip write failed: {e}"))?;
+    }
+    let cursor = w.finish().map_err(|e| format!("zip finish failed: {e}"))?;
+    Ok((cursor.into_inner(), files.len() + dirs.len(), total))
+}
+
+/// UTC date stamp YYYY-MM-DD for the default filename (parity with the
+/// Electron side's toISOString().slice(0,10)). Civil-from-days algorithm —
+/// avoids pulling in a chrono dependency for one string.
+fn today_stamp_utc() -> String {
+    let days = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() / 86_400) as i64;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe as i64 + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Export the whole project as a .zip. Async like save_file: the dialog is
+/// awaited, and the walk+deflate runs on a blocking thread so the UI stays
+/// responsive. Written atomically — a crash can never leave a truncated
+/// archive at the destination.
+#[tauri::command]
+async fn export_project_zip(
+    app: AppHandle,
+    root_state: State<'_, RootPath>,
+) -> Result<ZipExportResult, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    let root = root_state
+        .0
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .ok_or("No project folder is open. Please open a folder first.")?;
+    let root_pb = PathBuf::from(&root);
+    let folder_name = root_pb
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "project".into());
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("Zip Project Export")
+        .add_filter("Zip Archive", &["zip"])
+        .set_file_name(&format!("{}_{}.zip", folder_name, today_stamp_utc()))
+        .save_file(move |p| {
+            let _ = tx.send(p);
+        });
+
+    let chosen = match rx.await.unwrap_or(None) {
+        None => {
+            return Ok(ZipExportResult {
+                ok: None,
+                canceled: Some(true),
+                path: None,
+                entries: None,
+                bytes: None,
+            })
+        }
+        Some(c) => c,
+    };
+    let path_str = match chosen {
+        FilePath::Path(pb) => pb.to_string_lossy().into_owned(),
+        FilePath::Url(u) => u.to_string(),
+    };
+    let dest = safe_path(&path_str)?;
+
+    let root_for_task = root_pb.clone();
+    let dest_for_task = dest.clone();
+    let (zip_bytes, entries, bytes) = tauri::async_runtime::spawn_blocking(move || {
+        build_project_zip(&root_for_task, Some(dest_for_task.as_path()))
+    })
+    .await
+    .map_err(|e| format!("zip task failed: {e}"))??;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let unique_name = format!(
+        "{}.{}.revery_tmp",
+        dest.file_name().ok_or("Path has no filename")?.to_string_lossy(),
+        now
+    );
+    let tmp = dest.with_file_name(unique_name);
+    atomic_write_file(&tmp, &dest, &zip_bytes)?;
+
+    Ok(ZipExportResult {
+        ok: Some(true),
+        canceled: None,
+        path: Some(path_str),
+        entries: Some(entries),
+        bytes: Some(bytes),
+    })
+}
+
+
 ///Keep async
 /// Show a native OS dialog and return the button index pressed.
 #[tauri::command]
@@ -2407,6 +2626,7 @@ tauri::Builder::default()
             get_volatile_status,
             list_volatile_backups,
             save_file,
+            export_project_zip,
             show_message_box,
             confirm_close,
             watch_file,
@@ -2634,5 +2854,77 @@ mod tests {
         assert!(!nav("data:text/html,<h1>x</h1>"));
         assert!(!nav("asset://localhost/some/file.png")); // subresource-only scheme
         assert!(!nav("about:config"));
+    }
+
+    /* ── zip project export ────────────────────────────────────────── */
+
+    fn zip_fixture(label: &str) -> PathBuf {
+        let root = test_dir(label);
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::create_dir_all(root.join("empty")).unwrap();
+        fs::write(root.join("note.md"), "# Hello\n\nworld").unwrap();
+        fs::write(root.join("sub/inner.md"), "nested content").unwrap();
+        fs::write(root.join("sub/ÅÄÖ anteckning.md"), "åäö unicode").unwrap();
+        root
+    }
+
+    #[test]
+    fn zip_roundtrip_preserves_files_and_empty_dirs() {
+        let root = zip_fixture("zip-roundtrip");
+        let (bytes, entries, total) = build_project_zip(&root, None).unwrap();
+        assert_eq!(entries, 5); // 2 dirs + 3 files
+        assert!(total > 0);
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.contains(&"empty/".to_string()), "empty dir preserved: {names:?}");
+        assert!(names.contains(&"sub/ÅÄÖ anteckning.md".to_string()), "utf-8 name: {names:?}");
+
+        use std::io::Read;
+        let mut content = String::new();
+        archive.by_name("sub/ÅÄÖ anteckning.md").unwrap()
+            .read_to_string(&mut content).unwrap();
+        assert_eq!(content, "åäö unicode");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_skips_symlinks() {
+        let root = zip_fixture("zip-symlink");
+        std::os::unix::fs::symlink("/etc/passwd", root.join("evil-link")).unwrap();
+        std::os::unix::fs::symlink("/etc", root.join("evil-dir")).unwrap();
+        let (bytes, entries, _) = build_project_zip(&root, None).unwrap();
+        assert_eq!(entries, 5, "links must not add entries");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        for i in 0..archive.len() {
+            let name = archive.by_index(i).unwrap().name().to_string();
+            assert!(!name.contains("evil"), "symlink leaked into archive: {name}");
+        }
+    }
+
+    #[test]
+    fn zip_excludes_destination_inside_project() {
+        let root = zip_fixture("zip-exclude");
+        let dest = root.join("export.zip");
+        fs::write(&dest, "pretend older export").unwrap();
+        let (bytes, entries, _) = build_project_zip(&root, Some(dest.as_path())).unwrap();
+        assert_eq!(entries, 5, "the destination zip itself must be excluded");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        for i in 0..archive.len() {
+            let name = archive.by_index(i).unwrap().name().to_string();
+            assert_ne!(name, "export.zip");
+        }
+    }
+
+    #[test]
+    fn zip_today_stamp_shape() {
+        let s = today_stamp_utc();
+        assert_eq!(s.len(), 10, "{s}");
+        assert_eq!(&s[4..5], "-");
+        assert_eq!(&s[7..8], "-");
+        let year: i32 = s[0..4].parse().unwrap();
+        assert!((2024..2100).contains(&year), "{s}");
     }
 }

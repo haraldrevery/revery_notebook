@@ -970,11 +970,17 @@ const fileActions = [
   { label: 'Export as .md', action: 'file_export_md' },
   { label: 'Export as .txt', action: 'file_export_txt' },
   { label: 'Export as .html', action: 'file_export_html' },
-  { label: 'Export as .tex', action: 'file_export_tex' }
+  { label: 'Export as .tex', action: 'file_export_tex' },
+  { type: 'divider', desktopOnly: true },
+  /* Whole-project zip export — desktop only (web mode has no project). */
+  { label: 'Zip Project Export', action: 'file_zip_export', desktopOnly: true }
 ];
 /* Populate Menus — supports submenus */
 function buildMenu(container, actions) {
   actions.forEach(item => {
+    /* Entries that need a native backend are omitted in web mode
+       (native_api.js loads in <head>, so isDesktop is settled here). */
+    if (item.desktopOnly && !(window.NativeAPI && window.NativeAPI.isDesktop)) return;
     if (item.type === 'divider') {
       const div = document.createElement('div');
       div.className = 'menu-divider';

@@ -165,6 +165,7 @@ function executeAction(action) {
     case 'file_export_txt': exportFile('txt'); break;
     case 'file_export_html': exportHtmlFile(); break;
     case 'file_export_tex': exportLatexFile(); break;
+    case 'file_zip_export': exportProjectZip(); break;
 
     case 'table':
       /* Open the native-style table modal instead of unreliable prompt() dialogs */
@@ -557,6 +558,42 @@ async function exportFile(extension = 'md') {
 
   /* Tauri always succeeds (auto-download); web keeps existing behaviour */
   setTimeout(() => showSavedIndicator(), 500);
+}
+
+/* ── Zip project export (desktop only) ────────────────────────────────────
+   The backend owns the save dialog and reads only inside the project root;
+   this side just triggers it and reports the outcome. No password option
+   by design — classic zip encryption is broken and would only pretend to
+   protect the notes.                                                      */
+async function exportProjectZip() {
+  const rootPath = (typeof window.sidebarGetRootPath === 'function')
+    ? window.sidebarGetRootPath() : null;
+  if (!rootPath) {
+    await window.NativeAPI.showMessageBox({
+      type: 'info',
+      title: window.t('Zip Project Export'),
+      message: window.t('Open a project folder first.'),
+    });
+    return;
+  }
+  try {
+    const res = await window.NativeAPI.exportProjectZip();
+    if (!res || res.canceled) return; // user backed out of the dialog — silent
+    const mb = (res.bytes / (1024 * 1024)).toFixed(1);
+    await window.NativeAPI.showMessageBox({
+      type: 'info',
+      title: window.t('Zip Project Export'),
+      message: window.t('Project exported.'),
+      detail: `${res.entries} ${window.t('items')} (${mb} MB)\n${res.path}`,
+    });
+  } catch (err) {
+    await window.NativeAPI.showMessageBox({
+      type: 'error',
+      title: window.t('Zip Project Export'),
+      message: window.t('The zip export failed.'),
+      detail: String((err && err.message) || err),
+    });
+  }
 }
 
 /* ── HTML Prose Export ────────────────────────────────────────────────────
