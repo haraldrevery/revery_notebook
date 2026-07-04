@@ -4067,5 +4067,15 @@ Restore these changes, or discard and keep the saved version.`,
     initSearch();
     initCloseHandler();
     runBoot();
+    setTimeout(
+      () => {
+        try {
+          getYamlIndex("").catch(() => {
+          });
+        } catch (_) {
+        }
+      },
+      window.slowHardwareMode ? 12e3 : 4e3
+    );
   }
 })();

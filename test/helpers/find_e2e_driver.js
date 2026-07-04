@@ -250,9 +250,20 @@
       .find((el) => el.textContent.includes('$a+b$'));
     return !!codeEl;
   })();
-  lpV2.fmProtected = !!document.querySelector('.cm-line.lp-frontmatter')
-    && cmText().includes('title: t')
+  /* Frontmatter renders as the preview's "Properties" pill box when the
+     cursor is elsewhere (reader parity), and reveals raw dim YAML when
+     clicked (pointer selection).                                       */
+  lpV2.fmProtected = document.querySelectorAll('.lp-yaml .yaml-pill').length === 2 // title + tags
     && !document.querySelector('.lp-render h2'); // Setext misparse guard
+  window.cmView.dispatch({ selection: { anchor: 6 }, userEvent: 'select.pointer' });
+  await sleep(300);
+  lpV2.fmReveals = !document.querySelector('.lp-yaml')
+    && !!document.querySelector('.cm-line.lp-frontmatter')
+    && cmText().includes('title: t');
+  if (CM.closeCompletion) CM.closeCompletion(window.cmView); // auto-opened menu
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(300);
+  lpV2.fmPillsReturn = !!document.querySelector('.lp-yaml .yaml-pill');
   /* cursor onto the inline-math paragraph -> its raw $ source returns */
   const mathPos = editor.value.indexOf('$e^');
   editor.setSelectionRange(mathPos, mathPos);
@@ -360,18 +371,26 @@
        a mid-document table isn't queryable until scrolled to. */
     const tPos = editor.value.indexOf('| Col A');
     if (tPos < 0) return false;
-    view.dispatch({ effects: CM.EditorView.scrollIntoView(tPos, { y: 'center' }) });
-    /* Poll rather than fixed sleeps: under a full parallel test run the
-       renderer's measure/rAF cycles can lag well past any fixed delay. */
-    let tbl2 = null;
-    for (let w = 0; w < 3000 && !tbl2; w += 150) {
-      await sleep(150);
-      tbl2 = document.querySelector('.lp-render table');
+    /* Scrolling a fresh viewport materializes widgets whose measured
+       heights shift content for a few frames — one scroll effect can
+       settle with the target off-screen. Re-issue until the widget is
+       actually VISIBLE and stable, exactly like a user scrolling until
+       they can see the thing they want to click.                     */
+    let wrapEl = null, rect = null;
+    for (let attempt = 0; attempt < 8 && !wrapEl; attempt++) {
+      view.dispatch({ effects: CM.EditorView.scrollIntoView(tPos, { y: 'center' }) });
+      await sleep(350);
+      const tbl2 = document.querySelector('.lp-render table');
+      if (!tbl2) continue;
+      const w2 = tbl2.closest('.lp-render');
+      const r2 = w2.getBoundingClientRect();
+      if (r2.height > 0 && r2.top >= 0 && r2.top + r2.height <= window.innerHeight) {
+        await sleep(150); // confirm it holds still
+        const r3 = w2.getBoundingClientRect();
+        if (Math.abs(r3.top - r2.top) < 1) { wrapEl = w2; rect = r3; }
+      }
     }
-    if (!tbl2) return false;
-    const wrapEl = tbl2.closest('.lp-render');
-    const rect = wrapEl.getBoundingClientRect();
-    if (rect.height === 0) return false;
+    if (!wrapEl) return false;
     const clickY = rect.top + rect.height / 2;
     wrapEl.dispatchEvent(new MouseEvent('mousedown', {
       bubbles: true, cancelable: true,
@@ -451,6 +470,20 @@
   CM.startCompletion(window.cmView);
   await sleep(600);
   yamlComplete.bodyQuiet = !fmTooltip();
+
+  /* Accepting with the cursor MID-token must replace the WHOLE token —
+     regression for the "adds in the middle of a text string" bug. */
+  replaceEditorContent('---\ntags: [alpha, beta]\ntags: alph\n---\n\nbody');
+  const midPos = editor.value.indexOf('tags: alph\n') + 8; // 'al|ph'
+  window.cmView.focus();
+  window.cmView.dispatch({ selection: { anchor: midPos }, userEvent: 'select.pointer' });
+  await fmWait();
+  await sleep(400); // interactionDelay
+  fmCd.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  await sleep(150);
+  fmCd.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await sleep(200);
+  yamlComplete.midTokenClean = /^tags: (alpha|beta)$/.test(editor.value.split('\n')[2]);
 
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
            replacedText, ghostCount, barHidden, supersededCount,

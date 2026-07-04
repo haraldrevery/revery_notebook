@@ -2156,30 +2156,36 @@ body.live-preview-active #editor-pane {
 }
 
 /* ── YAML frontmatter autocomplete tooltip ────────────────────────────
-   The CM engine positions/scrolls it; only the skin lives here. Theme
-   variables drive all four themes (dark/light/paper/forest) for free. */
+   The CM engine positions/scrolls it; the skin MIRRORS the app's own
+   dropdowns (.menu-container / .menu-item: --menu-bg, mono font,
+   0.75rem, same shadow/radius/padding) so it reads as one UI family.  */
 .cm-tooltip.cm-tooltip-autocomplete {
-  background: var(--bg-panel);
+  background: var(--menu-bg, var(--bg-panel));
   border: 1px solid var(--border-md);
   border-radius: 4px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-  font-family: var(--font-brand, inherit);
-  z-index: 60;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
 }
 .cm-tooltip-autocomplete > ul {
-  max-height: 14em; /* scrollable, like the settings submenus */
-  font-size: 0.85rem;
-  font-family: inherit;
+  max-height: 15em; /* scrollable, like the settings submenus */
+  min-width: 8rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 4px 0;
 }
 .cm-tooltip-autocomplete > ul > li {
   color: var(--text);
-  padding: 4px 10px;
-  border-left: 2px solid transparent;
+  line-height: 1;
+  padding: 0.5625rem 1rem 0.375rem 1rem; /* FONTFIX pattern from .menu-item */
+  transition: background 0.1s;
 }
 .cm-tooltip-autocomplete > ul > li[aria-selected] {
   background: var(--bg-hover);
   color: var(--text);
-  border-left-color: var(--accent, #7a8ee0);
+}
+.cm-tooltip-autocomplete .cm-completionMatchedText {
+  text-decoration: none;
+  color: var(--accent, #7a8ee0);
 }
 
 
@@ -2267,3 +2273,10 @@ body.live-preview-active #editor-pane {
   color: var(--text-dim);
   font-style: italic;
 }
+
+/* Live preview YAML pill box (same .yaml-render skin as the preview). */
+.lp-yaml {
+  cursor: pointer;
+  white-space: normal;
+}
+.lp-yaml .yaml-render { margin-top: 4px; }

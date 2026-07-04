@@ -101,7 +101,7 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     taskBoxes: true, taskDoneStyled: true, taskToggled: true,
     mathInline: true, mathBlock: true, mathMultiline: true,
     currencySafe: true, codeMathRaw: true,
-    fmProtected: true, mathRevealsRaw: true,
+    fmProtected: true, fmReveals: true, fmPillsReturn: true, mathRevealsRaw: true,
     sizeMatchesPreview: true, h1Parity: true, sizeNotEditorBound: true,
     familyFollows: true, familyRestores: true, katexSizeParity: true,
     tableRendered: true, tableParity: true, tableClickReveals: true, tableReturns: true,
@@ -116,6 +116,6 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   assert.deepEqual(r.yamlComplete, {
     keyMenu: true, keySuggests: true,
     clickOpens: true, valueSuggests: true,
-    accepts: true, bodyQuiet: true,
-  }, 'frontmatter autocomplete must suggest keys/values, open on click, accept via arrows+enter, and stay silent outside frontmatter');
+    accepts: true, bodyQuiet: true, midTokenClean: true,
+  }, 'frontmatter autocomplete must suggest keys/values, open on click, accept via arrows+enter, replace whole tokens, and stay silent outside frontmatter');
 });

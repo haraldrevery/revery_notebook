@@ -97,6 +97,33 @@ function resolveRelPath(baseDir, relPath) {
  */
 /* `root` defaults to the preview pane; live preview passes its own
    rendered block so both surfaces share one pipeline. */
+/* ── YAML "Properties" pill box ─────────────────────────────────────────
+   Shared by the classic preview (render() above) and the live preview's
+   frontmatter widget (markdown_editor_livepreview.js), so both surfaces
+   render YAML identically. `baseOffset` = doc offset of the first
+   frontmatter line (keeps the pills' data-start/data-end source map).
+   All keys/values pass through escapeHtml — frontmatter is untrusted. */
+function buildYamlRenderHtml(yamlContent, baseOffset) {
+  let pills = '';
+  let lineStart = baseOffset;
+
+  yamlContent.split('\n').forEach(line => {
+    const parts = line.split(':');
+    if (parts.length >= 2) {
+      const key = escapeHtml(parts[0].trim());
+      const val = escapeHtml(parts.slice(1).join(':').trim());
+      const startChar = lineStart;
+      const endChar   = lineStart + line.length;
+      pills += `<div class="yaml-pill" data-start="${startChar}" data-end="${endChar}"><span class="yaml-key">${key}:</span><span class="yaml-value">${val}</span></div>`;
+    }
+    lineStart += line.length + 1; // +1 for the newline character
+  });
+
+  if (!pills) return '';
+  const propertiesLabel = window.t('Properties');
+  return `<div class="yaml-render"><div class="yaml-render-title">${propertiesLabel}</div><div class="yaml-pill-container">${pills}</div></div>`;
+}
+
 function postProcessImages(root) {
   root = root || preview;
   if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
@@ -299,29 +326,8 @@ function render() {
   // Check for YAML Frontmatter
   const yamlMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (yamlMatch) {
-    const yamlContent = yamlMatch[1];
-    let pills = '';
-    let lineStart = raw.indexOf('\n') + 1; // Safely adapts to 4 (\n) or 5 (\r\n)
-
-    yamlContent.split('\n').forEach(line => {
-      const parts = line.split(':');
-      if (parts.length >= 2) {
-        // Fix: Escape HTML entities to prevent XSS injection
-        const key = escapeHtml(parts[0].trim());
-        const val = escapeHtml(parts.slice(1).join(':').trim());
-        const startChar = lineStart;              // ← derive from lineStart, not a running sum
-        const endChar   = lineStart + line.length;
-        pills += `<div class="yaml-pill" data-start="${startChar}" data-end="${endChar}"><span class="yaml-key">${key}:</span><span class="yaml-value">${val}</span></div>`;
-      }
-      lineStart += line.length + 1; // +1 to account for the newline character
-    });
-
-
-
-    if (pills) {
-      const propertiesLabel = window.t('Properties');
-yamlHtml = `<div class="yaml-render"><div class="yaml-render-title">${propertiesLabel}</div><div class="yaml-pill-container">${pills}</div></div>`;
-    }
+    // Shared builder — the live preview renders the SAME pill box.
+    yamlHtml = buildYamlRenderHtml(yamlMatch[1], raw.indexOf('\n') + 1);
     raw = raw.replace(yamlMatch[0], ''); // Remove from MD parsing
   }
 
