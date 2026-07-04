@@ -2,6 +2,7 @@
    (tree drag wiring, global navigation guard, Tauri native drop). */
 import { S, treeEl, expandedDirs, selectedItems } from './state.js';
 import { renderTree, updateMultiSelectHighlight } from './tree.js';
+import { handleEditorMediaPaths } from './editor_media.js';
 import { moveNodes } from './fileops.js';
 
   /* ══════════════════════════════════════════════════════════════════
@@ -267,9 +268,19 @@ export function initDnd() {
       onLeave: clearHighlights,
       onDrop: (pos, paths) => {
         clearHighlights();
+        if (!paths || !paths.length) return;
         const hit = pointToTarget(pos);
-        if (!hit || !paths || !paths.length) return; // dropped outside the tree
-        copyDroppedSources(paths.map((p) => ({ kind: 'path', path: p })), hit.dir);
+        if (hit) {
+          copyDroppedSources(paths.map((p) => ({ kind: 'path', path: p })), hit.dir);
+          return;
+        }
+        /* Not the tree — media dropped onto the EDITOR copies into the
+           project and inserts a link (editor_media.js). */
+        const dpr = window.devicePixelRatio || 1;
+        const el = document.elementFromPoint(pos.x / dpr, pos.y / dpr);
+        if (el && el.closest && el.closest('#editor')) {
+          handleEditorMediaPaths(paths);
+        }
       },
     }).catch(() => { /* listener registration failed — drop simply won't work */ });
   })();

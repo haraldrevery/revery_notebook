@@ -9,6 +9,7 @@ import { initSaveEngine } from './save.js';
 import { initPanel } from './panel.js';
 import { initFileOps } from './fileops.js';
 import { initDnd } from './dnd.js';
+import { initEditorMedia } from './editor_media.js';
 import { initCloseHandler, runBoot } from './lifecycle.js';
 
 /* ── Guard: desktop only ─────────────────────────────────────────── */
@@ -26,6 +27,7 @@ if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
   initPanel();
   initFileOps();
   initDnd();
+  initEditorMedia();
   initCloseHandler();
   runBoot();
 }

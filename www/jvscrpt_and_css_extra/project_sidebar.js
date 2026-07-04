@@ -509,6 +509,15 @@
   }
 
   // src/sidebar/helpers.js
+  function arrayBufferToBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    const CHUNK = 32768;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
+  }
   function stripMarkdownForPreview(raw) {
     return raw.replace(/^---[\s\S]*?---\n?/m, "").replace(/^#{1,6}\s+/gm, "").replace(/!\[.*?\]\(.*?\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`{1,3}[^`]*`{1,3}/g, "").replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, "$1").replace(/^\s*[-*+]\s+/gm, "").replace(/^\s*\d+\.\s+/gm, "").replace(/\n{2,}/g, " ").replace(/\s+/g, " ").trim();
   }
@@ -549,7 +558,8 @@
     const name = mediaPath.replace(/\\/g, "/").split("/").pop();
     const baseDir = (fromDir || (S.activeFilePath ? S.activeFilePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/") : (S.rootPath || "").replace(/\\/g, "/"))).replace(/\\/g, "/");
     const rel = baseDir ? makeRelativePath(baseDir, mediaPath.replace(/\\/g, "/")) : name;
-    return `![${name}](${rel})`;
+    const relEnc = rel.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
+    return `![${name}](${relEnc})`;
   }
   async function uniqueDestPath(targetDir, name, type) {
     const sep = targetDir.endsWith("/") || targetDir.endsWith("\\") ? "" : "/";
@@ -2882,6 +2892,157 @@ ${filePath}`,
     })();
   }
 
+  // src/sidebar/editor_media.js
+  var MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+  function destDirForMedia() {
+    if (S.activeFilePath) {
+      return S.activeFilePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+    }
+    return S.rootPath || null;
+  }
+  async function requireDestDir() {
+    const dir = destDirForMedia();
+    if (!dir) {
+      await window.NativeAPI.showMessageBox({
+        type: "info",
+        title: window.t ? window.t("Add media") : "Add media",
+        message: window.t ? window.t("Open a project folder first.") : "Open a project folder first."
+      });
+      return null;
+    }
+    return dir;
+  }
+  function insertMediaLinks(finalPaths) {
+    if (!finalPaths.length) return;
+    const links = finalPaths.map((p) => mediaMarkdown(p)).join("\n");
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    window.insertWithUndo(start, end, links + "\n");
+    const cur = start + links.length + 1;
+    editor.setSelectionRange(cur, cur);
+    if (typeof render === "function") render();
+    if (typeof countWords === "function") countWords();
+  }
+  function notifyIssues(errors) {
+    if (!errors.length) return;
+    window.NativeAPI.showMessageBox({
+      type: "warning",
+      title: "Copy Issues",
+      message: `${errors.length} file(s) could not be added:`,
+      detail: errors.join("\n")
+    });
+  }
+  async function handleEditorMediaFiles(files) {
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop) return false;
+    const media = Array.from(files || []).filter((f) => getFileCategory(f.name) === "media");
+    if (!media.length) return false;
+    if (S._operationLock) return true;
+    const dir = await requireDestDir();
+    if (!dir) return true;
+    S._operationLock = true;
+    try {
+      const finals = [];
+      const errors = [];
+      for (const f of media) {
+        if (f.size > MEDIA_MAX_BYTES) {
+          errors.push(`${f.name}: too large (${(f.size / 1024 / 1024).toFixed(1)} MB, max 20 MB)`);
+          continue;
+        }
+        try {
+          const b64 = arrayBufferToBase64(await f.arrayBuffer());
+          const res = await window.NativeAPI.copyFileIntoFolder(dir, f.name, b64);
+          finals.push(res.path);
+        } catch (err) {
+          errors.push(`${f.name}: ${err && err.message || err}`);
+        }
+      }
+      insertMediaLinks(finals);
+      if (finals.length) await renderTree();
+      notifyIssues(errors);
+    } finally {
+      S._operationLock = false;
+    }
+    return true;
+  }
+  async function handleEditorMediaPaths(paths) {
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop) return false;
+    const media = (paths || []).filter((p) => getFileCategory(p.replace(/\\/g, "/").split("/").pop()) === "media");
+    if (!media.length) return false;
+    if (S._operationLock) return true;
+    const dir = await requireDestDir();
+    if (!dir) return true;
+    S._operationLock = true;
+    try {
+      const finals = [];
+      const errors = [];
+      for (const p of media) {
+        try {
+          const res = await window.NativeAPI.copyPathIntoFolder(p, dir);
+          finals.push(res.path);
+        } catch (err) {
+          errors.push(`${p}: ${err && err.message || err}`);
+        }
+      }
+      insertMediaLinks(finals);
+      if (finals.length) await renderTree();
+      notifyIssues(errors);
+    } finally {
+      S._operationLock = false;
+    }
+    return true;
+  }
+  function extFromMime(type) {
+    const map = {
+      "image/png": "png",
+      "image/jpeg": "jpg",
+      "image/gif": "gif",
+      "image/webp": "webp",
+      "image/svg+xml": "svg",
+      "image/bmp": "bmp"
+    };
+    return map[type] || "png";
+  }
+  function pastedImageName(type) {
+    const d = /* @__PURE__ */ new Date();
+    const p2 = (n) => String(n).padStart(2, "0");
+    return `Pasted image ${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.${extFromMime(type)}`;
+  }
+  function initEditorMedia() {
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
+    const dom = window.cmView && window.cmView.dom;
+    if (!dom) return;
+    dom.addEventListener("drop", (e) => {
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      const anyMedia = Array.from(files).some((f) => getFileCategory(f.name) === "media");
+      if (!anyMedia) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        const pos = window.cmView.posAtCoords({ x: e.clientX, y: e.clientY });
+        if (pos != null) editor.setSelectionRange(pos, pos);
+      } catch (_) {
+      }
+      handleEditorMediaFiles(files);
+    }, true);
+    dom.addEventListener("paste", (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      const imgs = Array.from(items).filter(
+        (it) => it.kind === "file" && it.type.startsWith("image/")
+      );
+      if (!imgs.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const files = imgs.map((it) => {
+        const f = it.getAsFile();
+        return f ? new File([f], pastedImageName(f.type || it.type), { type: f.type }) : null;
+      }).filter(Boolean);
+      handleEditorMediaFiles(files);
+    }, true);
+    window.sidebarEditorMediaFiles = handleEditorMediaFiles;
+  }
+
   // src/sidebar/dnd.js
   function getDropTargetDir(eventTarget) {
     const dirCard = eventTarget.closest(".sidebar-card-dir");
@@ -2911,7 +3072,7 @@ ${filePath}`,
     return treeEl.querySelector(`.sidebar-dir[data-path="${CSS.escape(dirPath)}"]`);
   }
   var DROP_MAX_BYTES = 20 * 1024 * 1024;
-  function arrayBufferToBase64(buf) {
+  function arrayBufferToBase642(buf) {
     const bytes = new Uint8Array(buf);
     let binary = "";
     const CHUNK = 32768;
@@ -2938,7 +3099,7 @@ ${filePath}`,
             }
             let b64;
             try {
-              b64 = arrayBufferToBase64(await file.arrayBuffer());
+              b64 = arrayBufferToBase642(await file.arrayBuffer());
             } catch (e) {
               errors.push(`${label}: could not read (folders can't be dropped here)`);
               continue;
@@ -3051,9 +3212,17 @@ ${filePath}`,
         onLeave: clearHighlights,
         onDrop: (pos, paths) => {
           clearHighlights();
+          if (!paths || !paths.length) return;
           const hit = pointToTarget(pos);
-          if (!hit || !paths || !paths.length) return;
-          copyDroppedSources(paths.map((p) => ({ kind: "path", path: p })), hit.dir);
+          if (hit) {
+            copyDroppedSources(paths.map((p) => ({ kind: "path", path: p })), hit.dir);
+            return;
+          }
+          const dpr = window.devicePixelRatio || 1;
+          const el = document.elementFromPoint(pos.x / dpr, pos.y / dpr);
+          if (el && el.closest && el.closest("#editor")) {
+            handleEditorMediaPaths(paths);
+          }
         }
       }).catch(() => {
       });
@@ -3504,6 +3673,7 @@ Restore these changes, or discard and keep the saved version.`,
     initPanel();
     initFileOps();
     initDnd();
+    initEditorMedia();
     initCloseHandler();
     runBoot();
   }
