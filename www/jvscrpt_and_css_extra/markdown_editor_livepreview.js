@@ -187,7 +187,23 @@
             for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
           }
         } catch (_) { /* keep block start */ }
-        view2.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+        /* Pin the clicked line under the pointer: the widget→raw swap
+           (and the previous active block re-collapsing) changes content
+           heights, so a plain scrollIntoView makes the view jump. The
+           y:'start' + yMargin effect scrolls so the clicked source line
+           sits exactly at the pointer's height after the reflow.       */
+        let scrollEffect;
+        try {
+          const scrollRect = view2.scrollDOM.getBoundingClientRect();
+          const lineH = view2.defaultLineHeight || 24;
+          const yMargin = Math.max(0, Math.min(
+            e.clientY - scrollRect.top,
+            view2.scrollDOM.clientHeight - 3 * lineH));
+          scrollEffect = EditorView.scrollIntoView(pos, { y: 'start', yMargin });
+        } catch (_) { /* fall back to no scroll adjustment */ }
+        view2.dispatch(scrollEffect
+          ? { selection: { anchor: pos }, effects: scrollEffect }
+          : { selection: { anchor: pos } });
         view2.focus();
       });
       /* The app must never open links — same policy as everywhere else.

@@ -204,6 +204,16 @@ a bare StreamLanguage, but lang-markdown's nesting reads
 colors intermittently in BOTH editors. Fixed by resolving a
 LanguageSupport wrapper (bundle rebuilt).
 
+Click-to-edit scroll pinning (v2 follow-up after user soak): a plain
+`scrollIntoView: true` made the view jump when a widget swapped to raw
+text (heights reflow above and below). The mousedown now dispatches an
+`EditorView.scrollIntoView(pos, { y: 'start', yMargin })` effect with
+yMargin = the pointer's offset from the scroller top, so the clicked
+source line stays exactly under the pointer after the reflow. E2E
+`clickUnderPointer` asserts the property (polls — measure/rAF lags
+under a parallel test run; also note widget DOM only exists inside the
+drawn viewport, so probes must scroll via CM before querying it).
+
 Known v2 limits (accepted): footnote refs and definitions render
 per-block; a whole list/table flips to raw while being edited
 (Typora-style); reference-style links resolve only within their own

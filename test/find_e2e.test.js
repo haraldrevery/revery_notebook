@@ -105,6 +105,7 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     sizeMatchesPreview: true, h1Parity: true, sizeNotEditorBound: true,
     familyFollows: true, familyRestores: true, katexSizeParity: true,
     tableRendered: true, tableParity: true, tableClickReveals: true, tableReturns: true,
+    clickUnderPointer: true,
     readerPadding: true, readerPaddingResets: true,
   }, 'v2 blocks must render through the preview pipeline with computed-style parity: headers, code font+colors, hidden fences, image sizing, tables, multi-line math');
 });

@@ -28,6 +28,10 @@ setTimeout(() => {
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 1100, height: 700 });
+  /* Hidden windows throttle requestAnimationFrame, which CodeMirror's
+     scroll-effect application depends on (the click-to-edit pinning
+     probe needs it). Keep rendering active while hidden. */
+  win.webContents.setBackgroundThrottling(false);
 
   win.webContents.on('console-message', (_e, _level, message) => {
     const m = String(message);
