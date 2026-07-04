@@ -2181,3 +2181,89 @@ body.live-preview-active #editor-pane {
   color: var(--text);
   border-left-color: var(--accent, #7a8ee0);
 }
+
+
+/* ── Project search (sidebar) ─────────────────────────────────────────
+   One header button; the row + results exist only while searching.
+   Theme variables drive all four themes.                              */
+#sidebar-search-row {
+  display: none;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#sidebar-search-row.active { display: flex; }
+#sidebar-search-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-md);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  padding: 4px 8px;
+  outline: none;
+}
+#sidebar-search-input:focus { border-color: var(--accent, #7a8ee0); }
+#sidebar-search-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 2px 6px;
+}
+#sidebar-search-close:hover { color: var(--text); }
+#sidebar-search-results {
+  display: none;
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 0 20px;
+}
+#sidebar-search-results.active { display: block; }
+#sidebar-tree.search-hidden { display: none !important; }
+.search-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 3px;
+  font-size: 0.72rem;
+  letter-spacing: var(--tracking-wider, 0.05em);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.search-result {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  padding: 3px 10px 3px 26px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-result:hover {
+  background: var(--bg-hover);
+  border-left-color: var(--accent, #7a8ee0);
+}
+.search-result .search-hit {
+  background: var(--accent, #7a8ee0);
+  color: var(--bg, #111);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.search-status {
+  padding: 10px;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  font-style: italic;
+}

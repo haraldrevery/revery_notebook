@@ -645,7 +645,14 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     "paperclip": '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
     "view-cards": '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
     "view-list": '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
-    "sliders": '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'
+    "sliders": '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
+    /* 🔍 extracted from the Harald Revery Mono font (glyph u1F50D, TTF
+       outline → SVG path, y-flipped and fitted to the 24-box): the brand's
+       own magnifier as a vector fill, so it renders identically everywhere —
+       the emoji-font-fallback problem that retired emoji icons can't recur.
+       Per-path fill/stroke attributes override the stroke defaults the
+       icon() factory sets for the Feather shapes. */
+    "search": '<path fill="currentColor" stroke="none" d="M8.49 15.44Q5.57 15.44 3.53 13.4Q1.5 11.37 1.5 8.47Q1.5 5.57 3.53 3.53Q5.57 1.5 8.47 1.5Q11.37 1.5 13.42 3.53Q15.47 5.57 15.47 8.49Q15.47 10.94 13.9 12.86Q14.28 13.21 15.26 14.21Q16.24 15.21 17.41 16.36Q18.58 17.51 19.68 18.62Q20.77 19.74 21.54 20.5Q22.31 21.27 22.31 21.27Q22.5 21.46 22.5 21.77Q22.5 22.08 22.29 22.29Q22.08 22.5 21.77 22.5Q21.46 22.5 21.27 22.27Q20.96 21.96 19.1 20.1Q17.24 18.24 15.44 16.43Q13.63 14.63 12.9 13.9Q10.98 15.44 8.49 15.44ZM4.57 4.57Q2.96 6.18 2.96 8.47Q2.96 10.75 4.57 12.36Q6.18 13.98 8.49 13.98Q10.79 13.98 12.4 12.36Q14.02 10.75 14.02 8.47Q14.02 6.18 12.4 4.57Q10.79 2.96 8.49 2.96Q6.18 2.96 4.57 4.57Z"/>'
   };
   function icon(name) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -3808,6 +3815,238 @@ Restore these changes, or discard and keep the saved version.`,
     return serialize(merged);
   }
 
+  // src/sidebar/search.js
+  var DEBOUNCE_MS = () => window.slowHardwareMode ? 600 : 250;
+  var MIN_QUERY = 2;
+  var MAX_MATCHES_PER_FILE = 5;
+  var MAX_TOTAL_MATCHES = 200;
+  var MAX_CACHED_FILE = 256 * 1024;
+  var MAX_CACHE_TOTAL = 24 * 1024 * 1024;
+  var SNIPPET_RADIUS = 44;
+  var _bodyCache = /* @__PURE__ */ new Map();
+  var _cacheBytes = 0;
+  var _searchToken = 0;
+  var _els = null;
+  function getTreeEl() {
+    return document.getElementById("sidebar-tree");
+  }
+  function ensureUi() {
+    if (_els) return _els;
+    const treeEl2 = getTreeEl();
+    if (!treeEl2 || !treeEl2.parentNode) return null;
+    const row = document.createElement("div");
+    row.id = "sidebar-search-row";
+    const input = document.createElement("input");
+    input.id = "sidebar-search-input";
+    input.type = "text";
+    input.placeholder = window.t ? window.t("Search project\u2026") : "Search project\u2026";
+    input.spellcheck = false;
+    input.autocomplete = "off";
+    const closeBtn = document.createElement("button");
+    closeBtn.id = "sidebar-search-close";
+    closeBtn.title = "Close (Escape)";
+    closeBtn.textContent = "\u2715";
+    row.appendChild(input);
+    row.appendChild(closeBtn);
+    const results = document.createElement("div");
+    results.id = "sidebar-search-results";
+    treeEl2.parentNode.insertBefore(row, treeEl2);
+    treeEl2.parentNode.insertBefore(results, treeEl2);
+    let timer = null;
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => runSearch(input.value), DEBOUNCE_MS());
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        closeSearch();
+      }
+    });
+    closeBtn.addEventListener("click", closeSearch);
+    _els = { row, input, results };
+    return _els;
+  }
+  function openSearch() {
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
+    const els = ensureUi();
+    if (!els) return;
+    els.row.classList.add("active");
+    els.results.classList.add("active");
+    if (els.input.value.trim().length >= MIN_QUERY) runSearch(els.input.value);
+    els.input.focus();
+    els.input.select();
+  }
+  function closeSearch() {
+    if (!_els) return;
+    _searchToken++;
+    _els.row.classList.remove("active");
+    _els.results.classList.remove("active");
+    _els.results.replaceChildren();
+    const treeEl2 = getTreeEl();
+    if (treeEl2) treeEl2.classList.remove("search-hidden");
+  }
+  function toggleSearch() {
+    if (_els && _els.row.classList.contains("active")) closeSearch();
+    else openSearch();
+  }
+  async function fileText(f) {
+    const hit = _bodyCache.get(f.path);
+    if (hit && hit.mtime === f.mtime) return hit.text;
+    let text;
+    try {
+      text = await window.NativeAPI.readFile(f.path);
+    } catch (_) {
+      return null;
+    }
+    if (typeof text !== "string") return null;
+    if (text.length <= MAX_CACHED_FILE && _cacheBytes + text.length <= MAX_CACHE_TOTAL) {
+      const old = _bodyCache.get(f.path);
+      if (old) _cacheBytes -= old.text.length;
+      _bodyCache.set(f.path, { mtime: f.mtime, text });
+      _cacheBytes += text.length;
+    }
+    return text;
+  }
+  async function runSearch(rawQuery) {
+    const els = ensureUi();
+    if (!els) return;
+    const query = rawQuery.trim();
+    const treeEl2 = getTreeEl();
+    if (query.length < MIN_QUERY) {
+      _searchToken++;
+      els.results.replaceChildren();
+      if (treeEl2) treeEl2.classList.remove("search-hidden");
+      return;
+    }
+    const token = ++_searchToken;
+    if (treeEl2) treeEl2.classList.add("search-hidden");
+    els.results.replaceChildren(statusRow(window.t ? window.t("Searching\u2026") : "Searching\u2026"));
+    const needle = query.toLowerCase();
+    const files = await listProjectTextFiles(["md", "txt"]);
+    const out = [];
+    for (const f of files) {
+      if (token !== _searchToken) return;
+      if (out.length >= MAX_TOTAL_MATCHES) break;
+      const text = await fileText(f);
+      if (!text) continue;
+      const lower = text.toLowerCase();
+      if (lower.indexOf(needle) === -1) continue;
+      let perFile = 0;
+      let lineStart = 0;
+      const lines = text.split("\n");
+      for (let n = 0; n < lines.length && perFile < MAX_MATCHES_PER_FILE && out.length < MAX_TOTAL_MATCHES; n++) {
+        const col = lines[n].toLowerCase().indexOf(needle);
+        if (col !== -1) {
+          out.push({
+            path: f.path,
+            name: f.name,
+            line: n + 1,
+            col,
+            len: query.length,
+            snippet: lines[n]
+          });
+          perFile++;
+        }
+        lineStart += lines[n].length + 1;
+      }
+    }
+    if (token !== _searchToken) return;
+    renderResults(els.results, out, query);
+  }
+  function statusRow(text) {
+    const el = document.createElement("div");
+    el.className = "search-status";
+    el.textContent = text;
+    return el;
+  }
+  function renderResults(container, matches, query) {
+    container.replaceChildren();
+    if (!matches.length) {
+      container.appendChild(statusRow(window.t ? window.t("No matches.") : "No matches."));
+      return;
+    }
+    let lastPath = null;
+    for (const m of matches) {
+      if (m.path !== lastPath) {
+        lastPath = m.path;
+        const head = document.createElement("div");
+        head.className = "search-file";
+        head.appendChild(icon("file-lines"));
+        const nm = document.createElement("span");
+        nm.textContent = m.name;
+        head.appendChild(nm);
+        container.appendChild(head);
+      }
+      const row = document.createElement("button");
+      row.className = "search-result";
+      row.title = `${m.name}:${m.line}`;
+      const from = Math.max(0, m.col - SNIPPET_RADIUS);
+      const to = Math.min(m.snippet.length, m.col + m.len + SNIPPET_RADIUS);
+      const pre = (from > 0 ? "\u2026" : "") + m.snippet.slice(from, m.col);
+      const hit = m.snippet.slice(m.col, m.col + m.len);
+      const post = m.snippet.slice(m.col + m.len, to) + (to < m.snippet.length ? "\u2026" : "");
+      row.appendChild(document.createTextNode(pre));
+      const mark = document.createElement("mark");
+      mark.className = "search-hit";
+      mark.textContent = hit;
+      row.appendChild(mark);
+      row.appendChild(document.createTextNode(post));
+      row.addEventListener("click", () => jumpToMatch(m));
+      container.appendChild(row);
+    }
+    if (matches.length >= MAX_TOTAL_MATCHES) {
+      container.appendChild(statusRow(
+        (window.t ? window.t("Showing first") : "Showing first") + ` ${MAX_TOTAL_MATCHES}.`
+      ));
+    }
+  }
+  async function jumpToMatch(m) {
+    try {
+      if (S.activeFilePath !== m.path) await openFile(m.path);
+    } catch (_) {
+      return;
+    }
+    const view = window.cmView;
+    if (!view) return;
+    let pos = -1;
+    const doc = view.state.doc;
+    if (m.line <= doc.lines) {
+      const ln = doc.line(m.line);
+      const idx = ln.text.toLowerCase().indexOf(m.snippet.slice(m.col, m.col + m.len).toLowerCase());
+      if (idx !== -1) pos = ln.from + idx;
+    }
+    if (pos === -1) {
+      const idx = doc.toString().toLowerCase().indexOf(m.snippet.slice(m.col, m.col + m.len).toLowerCase());
+      if (idx === -1) return;
+      pos = idx;
+    }
+    view.dispatch({
+      selection: { anchor: pos, head: pos + m.len },
+      effects: CM.EditorView.scrollIntoView(pos, { y: "center" })
+    });
+    view.focus();
+  }
+  function initSearch() {
+    const btn = document.getElementById("sidebar-search-btn");
+    if (btn) btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSearch();
+    });
+    window.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "F" || e.key === "f")) {
+        e.preventDefault();
+        e.stopPropagation();
+        openSearchWithSidebar();
+      }
+    }, true);
+    window.sidebarOpenSearch = openSearchWithSidebar;
+  }
+  function openSearchWithSidebar() {
+    if (!S.sidebarOpen) openSidebar();
+    openSearch();
+  }
+
   // src/sidebar/index.js
   window.sidebarYamlIndex = getYamlIndex;
   if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
@@ -3825,6 +4064,7 @@ Restore these changes, or discard and keep the saved version.`,
     initFileOps();
     initDnd();
     initEditorMedia();
+    initSearch();
     initCloseHandler();
     runBoot();
   }

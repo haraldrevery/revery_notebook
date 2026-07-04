@@ -658,6 +658,21 @@ should consume it rather than growing its own walker. Caps: 800 files,
 1 MB/file, 200 keys, 300 values per key. Web mode indexes the current
 document only. Read-only by construction.
 
+### Project Search
+
+The sidebar's magnifier (icon: the 🔍 glyph extracted from the Harald
+Revery Mono font as an SVG path — brand-consistent and immune to emoji
+font fallback) or Ctrl+Shift+F searches every `.md`/`.txt` in the
+project. `src/sidebar/search.js` consumes the shared
+`project_scan.js` primitive (as designed) and caches file bodies
+per-path by mtime with a 24 MB lid. Matching is case-insensitive
+substring — deliberately NOT regex, so the project-wide path never
+needs a ReDoS story (the in-document find bar covers regex, with its
+worker + timeout). Results are DOM-built (never innerHTML — names and
+snippets are untrusted), capped at 5/file and 200 total; clicking one
+opens the file and selects the match, re-locating it if the file
+changed since the scan. Read-only.
+
 Note for VSCode users: launching the app from an integrated terminal can
 inherit `ELECTRON_RUN_AS_NODE=1` from the editor, which makes
 `require('electron')` return a path string and the app crash at

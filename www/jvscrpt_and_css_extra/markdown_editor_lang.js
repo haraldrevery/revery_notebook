@@ -95,6 +95,10 @@ window.uiTranslations = {
   "items": { "Swedish": "objekt" },
   "The zip export failed.": { "Swedish": "Zip-exporten misslyckades." },
   "Add media": { "Swedish": "Lägg till media" },
+  "Search project…": { "Swedish": "Sök i projektet…" },
+  "Searching…": { "Swedish": "Söker…" },
+  "No matches.": { "Swedish": "Inga träffar." },
+  "Showing first": { "Swedish": "Visar de första" },
   "Save as...": { "Swedish": "Spara som..." },
   "Export as .md": { "Swedish": "Exportera som .md" },
   "Export as .txt": { "Swedish": "Exportera som .txt" },
@@ -889,6 +893,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Zip Project Export</strong> (desktop) — File menu → Zip Project Export saves your whole project folder as a .zip archive wherever you choose. Great for backups before big rewrites. The archive is written safely (never half-finished) and is not password protected — use encrypted storage if your notes are sensitive.</li>
           <li><strong>Images in your notes</strong> (desktop) — drop an image onto the editor, or paste a screenshot (Ctrl+V): the file is copied into your project next to the active note and an image link is inserted at the cursor. Dropping onto the file panel still just copies the file.</li>
           <li><strong>YAML suggestions</strong> — click into the frontmatter block (the <code>---</code> section at the top of a note) and a menu offers the keys and values already used across your project, so tags and metadata never need retyping. Arrow keys select, Enter inserts, Escape closes; it also opens as you type. Works only inside frontmatter.</li>
+          <li><strong>Project search</strong> (desktop) — the magnifier in the file panel (or Ctrl+Shift+F) searches every note in your project. Click a result to open the file with the match selected; Escape brings the file tree back. Plain text matching — use the in-document find bar (Ctrl+F) for regex.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
@@ -957,6 +962,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Zip-export av projekt</strong> (skrivbord) — Arkiv-menyn → Zip-export av projekt sparar hela din projektmapp som ett .zip-arkiv där du vill. Perfekt för säkerhetskopior före stora omskrivningar. Arkivet skrivs säkert (aldrig halvfärdigt) och är inte lösenordsskyddat — använd krypterad lagring om dina anteckningar är känsliga.</li>
           <li><strong>Bilder i dina anteckningar</strong> (skrivbord) — släpp en bild på redigeraren, eller klistra in en skärmdump (Ctrl+V): filen kopieras in i ditt projekt bredvid den aktiva anteckningen och en bildlänk infogas vid markören. Att släppa på filpanelen kopierar bara filen som vanligt.</li>
           <li><strong>YAML-förslag</strong> — klicka i frontmatter-blocket (<code>---</code>-sektionen överst i en anteckning) så visas en meny med nycklar och värden som redan används i ditt projekt, så taggar och metadata aldrig behöver skrivas om. Piltangenter väljer, Enter infogar, Escape stänger; menyn öppnas också medan du skriver. Fungerar bara inuti frontmatter.</li>
+          <li><strong>Projektsökning</strong> (skrivbord) — förstoringsglaset i filpanelen (eller Ctrl+Shift+F) söker i alla anteckningar i ditt projekt. Klicka på en träff för att öppna filen med träffen markerad; Escape tar tillbaka filträdet. Ren textsökning — använd dokumentsökningen (Ctrl+F) för regex.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
