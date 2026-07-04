@@ -160,3 +160,54 @@ Phase 0 bundle exports → cm_setup compartment + setState re-dispatch →
 livepreview module (headings+emphasis first, then code/quote/links) →
 menus toggle + pane hiding → CSS → E2E + parity screenshot → commit per
 step, each independently revertable. Phase 2 only after user soak.
+
+## 8. v2 — block-widget renderer (the current architecture)
+
+User soak on the phase 1–3 engine surfaced systematic parity failures:
+headers larger than the preview, code blocks in the wrong font with no
+language colors and visible ``` fences, images not filling the column,
+tables inconsistently rendered. Root cause, not a bug list: the
+decoration engine RE-IMPLEMENTED the preview's look rule by rule, but
+the preview's appearance comes from 31 `#preview`-scoped override rules
+PLUS a dynamic stylesheet (`applyUiSizeProseCompensation`) that rescales
+prose sizes by 1/uiScale×textScale. Hand-mirrored approximations can
+never track that — the parity tail was unbounded. The v1 inline
+decoration engine is retired.
+
+**v2 (per Harald's proposal, generalized per-block):** every top-level
+markdown block NOT intersecting the selection is replaced by a
+`Decoration.replace({block:true})` widget — one StateField, since block
+decorations are forbidden from view plugins — whose DOM is
+`div.lp-render > div.prose.prose-lg.max-w-none.mx-auto` filled by
+`DOMPurify.sanitize(md.render(blockText))`: the classic preview's OWN
+markdown-it instance (hljs highlight hook, footnote, texmath/KaTeX) and
+its OWN container classes. The `#preview`-scoped parity rules and the
+dynamic compensation stylesheet were swept to `:is(#preview, .lp-render)`
+(same specificity — id-level — so preview pixel-parity holds; verified:
+editor pane 0 px vs main, preview computed styles byte-identical).
+Result: parity BY CONSTRUCTION — tables, github-dark fence colors, the
+image full-width class, exact heading sizes, and multi-line $$ math
+(v1's hard gap) all render because they are the same HTML under the
+same CSS. Blocks the user edits stay raw text (reveal at block
+granularity); blank lines between blocks stay raw as cursor targets;
+YAML frontmatter keeps its protected dim-raw region; clicking a
+rendered block dispatches the cursor into it. Widget post-processing
+REUSES the preview's own postProcessImages/postProcessCodeBlocks
+(parameterized by root) and upgrades task-list `[ ]` text to real
+checkboxes that toggle the document through a validated transaction.
+Widget `eq` on block source text means typing in the active block never
+re-renders the others.
+
+Found during the rewrite: cm_entry_slim.js resolved fence languages to
+a bare StreamLanguage, but lang-markdown's nesting reads
+`desc.support.language.parser` — an uncaught TypeError that broke fence
+colors intermittently in BOTH editors. Fixed by resolving a
+LanguageSupport wrapper (bundle rebuilt).
+
+Known v2 limits (accepted): footnote refs and definitions render
+per-block; a whole list/table flips to raw while being edited
+(Typora-style); reference-style links resolve only within their own
+block. The E2E suite asserts computed-style EQUALITY between
+`.lp-render` and `#preview` (h1 font, paragraph size, code font+size,
+table cells, KaTeX size, image full-width) — the regression class the
+user reports were about.

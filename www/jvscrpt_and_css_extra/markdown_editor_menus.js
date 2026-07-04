@@ -393,10 +393,12 @@ function applyUiSizeProseCompensation() {
   }
   const inv    = (1 / (uiSize / 100)).toFixed(4);
   const tScale = (previewTextSize / 100).toFixed(4);
+  /* .lp-render is the live preview's rendered-block scope: it must get
+     the exact same compensation or its headings drift from the preview. */
   styleEl.textContent = [
-    `#preview .prose h1       { font-size: calc(3rem      * ${inv} * ${tScale}); }`,
-    `#preview .prose h2       { font-size: calc(1.875rem  * ${inv} * ${tScale}); }`,
-    `#preview .prose.prose-lg { font-size: calc(1.125rem  * ${inv} * ${tScale}); }`
+    `:is(#preview, .lp-render) .prose h1       { font-size: calc(3rem      * ${inv} * ${tScale}); }`,
+    `:is(#preview, .lp-render) .prose h2       { font-size: calc(1.875rem  * ${inv} * ${tScale}); }`,
+    `:is(#preview, .lp-render) .prose.prose-lg { font-size: calc(1.125rem  * ${inv} * ${tScale}); }`
   ].join('\n');
 }
 

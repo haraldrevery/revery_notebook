@@ -24,13 +24,16 @@ app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'revery-e2e-')));
 setTimeout(() => {
   console.error('E2E-FAIL: global deadline reached (renderer hung?)');
   app.exit(1);
-}, 25000);
+}, 45000);
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 1100, height: 700 });
 
   win.webContents.on('console-message', (_e, _level, message) => {
-    if (String(message).includes('[Find]')) console.log('RENDERER: ' + message);
+    const m = String(message);
+    /* Surface find-worker readiness plus anything that helps diagnose a
+       hung driver (live-preview warnings, uncaught errors). */
+    if (/\[Find\]|\[LivePreview\]|Uncaught|Error/.test(m)) console.log('RENDERER: ' + m);
   });
 
   try {

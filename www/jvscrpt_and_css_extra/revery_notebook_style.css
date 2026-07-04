@@ -88,35 +88,35 @@ body.desktop-app.is-macos #topbar {
 #editor { 
   font-family: var(--editor-font, var(--font-brand, inherit)) !important; 
 }
-html #preview .prose,
-html #preview .prose p,
-html #preview .prose li,
-html #preview .prose blockquote,
-html #preview .prose h1,
-html #preview .prose h2,
-html #preview .prose h3,
-html #preview .prose h4,
-html #preview .prose h5,
-html #preview .prose h6,
-html #preview .prose pre,
-html #preview .prose code,
-html #preview .prose em,
-html #preview .prose i,
-html #preview .prose strong,
-html #preview .prose b {
+html :is(#preview, .lp-render) .prose,
+html :is(#preview, .lp-render) .prose p,
+html :is(#preview, .lp-render) .prose li,
+html :is(#preview, .lp-render) .prose blockquote,
+html :is(#preview, .lp-render) .prose h1,
+html :is(#preview, .lp-render) .prose h2,
+html :is(#preview, .lp-render) .prose h3,
+html :is(#preview, .lp-render) .prose h4,
+html :is(#preview, .lp-render) .prose h5,
+html :is(#preview, .lp-render) .prose h6,
+html :is(#preview, .lp-render) .prose pre,
+html :is(#preview, .lp-render) .prose code,
+html :is(#preview, .lp-render) .prose em,
+html :is(#preview, .lp-render) .prose i,
+html :is(#preview, .lp-render) .prose strong,
+html :is(#preview, .lp-render) .prose b {
   font-family: var(--preview-font, var(--font-brand, inherit)) !important;
   letter-spacing: var(--preview-letter-spacing, inherit) !important;
 }
-#preview .katex { font-size: var(--katex-font-size, 0.7em) !important; }
+:is(#preview, .lp-render) .katex { font-size: var(--katex-font-size, 0.7em) !important; }
 #outline-nav .outline-item { font-family: var(--outline-font, var(--font-brand, inherit)) !important; }
 
 /* Replaces injected <style> for Centered Headers */
-.center-headers-active #preview .prose h1,
-.center-headers-active #preview .prose h2,
-.center-headers-active #preview .prose h3,
-.center-headers-active #preview .prose h4,
-.center-headers-active #preview .prose h5,
-.center-headers-active #preview .prose h6 {
+.center-headers-active :is(#preview, .lp-render) .prose h1,
+.center-headers-active :is(#preview, .lp-render) .prose h2,
+.center-headers-active :is(#preview, .lp-render) .prose h3,
+.center-headers-active :is(#preview, .lp-render) .prose h4,
+.center-headers-active :is(#preview, .lp-render) .prose h5,
+.center-headers-active :is(#preview, .lp-render) .prose h6 {
   text-align: center !important;
 }
 
@@ -499,7 +499,7 @@ body {
 
 
 /* ── Force Preview Prose to follow Editor Theme (Overrides Tailwind OS Media Queries) ── */
-#preview .prose {
+:is(#preview, .lp-render) .prose {
   --tw-prose-body: var(--text);
   --tw-prose-headings: var(--text);
   --tw-prose-lead: var(--text-muted);
@@ -611,7 +611,7 @@ body {
 
 /* ── Code block copy button ── */
 /* Block code: the pre element becomes the positioning anchor */
-#preview pre {
+:is(#preview, .lp-render) pre {
   position: relative;
 }
 .code-copy-btn {
@@ -644,7 +644,7 @@ body {
 .code-copy-btn::after          { content: var(--str-copy, 'Copy'); }
 .code-copy-btn.is-copied::after { content: var(--str-copied, 'Copied!'); }
 /* Show the button on hover of the parent pre or inline wrapper */
-#preview pre:hover .code-copy-btn,
+:is(#preview, .lp-render) pre:hover .code-copy-btn,
 .inline-code-wrapper:hover .code-copy-btn {
   opacity: 1;
   pointer-events: auto;
@@ -2082,25 +2082,25 @@ body.live-preview-active #editor .cm-scroller {
   justify-content: center;
 }
 
-/* Rendered tables (StateField block widgets) — mirrors .prose table. */
-.lp-table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 0.5em 0;
-  font-size: 0.95em;
+/* ── v2 rendered blocks ────────────────────────────────────────────────
+   Each non-active top-level markdown block is a widget whose HTML comes
+   from the classic preview's own renderer inside the preview's own
+   `.prose prose-lg` container. `.lp-render` is the scope hook that the
+   swept `:is(#preview, .lp-render)` parity rules above target —
+   typography, theme colors, KaTeX size, copy buttons and the dynamic
+   ui-scale compensation all apply identically to both surfaces.        */
+.lp-render {
+  cursor: text;
+  /* The CM content area is white-space:pre — rendered HTML must not
+     show the renderer's source newlines as literal whitespace.        */
+  white-space: normal;
 }
-.lp-table th {
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 0.9em;
-  text-align: left;
-}
-.lp-table th, .lp-table td {
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
-  padding: 0.35em 0.6em;
-}
-.lp-table-widget { cursor: pointer; display: block; }
+/* Blank raw lines between blocks provide the vertical rhythm; the
+   prose margins inside each widget must not double it at the edges.   */
+.lp-render .prose > :first-child { margin-top: 0; }
+.lp-render .prose > :last-child  { margin-bottom: 0; }
+/* Renderer unavailable / empty output — the raw source is shown instead. */
+.lp-render-fallback { white-space: pre-wrap; font-family: var(--font-mono, monospace); }
 
 /* Background texture parity: same per-theme overlay recipe as #preview
    (the --bg_oacity opacity setting and slow-hardware suppression operate
@@ -2131,87 +2131,8 @@ body.live-preview-active #editor-pane {
     var(--preview-bg-image, none);
 }
 
-.cm-line.lp-h1, .cm-line.lp-h2, .cm-line.lp-h3,
-.cm-line.lp-h4, .cm-line.lp-h5, .cm-line.lp-h6 {
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wider, 0.05em);
-  font-weight: 400;
-}
-/* Parity with the preview's 'Center Headers' setting. */
-body.center-headers-active .cm-line.lp-h1,
-body.center-headers-active .cm-line.lp-h2,
-body.center-headers-active .cm-line.lp-h3,
-body.center-headers-active .cm-line.lp-h4,
-body.center-headers-active .cm-line.lp-h5,
-body.center-headers-active .cm-line.lp-h6 {
-  text-align: center;
-}
-.cm-line.lp-h1 { font-size: 3em;     padding-top: 1.2em; padding-bottom: 0.35em; }
-.cm-line.lp-h2 { font-size: 2.25em;  padding-top: 1em;   padding-bottom: 0.3em; }
-.cm-line.lp-h3 { font-size: 1.5em;   padding-top: 0.9em; padding-bottom: 0.25em; }
-.cm-line.lp-h4 { font-size: 1.25em;  padding-top: 0.8em; padding-bottom: 0.2em; }
-.cm-line.lp-h5 { font-size: 1.125em; padding-top: 0.7em; }
-.cm-line.lp-h6 { font-size: 1em;     padding-top: 0.6em; }
-
-.lp-strong { font-weight: 700; }
-.lp-em     { font-style: italic; }
-.lp-strike { text-decoration: line-through; opacity: 0.75; }
-/* Mirrors .prose code (mono, weight 400, subtle bg, .25rem radius). */
-.lp-code {
-  font-family: var(--font-mono, monospace);
-  font-weight: 400;
-  font-size: 0.95em;
-  background: rgba(0, 0, 0, 0.12);
-  border-radius: 0.25rem;
-  padding: 0.125rem 0.25rem;
-}
-[data-theme="light"] .lp-code, [data-theme="paper"] .lp-code {
-  background: rgba(0, 0, 0, 0.05);
-}
-/* Link-styled text only — clicking never navigates (app link policy). */
-.lp-link { color: var(--accent, #7a8ee0); text-decoration: underline; }
-
-/* Mirrors the preview blockquote: bar + italic. */
-.cm-line.lp-quote {
-  border-left: 0.25rem solid var(--border, rgba(128, 128, 128, 0.45));
-  padding-left: 1em;
-  font-style: italic;
-  opacity: 0.9;
-}
-.cm-line.lp-codeblock {
-  background: rgba(0, 0, 0, 0.25);
-  font-family: var(--font-mono, monospace);
-  font-size: 0.92em;
-  position: relative; /* anchors the copy button widget */
-}
-/* Copy button parity in live preview: same .code-copy-btn as the
-   classic preview (opacity-0 base + ::after label defined above);
-   revealed when hovering the opening fence line it sits on. */
-.cm-line.lp-codeblock .code-copy-btn { top: 2px; }
-.cm-line.lp-codeblock:hover .code-copy-btn {
-  opacity: 1;
-  pointer-events: auto;
-}
-[data-theme="light"] .cm-line.lp-codeblock, [data-theme="paper"] .cm-line.lp-codeblock {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-/* Widgets (phase 2) */
-.lp-hr {
-  display: inline-block;
-  width: 100%;
-  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.4));
-  margin: 0.55em 0;
-  vertical-align: middle;
-}
-.lp-bullet { opacity: 0.85; }
-.lp-image-widget img {
-  display: block;
-  max-width: 100%;
-  max-height: 320px;
-  border-radius: 3px;
-  margin: 0.35em 0;
-}
+/* Task-list items upgraded to real checkboxes by the live preview's
+   widget post-processing (the classic preview shows them as text). */
 .lp-task-checkbox {
   accent-color: var(--accent, #7a8ee0);
   width: 0.95em;
@@ -2220,32 +2141,16 @@ body.center-headers-active .cm-line.lp-h6 {
   vertical-align: -0.1em;
   cursor: pointer;
 }
-.cm-line.lp-task-done {
+.lp-render li.lp-task-item { list-style: none; }
+.lp-render li.lp-task-done {
   text-decoration: line-through;
   opacity: 0.6;
 }
 
-/* KaTeX math in live preview (katex.min.css is loaded globally).
-   Same size variable as '#preview .katex' — applyFontTypes() sets it per
-   font choice (0.7em for the Harald font, 1em otherwise), so math tracks
-   the Preview font type setting here exactly like in the preview pane. */
-body.live-preview-active .lp-math .katex { font-size: var(--katex-font-size, 0.7em) !important; }
-.lp-math-block {
-  display: inline-block;
-  width: 100%;
-  text-align: center;
-  padding: 0.25em 0;
-}
 /* YAML frontmatter: protected raw region, dimmed mono — the preview's
    pill rendering stays a preview-pane feature. */
 .cm-line.lp-frontmatter {
   font-family: var(--font-mono, monospace);
   font-size: 0.85em;
   opacity: 0.55;
-}
-
-.lp-image-fallback {
-  font-size: 0.85em;
-  opacity: 0.6;
-  font-style: italic;
 }

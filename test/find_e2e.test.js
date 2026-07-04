@@ -82,25 +82,29 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   assert.deepEqual(r.pipeline, { stored: true, selected: true, rendered: true, opacityBumped: true },
     'a real picked image must decode under the CSP and visibly render on #preview');
 
-  // 10. live preview: render, reveal-on-selection, fresh-state survival, clean off
+  // 10. live preview v2: rendered blocks, reveal-on-selection (block
+  //     granularity), fresh-state survival, clean off
   assert.deepEqual(r.lpOnState, {
     paneHidden: true, headingClass: true, marksHidden: true, boldStyled: true,
     marksRevealed: true, survivedReplace: true,
-  }, 'live preview must decorate, hide marks off-line, reveal them on the edited line, and survive file switches');
+  }, 'live preview must render blocks, reveal raw markdown on the edited block, and survive file switches');
   assert.deepEqual(r.lpOffState, { decorationsGone: true, paneBack: true, persistedOff: true },
     'toggling live preview off must fully restore the classic editor');
 
-  // 11. phase 2: preview-parity rendering
-  assert.deepEqual(r.lpPhase2, {
+  // 11. v2 preview-parity: same renderer, same prose CSS, computed-style
+  //     EQUALITY with #preview (the assertions the user reports are about)
+  assert.deepEqual(r.lpV2, {
     hrWidget: true, bullet: true, imageWidget: true,
-    headingUpper: true, texture: true, hrRevealsRaw: true,
+    headingUpper: true, texture: true, imageParity: true, hrRevealsRaw: true,
     strikeRendered: true, copyButton: true, copyClickSafe: true,
+    fenceHidden: true, fenceColored: true, codeFontParity: true,
     taskBoxes: true, taskDoneStyled: true, taskToggled: true,
-    mathInline: true, mathBlock: true, currencySafe: true, codeMathRaw: true,
+    mathInline: true, mathBlock: true, mathMultiline: true,
+    currencySafe: true, codeMathRaw: true,
     fmProtected: true, mathRevealsRaw: true,
-    sizeMatchesPreview: true, sizeNotEditorBound: true,
+    sizeMatchesPreview: true, h1Parity: true, sizeNotEditorBound: true,
     familyFollows: true, familyRestores: true, katexSizeParity: true,
-    tableRendered: true, tableClickReveals: true, tableReturns: true,
-    fenceColored: true, readerPadding: true, readerPaddingResets: true,
-  }, 'phase 2+ must render widgets, strikethrough, copy button, task checkboxes, KaTeX math, and protect frontmatter');
+    tableRendered: true, tableParity: true, tableClickReveals: true, tableReturns: true,
+    readerPadding: true, readerPaddingResets: true,
+  }, 'v2 blocks must render through the preview pipeline with computed-style parity: headers, code font+colors, hidden fences, image sizing, tables, multi-line math');
 });
