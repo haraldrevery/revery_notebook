@@ -6,6 +6,19 @@ import { S } from './state.js';
    * like readable prose rather than raw markup.  Light-touch only —
    * no full parser needed here.
    */
+  /* File bytes → base64 in 32 KB chunks (fromCharCode arg-count limits).
+     Shared by the sidebar drop path (dnd.js keeps a private twin) and the
+     editor media drop/paste path. */
+  function arrayBufferToBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
+  }
+
   function stripMarkdownForPreview(raw) {
     return raw
       .replace(/^---[\s\S]*?---\n?/m, '')      // strip YAML frontmatter
@@ -73,7 +86,16 @@ import { S } from './state.js';
     const rel = baseDir
       ? makeRelativePath(baseDir, mediaPath.replace(/\\/g, '/'))
       : name;
-    return `![${name}](${rel})`;
+    /* CommonMark link destinations must not contain raw spaces or
+       unescaped parens — a name like "shot from desk.png" would render
+       as literal text. Encode the minimal set (% first!); the preview's
+       postProcessImages decodes before resolving the real path.        */
+    const relEnc = rel
+      .replace(/%/g, '%25')
+      .replace(/ /g, '%20')
+      .replace(/\(/g, '%28')
+      .replace(/\)/g, '%29');
+    return `![${name}](${relEnc})`;
   }
 
   /**
@@ -182,4 +204,4 @@ import { S } from './state.js';
 
 export { stripMarkdownForPreview, getFileCategory, makeRelativePath,
          mediaMarkdown, uniqueDestPath, uniquePath, scanBakOrphansIn,
-         reportBakOrphans };
+         reportBakOrphans, arrayBufferToBase64 };

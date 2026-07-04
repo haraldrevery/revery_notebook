@@ -119,10 +119,16 @@ function postProcessImages(root) {
 
     root.querySelectorAll('img').forEach(img => {
     // Rely on data-src first, as DOMPurify may have stripped the original src
-    const src = img.getAttribute('data-src') || img.getAttribute('src');
+    let src = img.getAttribute('data-src') || img.getAttribute('src');
     if (!src) return;
     // Skip anything that is already an absolute URL or data URI
     if (/^(https?:|data:|file:|asset:|tauri:)/.test(src)) return;
+    /* Markdown link destinations are percent-encoded (spaces, non-ASCII —
+       both ours via mediaMarkdown and markdown-it's own normalization).
+       Decode to the real on-disk name BEFORE resolving, or the wrappers
+       would look for a literal "%20" file (Tauri's asset protocol would
+       even double-encode it). Undecodable %-sequences stay raw. */
+    try { src = decodeURIComponent(src); } catch (_) { /* keep raw */ }
     const absolutePath = resolveRelPath(baseDir, src);
 
     // ── Root-containment guard ─────────────────────────────────────────
