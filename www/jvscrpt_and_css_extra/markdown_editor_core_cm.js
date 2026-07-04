@@ -95,7 +95,10 @@ function resolveRelPath(baseDir, relPath) {
  * This fixes the Tauri "no images" bug (images resolve against tauri://localhost,
  * not the filesystem) and the Electron "absolute-path-only" bug.
  */
-function postProcessImages() {
+/* `root` defaults to the preview pane; live preview passes its own
+   rendered block so both surfaces share one pipeline. */
+function postProcessImages(root) {
+  root = root || preview;
   if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
 
   // Determine the base directory for resolving relative image paths.
@@ -114,7 +117,7 @@ function postProcessImages() {
 
   if (!baseDir) return; // nothing to resolve against
 
-    preview.querySelectorAll('img').forEach(img => {
+    root.querySelectorAll('img').forEach(img => {
     // Rely on data-src first, as DOMPurify may have stripped the original src
     const src = img.getAttribute('data-src') || img.getAttribute('src');
     if (!src) return;
@@ -366,9 +369,12 @@ let rendered = '';
    For block code the button sits in the upper-right corner of the <pre>.
    For inline code a wrapper span is used so the button can be positioned
    above the snippet without disturbing text flow.                         */
-function postProcessCodeBlocks() {
+/* `root` defaults to the preview pane; live preview passes its own
+   rendered block so both surfaces share one pipeline. */
+function postProcessCodeBlocks(root) {
+  root = root || preview;
   /* ── 1. Block code (pre > code) ── */
-  preview.querySelectorAll('pre').forEach(pre => {
+  root.querySelectorAll('pre').forEach(pre => {
     /* Skip if this pre already has a copy button (e.g. after a re-render
        that reused the same DOM node — shouldn't happen but guards against it) */
     if (pre.querySelector('.code-copy-btn')) return;
@@ -419,7 +425,7 @@ function postProcessCodeBlocks() {
   });
 
   /* ── 2. Inline code (code NOT inside a pre) ── */
-  preview.querySelectorAll('code').forEach(code => {
+  root.querySelectorAll('code').forEach(code => {
   /* Skip block code and already-wrapped inline code */
   if (code.closest('pre'))                   return;
   if (code.closest('.inline-code-wrapper'))  return;

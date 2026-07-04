@@ -1,16 +1,26 @@
-/* markdown_editor_livepreview.js — Obsidian-style live preview, phase 1.
+/* markdown_editor_livepreview.js — Obsidian-style live preview, v2.
  * Design: LIVE_PREVIEW_DESIGN.md.
  *
- * Formatting renders inside the editor via CodeMirror DECORATIONS ONLY:
- * the document text is never modified, so saving, autosave, crash backup,
- * find/replace and undo all operate on the raw markdown unchanged. The
- * failure mode of anything in this file is visual, never data loss — and
- * buildDecorations is wrapped so an unexpected error degrades to "no
- * decorations" rather than a broken editor.
+ * v2 architecture ("preview parity by construction"): every top-level
+ * markdown block that is NOT being edited is replaced by a block widget
+ * whose HTML comes from THE SAME renderer as the classic preview pane —
+ * the global markdown-it instance (hljs highlight hook, footnote and
+ * texmath/KaTeX plugins) followed by DOMPurify, wrapped in the preview's
+ * own `.prose` container so the prose stylesheet and the dynamic
+ * ui-scale compensation apply identically. Blocks intersecting the
+ * selection stay raw editable text; blank lines between blocks stay raw
+ * (natural cursor targets). Click a rendered block to edit it.
  *
- * Reveal rule: syntax marks stay VISIBLE on any line that intersects a
- * selection range (the line being edited), and are hidden elsewhere. When
- * in doubt, show the marks.
+ * The document text is never modified by rendering: saving, autosave,
+ * crash backup, find/replace and undo all operate on the raw markdown
+ * unchanged. Any build error degrades to "no decorations" (raw text),
+ * never a broken editor.
+ *
+ * Block replace decorations are forbidden from view plugins, so the
+ * whole engine is a single StateField. It rebuilds on doc changes and
+ * on selection changes only when some block's active/rendered status
+ * actually flips; widget `eq` on the block's source text means typing
+ * in the active block never re-renders the others.
  *
  * This file only defines window.buildLivePreviewExtension(). Installation
  * is owned by menus.js (setLivePreviewMode) through the compartment hook
@@ -19,229 +29,16 @@
 
 (function () {
   'use strict';
-  if (typeof CM === 'undefined' || !CM.ViewPlugin || !CM.syntaxTree) {
+  if (typeof CM === 'undefined' || !CM.StateField || !CM.syntaxTree) {
     console.warn('[LivePreview] CM bundle lacks required exports — feature unavailable.');
     return;
   }
-  const { Decoration, ViewPlugin, WidgetType, syntaxTree, StateField, EditorView } = CM;
-
-  /* Node-type tables (names from the lezer markdown grammar). */
-  const HEADING_LINE = {
-    ATXHeading1: 'lp-h1', ATXHeading2: 'lp-h2', ATXHeading3: 'lp-h3',
-    ATXHeading4: 'lp-h4', ATXHeading5: 'lp-h5', ATXHeading6: 'lp-h6',
-    SetextHeading1: 'lp-h1', SetextHeading2: 'lp-h2',
-  };
-  const INLINE_STYLE = {
-    Emphasis: 'lp-em', StrongEmphasis: 'lp-strong', Strikethrough: 'lp-strike',
-    InlineCode: 'lp-code', Link: 'lp-link', Image: 'lp-link',
-  };
-  /* Syntax marks hidden outside the selection's lines. URL is listed but
-     additionally guarded below: only inside Link/Image (an Autolink's URL
-     IS its visible content and must never be hidden). */
-  const HIDE = new Set([
-    'HeaderMark', 'EmphasisMark', 'CodeMark', 'StrikethroughMark',
-    'LinkMark', 'URL', 'QuoteMark',
-  ]);
-
-  const lineDecoCache = {};
-  function lineDeco(cls) {
-    return lineDecoCache[cls] || (lineDecoCache[cls] = Decoration.line({ class: cls }));
-  }
-  const markDecoCache = {};
-  function markDeco(cls) {
-    return markDecoCache[cls] || (markDecoCache[cls] = Decoration.mark({ class: cls }));
-  }
-  const hideDeco = Decoration.replace({});
-
-  /* ── Phase-2 widgets ──────────────────────────────────────────────────
-     Inline widgets only: CodeMirror forbids BLOCK decorations from view
-     plugins, so the image renders as an inline element that grows its
-     line — visually equivalent for the common image-on-its-own-line case. */
-  class HrWidget extends WidgetType {
-    toDOM() {
-      const el = document.createElement('span');
-      el.className = 'lp-hr';
-      return el;
-    }
-    eq() { return true; }
-  }
-  const hrDeco = Decoration.replace({ widget: new HrWidget() });
-
-  class BulletWidget extends WidgetType {
-    toDOM() {
-      const el = document.createElement('span');
-      el.className = 'lp-bullet';
-      el.textContent = '•';
-      return el;
-    }
-    eq() { return true; }
-  }
-  const bulletDeco = Decoration.replace({ widget: new BulletWidget() });
-
-  class ImageWidget extends WidgetType {
-    constructor(src, alt) { super(); this.src = src; this.alt = alt; }
-    eq(other) { return other.src === this.src && other.alt === this.alt; }
-    toDOM() {
-      const wrap = document.createElement('span');
-      wrap.className = 'lp-image-widget';
-      const img = document.createElement('img');
-      img.alt = this.alt;
-      img.onerror = () => {
-        const fb = document.createElement('span');
-        fb.className = 'lp-image-fallback';
-        fb.textContent = '[image: ' + (this.alt || this.src) + ']';
-        wrap.replaceChildren(fb);
-      };
-      img.src = this.src;
-      wrap.appendChild(img);
-      return wrap;
-    }
-    ignoreEvent() { return true; }
-  }
-
-  /* Copy button for fenced code blocks — parity with the classic
-     preview's postProcessCodeBlocks button. Reuses the same
-     .code-copy-btn class, ::after label variables and .is-copied
-     feedback, and the same clipboard strategy (navigator.clipboard
-     with an execCommand fallback). ignoreEvent() keeps CodeMirror's
-     own mouse handling away from the button.                          */
-  class CopyWidget extends WidgetType {
-    constructor(text) { super(); this.text = text; }
-    eq(other) { return other.text === this.text; }
-    toDOM() {
-      const btn = document.createElement('button');
-      btn.className = 'code-copy-btn';
-      btn.title = 'Copy code to clipboard';
-      const text = this.text;
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        const fallbackCopy = (str) => {
-          const ta = document.createElement('textarea');
-          ta.value = str;
-          ta.style.top = '0'; ta.style.left = '0'; ta.style.position = 'fixed'; ta.style.opacity = '0';
-          document.body.appendChild(ta);
-          ta.focus(); ta.select();
-          let ok = false;
-          try { ok = document.execCommand('copy'); } catch (_) {}
-          document.body.removeChild(ta);
-          return ok;
-        };
-        const handleFeedback = (ok) => {
-          if (ok) {
-            btn.classList.add('is-copied');
-            setTimeout(() => btn.classList.remove('is-copied'), 1600);
-          } else {
-            console.warn('Copy failed.');
-          }
-        };
-        if (navigator.clipboard && window.isSecureContext) {
-          navigator.clipboard.writeText(text)
-            .then(() => handleFeedback(true))
-            .catch(() => handleFeedback(fallbackCopy(text)));
-        } else {
-          handleFeedback(fallbackCopy(text));
-        }
-      });
-      return btn;
-    }
-    ignoreEvent() { return true; }
-  }
-
-  /* Task-list checkbox. Clicking toggles [ ] <-> [x] in the DOCUMENT via
-     a normal editor transaction — a user-initiated edit like any
-     keystroke: it flows through undo, dirty-tracking and autosave. The
-     marker text is re-read at click time (via posAtDOM) and validated,
-     so a stale widget can never corrupt anything.                     */
-  class TaskWidget extends WidgetType {
-    constructor(checked) { super(); this.checked = checked; }
-    eq(other) { return other.checked === this.checked; }
-    toDOM() {
-      const box = document.createElement('input');
-      box.type = 'checkbox';
-      box.className = 'lp-task-checkbox';
-      box.checked = this.checked;
-      box.addEventListener('click', (e) => {
-        e.preventDefault(); // the doc edit drives the visual state
-        const view = window.cmView;
-        if (!view) return;
-        let pos;
-        try { pos = view.posAtDOM(box); } catch (_) { return; }
-        const marker = view.state.doc.sliceString(pos, pos + 3);
-        if (!/^\[[ xX]\]$/.test(marker)) return; // not where we thought — abort
-        const next = marker === '[ ]' ? '[x]' : '[ ]';
-        view.dispatch({ changes: { from: pos, to: pos + 3, insert: next } });
-      });
-      return box;
-    }
-    ignoreEvent() { return false; } // let the click reach the checkbox
-  }
-  /* The checkbox rides ON the replace decoration (like the hr widget) —
-     a separate point widget at the edge of a replaced range would be
-     swallowed by it. */
-  const taskDoneDeco = Decoration.replace({ widget: new TaskWidget(true) });
-  const taskTodoDeco = Decoration.replace({ widget: new TaskWidget(false) });
-  const taskLineDone = Decoration.line({ class: 'lp-task-done' });
-
-  /* Resolve an image reference exactly like the classic preview does
-     (postProcessImages in markdown_editor_core_cm.js): absolute schemes
-     pass through; in desktop mode relative paths resolve against the
-     active file's directory (else the project root) and MUST stay inside
-     the project root — Electron serves unrestricted file:// URLs, so the
-     containment guard is a security property, not a nicety. Web mode
-     leaves relative paths for the browser, same as the preview.        */
-  function resolveImageSrc(raw) {
-    if (!raw) return null;
-    if (/^(https?:|data:|file:|asset:|tauri:)/i.test(raw)) return raw;
-    if (!(window.NativeAPI && window.NativeAPI.isDesktop)) return raw;
-    if (typeof resolveRelPath !== 'function') return null;
-    const activePath = (typeof window.sidebarGetActiveFilePath === 'function')
-      ? window.sidebarGetActiveFilePath() : null;
-    const rootPath = (typeof window.sidebarGetRootPath === 'function')
-      ? window.sidebarGetRootPath() : null;
-    const baseDir = activePath
-      ? activePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-      : (rootPath || '').replace(/\\/g, '/');
-    if (!baseDir || !rootPath) return null;
-    const abs = resolveRelPath(baseDir, raw);
-    const normRoot = rootPath.replace(/\\/g, '/').replace(/\/$/, '');
-    const normAbs  = abs.replace(/\\/g, '/');
-    if (!normAbs.startsWith(normRoot + '/') && normAbs !== normRoot) return null;
-    return window.NativeAPI.toMediaUrl(abs);
-  }
-
-  /* ── KaTeX math ───────────────────────────────────────────────────────
-     The lezer markdown parser has no math syntax, so $…$ / $$…$$ are
-     found by a conservative scanner over the visible text (excluding
-     code contexts and the YAML frontmatter) and rendered through the
-     globally loaded KaTeX — the same engine the classic preview uses.
-     Stability rules: throwOnError:false, every render wrapped, and any
-     failure falls back to the raw text. Multi-line $$ blocks stay raw
-     (replace decorations may not cross lines from a view plugin); the
-     classic preview remains the full renderer for those.              */
-  class MathWidget extends WidgetType {
-    constructor(tex, display) { super(); this.tex = tex; this.display = display; }
-    eq(other) { return other.tex === this.tex && other.display === this.display; }
-    toDOM() {
-      const el = document.createElement('span');
-      el.className = this.display ? 'lp-math lp-math-block' : 'lp-math';
-      try {
-        el.innerHTML = katex.renderToString(this.tex, {
-          throwOnError: false,
-          displayMode: this.display,
-        });
-      } catch (_) {
-        el.textContent = this.display ? '$$' + this.tex + '$$' : '$' + this.tex + '$';
-      }
-      return el;
-    }
-    ignoreEvent() { return true; }
-  }
-
-  const MATH_RE = /\$\$([^$\n]+?)\$\$|\$([^$\n]+?)\$/g;
+  const { Decoration, WidgetType, syntaxTree, StateField, EditorView } = CM;
 
   /* End offset of a YAML frontmatter block at the very start of the doc,
      or 0. CommonMark would otherwise misparse it: the fences become
-     thematic breaks and 'key: value' + '---' becomes a Setext heading. */
+     thematic breaks and 'key: value' + '---' becomes a Setext heading.
+     Frontmatter stays a raw, dim-styled protected region.              */
   function frontmatterEnd(doc) {
     if (doc.lines < 2) return 0;
     if (doc.line(1).text.replace(/\r$/, '') !== '---') return 0;
@@ -253,347 +50,218 @@
     return 0;
   }
 
-  /** Line numbers touched by any selection range — marks stay visible there. */
-  function selectionLines(state) {
-    const lines = new Set();
-    for (const r of state.selection.ranges) {
-      const a = state.doc.lineAt(r.from).number;
-      const b = state.doc.lineAt(r.to).number;
-      for (let n = a; n <= b; n++) lines.add(n);
+  /* Top-level node types that markdown-it renders to empty/invisible
+     HTML — replacing them with a widget would leave a zero-height hole.
+     They stay raw instead. */
+  const KEEP_RAW = new Set(['LinkReference']);
+
+  /* ── Rendering: the classic preview's exact pipeline ─────────────────
+     md (markdown-it + hljs + footnote + texmath) and DOMPurify are
+     classic-script globals from markdown_editor_core_cm.js; they are
+     checked at call time because widgets render lazily, after boot.   */
+  function renderBlockHtml(src) {
+    try {
+      if (typeof md !== 'undefined') {
+        let html = md.render(src);
+        if (window.DOMPurify) {
+          html = window.DOMPurify.sanitize(html, {
+            ADD_ATTR: ['data-sl', 'data-sl-end', 'data-src'],
+          });
+        }
+        return html;
+      }
+    } catch (err) {
+      console.warn('[LivePreview] block render failed — showing raw text:', err);
     }
-    return lines;
+    return null; // caller falls back to raw text
   }
 
-  function buildDecorations(view) {
-    const state    = view.state;
-    const doc      = state.doc;
-    const revealed = selectionLines(state);
-    const ranges   = [];
-    const seenLineDeco = new Set(); // `${lineNumber}:${cls}` — one line deco per class
-    const fmEnd      = frontmatterEnd(doc);
-    const codeRanges = []; // math must never render inside code contexts
+  /* Wire the task-list checkboxes the renderer leaves as literal "[ ]"
+     text (the preview shows them as text too — live preview upgrades
+     them to real checkboxes). Clicking toggles the marker in the
+     DOCUMENT via a normal editor transaction: undoable, autosaved. The
+     marker is re-read and validated at click time before any edit.    */
+  const TASK_MARKER_RE = /^\s*(?:[-*+]|\d+[.)])\s+(\[[ xX]\])/gm;
+  function upgradeTaskItems(wrap, blockSrc) {
+    wrap.querySelectorAll('li').forEach((li) => {
+      const first = li.firstChild;
+      /* markdown-it may wrap loose list items in <p> */
+      const textNode = (first && first.nodeType === 1 && first.tagName === 'P')
+        ? first.firstChild : first;
+      if (!textNode || textNode.nodeType !== 3) return;
+      const m = /^\[([ xX])\]\s?/.exec(textNode.nodeValue);
+      if (!m) return;
+      const checked = m[1] !== ' ';
+      textNode.nodeValue = textNode.nodeValue.slice(m[0].length);
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.className = 'lp-task-checkbox';
+      box.checked = checked;
+      li.classList.add('lp-task-item');
+      if (checked) li.classList.add('lp-task-done');
+      (textNode.parentNode || li).insertBefore(box, textNode);
 
-    const addLineClass = (lineFrom, cls) => {
-      const line = doc.lineAt(lineFrom);
-      const key = line.number + ':' + cls;
-      if (seenLineDeco.has(key)) return;
-      seenLineDeco.add(key);
-      ranges.push(lineDeco(cls).range(line.from));
-    };
-
-    /* Apply a line class to every line a block node covers (clamped to the
-       visible range so huge code blocks stay cheap). */
-    const addBlockLines = (node, vr, cls) => {
-      let pos = Math.max(node.from, vr.from);
-      const end = Math.min(node.to, vr.to);
-      for (;;) {
-        const line = doc.lineAt(pos);
-        addLineClass(line.from, cls);
-        if (line.to >= end || line.to >= doc.length) break;
-        pos = line.to + 1;
-      }
-    };
-
-    for (const vr of view.visibleRanges) {
-      syntaxTree(state).iterate({
-        from: vr.from,
-        to: vr.to,
-        enter: (node) => {
-          const name = node.name;
-
-          /* YAML frontmatter is a protected region: no decorations at
-             all (prevents the hr / Setext-heading misparse); its lines
-             get a dim mono style below instead.                       */
-          if (fmEnd && node.from < fmEnd) return;
-
-          if (name === 'FencedCode' || name === 'InlineCode') {
-            codeRanges.push([node.from, node.to]);
-          }
-
-          const headingCls = HEADING_LINE[name];
-          if (headingCls) addLineClass(node.from, headingCls);
-          else if (name === 'Blockquote')  addBlockLines(node, vr, 'lp-quote');
-          else if (name === 'FencedCode') {
-            addBlockLines(node, vr, 'lp-codeblock');
-            /* Copy button on the opening fence line (one per block even
-               when the block spans multiple visible ranges). Copied text
-               is the block content without the fence lines.            */
-            const firstLine = doc.lineAt(node.from);
-            const lastLine  = doc.lineAt(Math.min(node.to, doc.length));
-            const copyKey   = firstLine.from + ':copy';
-            if (lastLine.number > firstLine.number && !seenLineDeco.has(copyKey)) {
-              seenLineDeco.add(copyKey);
-              const innerFrom = Math.min(firstLine.to + 1, node.to);
-              const innerTo   = Math.max(lastLine.from - 1, innerFrom);
-              ranges.push(Decoration.widget({
-                widget: new CopyWidget(doc.sliceString(innerFrom, innerTo)),
-                side: 1,
-              }).range(firstLine.to));
-            }
-          }
-
-          const styleCls = INLINE_STYLE[name];
-          if (styleCls && node.to > node.from) {
-            ranges.push(markDeco(styleCls).range(node.from, node.to));
-          }
-
-          if (name === 'HorizontalRule') {
-            if (!revealed.has(doc.lineAt(node.from).number) && node.to > node.from) {
-              ranges.push(hrDeco.range(node.from, node.to));
-            }
-            return;
-          }
-
-          if (name === 'ListMark') {
-            const text = doc.sliceString(node.from, node.to);
-            if (/^[-*+]$/.test(text) && !revealed.has(doc.lineAt(node.from).number)) {
-              /* '- [ ] task': the checkbox replaces the whole marker pair —
-                 hide the list dash (and its space) instead of a bullet.  */
-              if (/^ \[[ xX]\]/.test(doc.sliceString(node.to, node.to + 4))) {
-                ranges.push(hideDeco.range(node.from, node.to + 1));
-              } else {
-                ranges.push(bulletDeco.range(node.from, node.to));
-              }
-            }
-            return;
-          }
-
-          if (name === 'TaskMarker') {
-            const line = doc.lineAt(node.from);
-            if (revealed.has(line.number)) return; // raw '[ ]' while editing
-            const marker = doc.sliceString(node.from, node.to);
-            const done = /x/i.test(marker);
-            /* Replace '[ ]' (and one following space) with the checkbox. */
-            let to = node.to;
-            if (to < line.to && doc.sliceString(to, to + 1) === ' ') to++;
-            ranges.push((done ? taskDoneDeco : taskTodoDeco).range(node.from, to));
-            if (done) ranges.push(taskLineDone.range(line.from));
-            return;
-          }
-
-          if (name === 'Image') {
-            /* Render the actual image after the syntax (which the phase-1
-               mark hiding collapses to the alt text off-line). The widget
-               stays even while the line is selected — Obsidian behavior. */
-            const m = /^!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?/.exec(doc.sliceString(node.from, node.to));
-            if (m) {
-              const src = resolveImageSrc(m[2]);
-              if (src) {
-                ranges.push(Decoration.widget({
-                  widget: new ImageWidget(src, m[1] || ''),
-                  side: 1,
-                }).range(node.to));
-              }
-            }
-            /* fall through: Image is also in INLINE_STYLE (handled above) */
-          }
-
-          if (!HIDE.has(name)) return;
-
-          /* Never hide a fence line's backticks — the code block keeps its
-             raw delimiters (phase-1 honesty; see design §3). */
-          const parent = node.node.parent;
-          if (name === 'CodeMark' && parent && parent.name === 'FencedCode') return;
-          /* An Autolink's URL is its visible text. Only hide URLs that are
-             the target part of a [text](url) link or image. */
-          if (name === 'URL' && !(parent && (parent.name === 'Link' || parent.name === 'Image'))) return;
-
-          const line = doc.lineAt(node.from);
-          if (revealed.has(line.number)) return; // editing here — marks visible
-
-          let to = node.to;
-          /* Swallow the single space after "#"/">" so headings and quotes
-             don't sit one phantom column to the right. */
-          if ((name === 'HeaderMark' || name === 'QuoteMark')
-              && to < line.to && doc.sliceString(to, to + 1) === ' ') {
-            to++;
-          }
-          if (to > node.from) ranges.push(hideDeco.range(node.from, to));
-        },
+      box.addEventListener('click', (e) => {
+        e.preventDefault(); // the doc edit drives the visual state
+        const view = window.cmView;
+        if (!view) return;
+        let anchor;
+        try { anchor = view.posAtDOM(wrap); } catch (_) { return; }
+        /* Locate this checkbox's marker: the Nth task marker in the
+           block's source, N = this box's index among the block's boxes. */
+        const boxes = Array.from(wrap.querySelectorAll('input.lp-task-checkbox'));
+        const idx = boxes.indexOf(box);
+        if (idx < 0) return;
+        const slice = view.state.doc.sliceString(anchor, anchor + blockSrc.length);
+        if (slice !== blockSrc) return; // stale widget — abort, never guess
+        TASK_MARKER_RE.lastIndex = 0;
+        let n = -1, at = -1, mm;
+        while ((mm = TASK_MARKER_RE.exec(slice)) !== null) {
+          n++;
+          if (n === idx) { at = anchor + mm.index + mm[0].length - 3; break; }
+        }
+        if (at < 0) return;
+        const marker = view.state.doc.sliceString(at, at + 3);
+        if (!/^\[[ xX]\]$/.test(marker)) return;
+        view.dispatch({ changes: { from: at, to: at + 3, insert: marker === '[ ]' ? '[x]' : '[ ]' } });
       });
+    });
+  }
+
+  /* ── The block widget ────────────────────────────────────────────────
+     DOM mirrors the preview pane's structure: a `.prose prose-lg
+     max-w-none mx-auto` container (core_cm.js render()) inside an
+     `.lp-render` scope element that the swept `#preview`-parity CSS
+     rules also target. Post-processing reuses the preview's OWN
+     functions (parameterized by root): image path resolution with the
+     root-containment guard, and code copy buttons.                    */
+  class BlockWidget extends WidgetType {
+    constructor(src) { super(); this.src = src; }
+    eq(other) { return other.src === this.src; }
+    toDOM(view) {
+      const wrap = document.createElement('div');
+      wrap.className = 'lp-render';
+      const prose = document.createElement('div');
+      prose.className = 'prose prose-lg max-w-none mx-auto';
+      wrap.appendChild(prose);
+      const html = renderBlockHtml(this.src);
+      if (html === null || !html.trim()) {
+        /* Renderer unavailable or empty output — show the raw source. */
+        prose.textContent = this.src;
+        prose.classList.add('lp-render-fallback');
+      } else {
+        prose.innerHTML = html;
+        try {
+          if (typeof postProcessCodeBlocks === 'function') postProcessCodeBlocks(wrap);
+          if (typeof postProcessImages === 'function') postProcessImages(wrap);
+          upgradeTaskItems(wrap, this.src);
+        } catch (err) {
+          console.warn('[LivePreview] widget post-process failed:', err);
+        }
+        /* Images load async and change the block's height — tell
+           CodeMirror to re-measure when they arrive. */
+        wrap.querySelectorAll('img').forEach((img) => {
+          img.addEventListener('load', () => view.requestMeasure());
+          img.addEventListener('error', () => view.requestMeasure());
+        });
+      }
+      const src = this.src;
+      /* Click-to-edit: place the cursor in the block, which reveals its
+         raw markdown. Interactive children (copy button, checkboxes)
+         keep their own behavior.                                       */
+      wrap.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.code-copy-btn') || e.target.closest('.lp-task-checkbox')) return;
+        e.preventDefault();
+        const view2 = window.cmView;
+        if (!view2) return;
+        let pos;
+        try { pos = view2.posAtDOM(wrap); } catch (_) { return; }
+        /* Refine to the clicked line: estimate from the click's vertical
+           position within the rendered block. Falls back to the start. */
+        try {
+          const rect = wrap.getBoundingClientRect();
+          if (rect.height > 0) {
+            const frac = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+            const lines = src.split('\n');
+            const lineIdx = Math.min(lines.length - 1, Math.floor(frac * lines.length));
+            for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
+          }
+        } catch (_) { /* keep block start */ }
+        view2.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+        view2.focus();
+      });
+      /* The app must never open links — same policy as everywhere else.
+         The wrapper nav-guards are the backstop; this stops it locally. */
+      wrap.addEventListener('click', (e) => {
+        const a = e.target.closest('a');
+        if (a) e.preventDefault();
+      });
+      return wrap;
+    }
+    ignoreEvent() { return false; } // our own handlers need the events
+  }
+
+  /* ── Block segmentation + decoration build ───────────────────────── */
+  function buildBlocks(state) {
+    const doc = state.doc;
+    const ranges = [];
+    const blockRanges = [];
+    const fmEnd = frontmatterEnd(doc);
+    const selRanges = state.selection.ranges;
+    const intersects = (from, to) => selRanges.some((r) => r.from <= to && r.to >= from);
+
+    const tree = syntaxTree(state);
+    for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
+      if (node.from < fmEnd) continue;      // protected frontmatter region
+      if (KEEP_RAW.has(node.name)) continue;
+      const from = doc.lineAt(node.from).from;
+      const to = doc.lineAt(Math.min(node.to, doc.length)).to;
+      if (to <= from) continue;
+      blockRanges.push({ from, to });
+      if (intersects(from, to)) continue;   // being edited — stays raw
+      ranges.push(Decoration.replace({
+        widget: new BlockWidget(doc.sliceString(from, to)),
+        block: true,
+      }).range(from, to));
     }
 
-    /* Frontmatter lines: dim mono, applied to whichever of them are visible. */
+    /* Frontmatter keeps its dim mono line styling. */
     if (fmEnd) {
-      const vFrom = view.visibleRanges.length ? view.visibleRanges[0].from : 0;
-      let pos = Math.min(vFrom, fmEnd);
+      let pos = 0;
       for (;;) {
         const line = doc.lineAt(pos);
         if (line.from >= fmEnd) break;
-        addLineClass(line.from, 'lp-frontmatter');
+        ranges.push(Decoration.line({ class: 'lp-frontmatter' }).range(line.from));
         if (line.to >= doc.length) break;
         pos = line.to + 1;
       }
     }
-
-    /* Math scan over the visible text, outside code and frontmatter. */
-    for (const vr of view.visibleRanges) {
-      const text = doc.sliceString(vr.from, vr.to);
-      MATH_RE.lastIndex = 0;
-      let m;
-      while ((m = MATH_RE.exec(text)) !== null) {
-        const from = vr.from + m.index;
-        const to   = from + m[0].length;
-        const tex  = m[1] !== undefined ? m[1] : m[2];
-        const display = m[1] !== undefined;
-        if (from < fmEnd) continue;
-        if (from > 0 && doc.sliceString(from - 1, from) === '\\') continue; // escaped \$
-        /* texmath-style validity for single-$: content must not start or
-           end with whitespace (keeps '5$ and 10$' as plain currency). */
-        if (!display && (/^\s/.test(tex) || /\s$/.test(tex))) continue;
-        if (codeRanges.some(([a, b]) => from < b && to > a)) continue;
-        if (revealed.has(doc.lineAt(from).number)) continue;
-        ranges.push(Decoration.replace({ widget: new MathWidget(tex, display) }).range(from, to));
-      }
-    }
-
-    /* sort:true — mixed line/mark/replace ranges arrive out of order. */
-    return Decoration.set(ranges, true);
+    return { deco: Decoration.set(ranges, true), blockRanges };
   }
 
   let _warnedOnce = false;
-  function safeBuild(view) {
+  function safeBuildBlocks(state) {
     try {
-      return buildDecorations(view);
+      return buildBlocks(state);
     } catch (err) {
       if (!_warnedOnce) {
         _warnedOnce = true;
-        console.warn('[LivePreview] decoration build failed — rendering raw markdown:', err);
+        console.warn('[LivePreview] block build failed — rendering raw markdown:', err);
       }
-      return Decoration.none;
+      return { deco: Decoration.none, blockRanges: [] };
     }
   }
 
-  const livePreviewPlugin = ViewPlugin.fromClass(class {
-    constructor(view) {
-      this.decorations = safeBuild(view);
-    }
-    update(update) {
-      if (update.view.composing) {
-        /* IME composition in progress: never rebuild under the composer,
-           but keep positions valid by mapping through the changes. */
-        this.decorations = this.decorations.map(update.changes);
-        return;
-      }
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
-        this.decorations = safeBuild(update.view);
-      }
-    }
-  }, {
-    decorations: (v) => v.decorations,
-  });
-
-  /* ── Tables ───────────────────────────────────────────────────────────
-     Rendered tables need BLOCK replace decorations (they span lines),
-     which CodeMirror forbids from view plugins — so they live in a
-     StateField instead. Whole-document tree walk on doc changes; on
-     selection-only changes the cached ranges decide whether a rebuild
-     is needed at all (keystrokes outside tables cost nothing). Cell
-     content renders through the SAME markdown-it + DOMPurify pipeline
-     as the classic preview. Clicking a table places the cursor inside
-     it, which reveals the raw markdown for editing.                   */
-  class TableWidget extends WidgetType {
-    constructor(headHtml, rowsHtml) { super(); this.headHtml = headHtml; this.rowsHtml = rowsHtml; }
-    eq(other) { return other.headHtml === this.headHtml && other.rowsHtml === this.rowsHtml; }
-    toDOM() {
-      const wrap = document.createElement('div');
-      wrap.className = 'lp-table-widget';
-      const table = document.createElement('table');
-      table.className = 'lp-table';
-      table.innerHTML = this.headHtml + this.rowsHtml; // sanitized at build
-      wrap.appendChild(table);
-      wrap.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        const view = window.cmView;
-        if (!view) return;
-        let pos;
-        try { pos = view.posAtDOM(wrap); } catch (_) { return; }
-        view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
-        view.focus();
-      });
-      return wrap;
-    }
-    ignoreEvent() { return false; }
-  }
-
-  function renderCellHtml(text) {
-    const trimmed = text.trim();
-    try {
-      if (typeof md !== 'undefined' && typeof DOMPurify !== 'undefined') {
-        return DOMPurify.sanitize(md.renderInline(trimmed));
-      }
-    } catch (_) { /* fall through to plain text */ }
-    const esc = document.createElement('span');
-    esc.textContent = trimmed;
-    return esc.innerHTML;
-  }
-
-  function buildTableDecos(state) {
-    const doc = state.doc;
-    const ranges = [];
-    const tableRanges = [];
-    const selRanges = state.selection.ranges;
-    const intersectsSelection = (from, to) =>
-      selRanges.some((r) => r.from <= to && r.to >= from);
-
-    syntaxTree(state).iterate({
-      enter: (node) => {
-        if (node.name !== 'Table') return;
-        tableRanges.push({ from: node.from, to: node.to });
-        if (intersectsSelection(node.from, node.to)) return false; // editing → raw
-        /* Collect header/body rows from the tree. */
-        let headHtml = '';
-        const bodyRows = [];
-        const table = node.node;
-        for (let row = table.firstChild; row; row = row.nextSibling) {
-          if (row.name !== 'TableHeader' && row.name !== 'TableRow') continue;
-          const cells = [];
-          for (let cell = row.firstChild; cell; cell = cell.nextSibling) {
-            if (cell.name === 'TableCell') {
-              cells.push(renderCellHtml(doc.sliceString(cell.from, cell.to)));
-            }
-          }
-          const tag = row.name === 'TableHeader' ? 'th' : 'td';
-          const rowHtml = '<tr>' + cells.map((c) => '<' + tag + '>' + c + '</' + tag + '>').join('') + '</tr>';
-          if (row.name === 'TableHeader') headHtml = '<thead>' + rowHtml + '</thead>';
-          else bodyRows.push(rowHtml);
-        }
-        /* Block replace must cover whole lines. */
-        const from = doc.lineAt(node.from).from;
-        const to   = doc.lineAt(Math.min(node.to, doc.length)).to;
-        ranges.push(Decoration.replace({
-          widget: new TableWidget(headHtml, '<tbody>' + bodyRows.join('') + '</tbody>'),
-          block: true,
-        }).range(from, to));
-        return false; // don't descend further
-      },
-    });
-    return { deco: Decoration.set(ranges, true), tableRanges };
-  }
-
-  function safeBuildTables(state) {
-    try {
-      return buildTableDecos(state);
-    } catch (err) {
-      if (!_warnedOnce) {
-        _warnedOnce = true;
-        console.warn('[LivePreview] table build failed — rendering raw markdown:', err);
-      }
-      return { deco: Decoration.none, tableRanges: [] };
-    }
-  }
-
-  const tableField = StateField.define({
-    create(state) { return safeBuildTables(state); },
+  const blockField = StateField.define({
+    create(state) { return safeBuildBlocks(state); },
     update(value, tr) {
-      if (tr.docChanged) return safeBuildTables(tr.state);
+      if (tr.docChanged) return safeBuildBlocks(tr.state);
       if (tr.selection) {
-        /* Rebuild only when the selection change can affect a table's
-           revealed/rendered state — otherwise map and keep. */
-        const touches = value.tableRanges.some((t2) =>
-          tr.state.selection.ranges.some((r) => r.from <= t2.to && r.to >= t2.from)
-          || tr.startState.selection.ranges.some((r) => r.from <= t2.to && r.to >= t2.from));
-        if (touches) return safeBuildTables(tr.state);
+        /* Rebuild only when some block's rendered/raw status flips. */
+        const hits = (sel, b) => sel.ranges.some((r) => r.from <= b.to && r.to >= b.from);
+        const flipped = value.blockRanges.some((b) =>
+          hits(tr.state.selection, b) !== hits(tr.startState.selection, b));
+        if (flipped) return safeBuildBlocks(tr.state);
       }
       return value;
     },
@@ -601,6 +269,6 @@
   });
 
   window.buildLivePreviewExtension = function () {
-    return [livePreviewPlugin, tableField];
+    return [blockField];
   };
 })();

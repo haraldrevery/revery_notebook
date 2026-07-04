@@ -9,7 +9,7 @@ export { Strikethrough, TaskList, Table } from '@lezer/markdown'; // GFM parser 
    Curated language set built on @codemirror/legacy-modes stream parsers:
    hljs-grade token coloring at a few KB per language, instead of the
    multi-MB language-data pack this bundle deliberately omits.          */
-import { StreamLanguage, LanguageDescription } from '@codemirror/language';
+import { StreamLanguage, LanguageDescription, LanguageSupport } from '@codemirror/language';
 import { javascript as m_js, json as m_json, typescript as m_ts } from '@codemirror/legacy-modes/mode/javascript';
 import { python as m_py } from '@codemirror/legacy-modes/mode/python';
 import { c as m_c, cpp as m_cpp, java as m_java, csharp as m_cs, kotlin as m_kotlin } from '@codemirror/legacy-modes/mode/clike';
@@ -26,8 +26,11 @@ import { swift as m_swift } from '@codemirror/legacy-modes/mode/swift';
 import { toml as m_toml } from '@codemirror/legacy-modes/mode/toml';
 import { perl as m_perl } from '@codemirror/legacy-modes/mode/perl';
 
+/* load() must resolve a LanguageSupport: lang-markdown's fence nesting
+   reads `desc.support.language.parser`, so resolving a bare StreamLanguage
+   leaves `.language` undefined and crashes the nested parse. */
 const lang = (name, alias, mode) => LanguageDescription.of({
-  name, alias, load: async () => StreamLanguage.define(mode),
+  name, alias, load: async () => new LanguageSupport(StreamLanguage.define(mode)),
 });
 export const codeLanguages = [
   lang('javascript', ['js', 'jsx', 'node'], m_js),

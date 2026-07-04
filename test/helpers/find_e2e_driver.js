@@ -134,140 +134,163 @@
   window.removeCustomBackgroundImage();
   window.setBackgroundOpacity(null);
 
-  /* 10. Live Preview (experimental): decorations render, marks hide off
-         the selection line and reveal on it, the extension survives
-         replaceEditorContent (the fresh-state compartment trap), and
-         toggling off restores the pane and today's editor. */
+  /* 10. Live Preview v2: every non-active top-level markdown block is a
+         widget rendered through the classic preview's OWN pipeline
+         (markdown-it + hljs + texmath/KaTeX + DOMPurify + prose CSS).
+         Parity is asserted as computed-style EQUALITY against #preview —
+         not approximation. Blocks intersecting the selection stay raw. */
   window.setLivePreviewMode(true);
   setDoc('# Hello **bold** world\n\nplain tail');
-  editor.setSelectionRange(editor.value.length, editor.value.length); // cursor on last line
-  await sleep(250);
-  const h1Line = () => document.querySelector('.cm-line.lp-h1');
+  editor.setSelectionRange(editor.value.length, editor.value.length); // cursor in last block
+  await sleep(350);
+  const cmText = () => document.querySelector('.cm-content').textContent;
   const lpOnState = {
     paneHidden:   getComputedStyle(document.getElementById('preview-pane')).display === 'none',
-    headingClass: !!h1Line(),
-    marksHidden:  !!h1Line() && !h1Line().textContent.includes('**') && !h1Line().textContent.includes('#'),
-    boldStyled:   !!document.querySelector('.lp-strong'),
+    headingClass: !!document.querySelector('.lp-render h1'),
+    marksHidden:  !cmText().includes('#') && !cmText().includes('**'),
+    boldStyled:   !!document.querySelector('.lp-render h1 strong'),
   };
-  editor.setSelectionRange(2, 2); // move INTO the heading line
-  await sleep(250);
-  lpOnState.marksRevealed = !!h1Line() && h1Line().textContent.includes('**') && h1Line().textContent.includes('#');
+  editor.setSelectionRange(2, 2); // move INTO the heading block
+  await sleep(300);
+  lpOnState.marksRevealed = !document.querySelector('.lp-render h1')
+    && cmText().includes('# Hello **bold** world');
   replaceEditorContent('# Fresh **doc**\n\ntail');
   editor.setSelectionRange(editor.value.length, editor.value.length);
-  await sleep(250);
-  lpOnState.survivedReplace = !!document.querySelector('.cm-line.lp-h1');
-  /* Phase 2: hr/image/bullet widgets, preview typography + texture */
-  const PIXEL2 = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
-  replaceEditorContent('# Style\n\n---\n\n- item one\n\n![tiny](' + PIXEL2 + ')\n\nend line');
+  await sleep(300);
+  lpOnState.survivedReplace = !!document.querySelector('.lp-render h1');
+
+  /* v2 block coverage: hr / list / image render through the pipeline;
+     heading typography and pane texture; image sizing PARITY (the
+     "images smaller and left-aligned" report). */
+  /* An https src keeps the <img> element + its computed styles intact on
+     both surfaces even though nothing loads (data: srcs are stripped by
+     DOMPurify on BOTH surfaces — parity includes that behavior too). */
+  replaceEditorContent('# Style\n\n---\n\n- item one\n\n![tiny](https://example.invalid/x.gif)\n\nend line');
   editor.setSelectionRange(editor.value.length, editor.value.length);
-  await sleep(400);
-  const h1El = document.querySelector('.cm-line.lp-h1');
-  const lpPhase2 = {
-    hrWidget:     !!document.querySelector('.lp-hr'),
-    bullet:       !!document.querySelector('.lp-bullet'),
-    imageWidget:  !!document.querySelector('.lp-image-widget img'),
-    headingUpper: !!h1El && getComputedStyle(h1El).textTransform === 'uppercase',
+  await sleep(450);
+  const lpV2 = {
+    hrWidget:     !!document.querySelector('.lp-render hr'),
+    bullet:       !!document.querySelector('.lp-render ul li'),
+    imageWidget:  !!document.querySelector('.lp-render img'),
+    headingUpper: (() => {
+      const h = document.querySelector('.lp-render h1');
+      return !!h && getComputedStyle(h).textTransform === 'uppercase';
+    })(),
     texture:      getComputedStyle(document.getElementById('editor-pane')).backgroundImage.includes('bg_'),
   };
-  /* cursor onto the hr line → raw dashes return */
+  lpV2.imageParity = (() => {
+    const a = document.querySelector('.lp-render img');
+    const b = document.querySelector('#preview img');
+    if (!a || !b) return false;
+    /* Same md renderer rule must class both copies full-width, and the
+       live-preview copy must ACTUALLY fill its prose column (the
+       "images smaller and left-aligned" report). */
+    if (!a.classList.contains('preview-image-full')
+        || !b.classList.contains('preview-image-full')) return false;
+    const col = a.closest('.prose');
+    return !!col && Math.abs(a.getBoundingClientRect().width
+                             - col.getBoundingClientRect().width) < 2;
+  })();
   const hrPos = editor.value.indexOf('---');
   editor.setSelectionRange(hrPos, hrPos);
-  await sleep(250);
-  lpPhase2.hrRevealsRaw = !document.querySelector('.lp-hr');
-
-  /* strikethrough (GFM ext) + fenced-code copy button */
-  replaceEditorContent('~~gone~~ text\n\n~~~\ncopy me\nline two\n~~~\n\nend');
-  editor.setSelectionRange(editor.value.length, editor.value.length);
   await sleep(300);
-  const strikeEl = document.querySelector('.lp-strike');
-  lpPhase2.strikeRendered = !!strikeEl && !strikeEl.textContent.includes('~~');
+  lpV2.hrRevealsRaw = !document.querySelector('.lp-render hr');
+
+  /* strikethrough + code block: copy button, NO visible fences, hljs
+     token colors, and code font/size EQUAL to the preview's (the "code
+     font doesn't follow / colors don't work / renders ```" report). */
+  replaceEditorContent('~~gone~~ text\n\n```javascript\nconst x = 1;\nreturn x;\n```\n\nend');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(500);
+  const strikeEl = document.querySelector('.lp-render s, .lp-render del');
+  lpV2.strikeRendered = !!strikeEl && !strikeEl.textContent.includes('~~');
   const copyBtn = document.querySelector('.cm-content .code-copy-btn');
-  lpPhase2.copyButton = !!copyBtn;
+  lpV2.copyButton = !!copyBtn;
   if (copyBtn) copyBtn.click(); // must not throw / must not edit the doc
   await sleep(150);
-  lpPhase2.copyClickSafe = editor.value.includes('copy me\nline two');
+  lpV2.copyClickSafe = editor.value.includes('const x = 1;');
+  const lpPre = document.querySelector('.lp-render pre');
+  lpV2.fenceHidden  = !!lpPre && !lpPre.textContent.includes('```');
+  lpV2.fenceColored = !!document.querySelector('.lp-render pre code span[class*="hljs-"]');
+  lpV2.codeFontParity = (() => {
+    const a = document.querySelector('.lp-render pre code');
+    const b = document.querySelector('#preview pre code');
+    if (!a || !b) return false;
+    const ca = getComputedStyle(a), cb = getComputedStyle(b);
+    return ca.fontFamily === cb.fontFamily && ca.fontSize === cb.fontSize;
+  })();
 
-  /* task-list checkboxes: render + click toggles the DOCUMENT text */
+  /* task-list checkboxes: upgraded from the renderer's literal text;
+     click toggles the DOCUMENT marker through a normal transaction. */
   replaceEditorContent('- [ ] first\n- [x] second\n\nend');
   editor.setSelectionRange(editor.value.length, editor.value.length);
-  await sleep(300);
+  await sleep(350);
   const boxes = document.querySelectorAll('.lp-task-checkbox');
-  lpPhase2.taskBoxes = boxes.length === 2;
-  lpPhase2.taskDoneStyled = !!document.querySelector('.cm-line.lp-task-done');
+  lpV2.taskBoxes = boxes.length === 2;
+  lpV2.taskDoneStyled = !!document.querySelector('.lp-render li.lp-task-done');
   if (boxes[0]) boxes[0].click();
   await sleep(300);
-  lpPhase2.taskToggled = editor.value.startsWith('- [x] first');
+  lpV2.taskToggled = editor.value.startsWith('- [x] first');
 
-  /* KaTeX math + protected YAML frontmatter */
-  replaceEditorContent('---\ntitle: t\ntags: x\n---\n\nEuler: $e^{i\\pi}=-1$ inline\n\n$$x^2 + y^2 = r^2$$\n\nprice 5$ and 10$ stays text\n\n`code $a+b$ stays raw`\n\nend');
+  /* KaTeX math — including MULTI-LINE $$ blocks (impossible in v1) —
+     plus currency safety, raw math in code, protected frontmatter. */
+  replaceEditorContent('---\ntitle: t\ntags: x\n---\n\nEuler: $e^{i\\pi}=-1$ inline\n\n$$x^2 + y^2 = r^2$$\n\n$$\n\\int_0^1 x\\,dx\n$$\n\nprice 5$ and 10$ stays text\n\n`code $a+b$ stays raw`\n\nend');
   editor.setSelectionRange(editor.value.length, editor.value.length);
-  await sleep(400);
-  lpPhase2.mathInline   = document.querySelectorAll('.lp-math .katex').length >= 2;
-  lpPhase2.mathBlock    = !!document.querySelector('.lp-math-block .katex');
-  lpPhase2.currencySafe = !document.querySelector('.cm-line:nth-child(7) .lp-math')
-    && editor.value.includes('5$ and 10$');
-  lpPhase2.codeMathRaw  = (() => {
-    const codeEl = document.querySelector('.lp-code');
-    return !!codeEl && codeEl.textContent.includes('$a+b$');
+  await sleep(500);
+  lpV2.mathInline    = document.querySelectorAll('.lp-render .katex').length >= 3;
+  lpV2.mathBlock     = document.querySelectorAll('.lp-render .katex-display').length >= 1;
+  lpV2.mathMultiline = document.querySelectorAll('.lp-render .katex-display').length >= 2;
+  lpV2.currencySafe  = (() => {
+    const block = Array.from(document.querySelectorAll('.lp-render'))
+      .find((el) => el.textContent.includes('price'));
+    return !!block && !block.querySelector('.katex') && editor.value.includes('5$ and 10$');
   })();
-  lpPhase2.fmProtected  = !document.querySelector('.lp-hr')
-    && !document.querySelector('.cm-line.lp-h1, .cm-line.lp-h2')
-    && !!document.querySelector('.cm-line.lp-frontmatter');
-  /* cursor onto the math line → raw $ source returns */
+  lpV2.codeMathRaw = (() => {
+    const codeEl = Array.from(document.querySelectorAll('.lp-render code'))
+      .find((el) => el.textContent.includes('$a+b$'));
+    return !!codeEl;
+  })();
+  lpV2.fmProtected = !!document.querySelector('.cm-line.lp-frontmatter')
+    && cmText().includes('title: t')
+    && !document.querySelector('.lp-render h2'); // Setext misparse guard
+  /* cursor onto the inline-math paragraph -> its raw $ source returns */
   const mathPos = editor.value.indexOf('$e^');
   editor.setSelectionRange(mathPos, mathPos);
-  await sleep(250);
-  lpPhase2.mathRevealsRaw = document.querySelectorAll('.lp-math .katex').length < 2;
-
-  /* font/size parity: LP text must equal the PREVIEW's paragraph size
-     (both consume --text-body), not the editor's size. */
-  replaceEditorContent('parity check paragraph\n\nsecond');
-  editor.setSelectionRange(editor.value.length, editor.value.length);
   await sleep(300);
-  const cmSize = parseFloat(getComputedStyle(document.querySelector('.cm-content')).fontSize);
-  const prevP  = document.querySelector('#preview p');
-  const pvSize = prevP ? parseFloat(getComputedStyle(prevP).fontSize) : NaN;
+  lpV2.mathRevealsRaw = cmText().includes('$e^');
+
+  /* THE core v2 assertions: computed-style EQUALITY with the preview
+     pane for the same document (the "headers larger than the preview"
+     report). Sizes must follow the preview settings, not the editor. */
+  replaceEditorContent('# Parity Header\n\nparity check paragraph\n\nsecond');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(350);
+  const csOf = (sel) => {
+    const el = document.querySelector(sel);
+    return el ? getComputedStyle(el) : null;
+  };
+  const lpP = csOf('.lp-render p'), pvP = csOf('#preview p');
+  lpV2.sizeMatchesPreview = !!lpP && !!pvP && lpP.fontSize === pvP.fontSize;
+  lpV2.h1Parity = (() => {
+    const a = csOf('.lp-render h1'), b = csOf('#preview .prose h1');
+    return !!a && !!b && a.fontSize === b.fontSize && a.fontFamily === b.fontFamily
+      && a.textTransform === b.textTransform;
+  })();
   const edInline = parseFloat(getComputedStyle(document.getElementById('editor')).fontSize);
-  lpPhase2.sizeMatchesPreview  = Number.isFinite(pvSize) && Math.abs(cmSize - pvSize) < 0.6;
-  lpPhase2.sizeNotEditorBound  = Math.abs(cmSize - edInline) > 0.6 || Math.abs(pvSize - edInline) < 0.6;
+  lpV2.sizeNotEditorBound = !!lpP
+    && (Math.abs(parseFloat(lpP.fontSize) - edInline) > 0.6
+        || Math.abs(parseFloat(pvP.fontSize) - edInline) < 0.6);
 
   /* FONT FAMILY parity via the real settings path: click 'Preview font
-     type -> Times' like a user, assert LP content and preview paragraph
-     change together; then restore the default and assert they return. */
+     type -> Times' like a user, assert rendered blocks, raw text and
+     preview change together; then restore the default. */
   replaceEditorContent('family parity $a^2$ check\n\nsecond');
   editor.setSelectionRange(editor.value.length, editor.value.length);
-  await sleep(250);
+  await sleep(300);
   const famOf = (sel) => {
     const el = document.querySelector(sel);
     return el ? getComputedStyle(el).fontFamily : null;
   };
-  const clickPreviewFont = (label) => {
-    const wrapper = Array.from(document.querySelectorAll('#settings-dropdown .menu-item'))
-      .find(el => el.textContent.includes('Preview font type'));
-    const btn = wrapper && Array.from(wrapper.querySelectorAll('.submenu button'))
-      .find(b => b.textContent.toLowerCase().includes(label));
-    if (btn) { btn.click(); return true; }
-    return false;
-  };
-  const famBefore = famOf('.cm-content');
-  const timesClicked = clickPreviewFont('times');
-  await sleep(300);
-  lpPhase2.familyFollows = timesClicked
-    && /times/i.test(famOf('.cm-content') || '')
-    && famOf('.cm-content') === famOf('#preview p');
-  lpPhase2.katexSizeParity = (() => {
-    const lpK = document.querySelector('.lp-math .katex');
-    const pvK = document.querySelector('#preview .katex');
-    if (!lpK || !pvK) return false;
-    return Math.abs(parseFloat(getComputedStyle(lpK).fontSize) - parseFloat(getComputedStyle(pvK).fontSize)) < 0.6;
-  })();
-  const defaultClicked = clickPreviewFont('harald') || clickPreviewFont('default');
-  await sleep(300);
-  lpPhase2.familyRestores = defaultClicked && famOf('.cm-content') === famBefore
-    && famOf('.cm-content') === famOf('#preview p');
-
-  /* Reader padding drives LP column width; tables render + click-to-edit;
-     fenced code gets language token colors. */
   const clickSetting = (wrapperText, optionText) => {
     const wrapper = Array.from(document.querySelectorAll('#settings-dropdown .menu-item'))
       .find(el => el.textContent.includes(wrapperText));
@@ -276,34 +299,63 @@
     if (btn) { btn.click(); return true; }
     return false;
   };
-  replaceEditorContent('| Col A | Col B |\n|---|---|\n| **bold** | plain |\n\n```javascript\nconst x = 1;\nreturn x;\n```\n\ntail line');
-  editor.setSelectionRange(editor.value.length, editor.value.length);
-  await sleep(600); // async language load + parse
-  lpPhase2.tableRendered  = !!document.querySelector('.lp-table')
-    && !!document.querySelector('.lp-table th')
-    && !!document.querySelector('.lp-table td strong');
-  const tableWidget = document.querySelector('.lp-table-widget');
-  if (tableWidget) tableWidget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-  await sleep(250);
-  lpPhase2.tableClickReveals = !document.querySelector('.lp-table');
-  editor.setSelectionRange(editor.value.length, editor.value.length);
-  await sleep(250);
-  lpPhase2.tableReturns = !!document.querySelector('.lp-table');
-  lpPhase2.fenceColored = !!document.querySelector('.cm-line.lp-codeblock span[class*="\u037c"]');
+  const famBefore = famOf('.cm-content');
+  const timesClicked = clickSetting('Preview font type', 'times');
+  await sleep(300);
+  lpV2.familyFollows = timesClicked
+    && /times/i.test(famOf('.cm-content') || '')
+    && famOf('.lp-render p') === famOf('#preview p')
+    && famOf('.cm-content') === famOf('#preview p');
+  lpV2.katexSizeParity = (() => {
+    const lpK = document.querySelector('.lp-render .katex');
+    const pvK = document.querySelector('#preview .katex');
+    if (!lpK || !pvK) return false;
+    return getComputedStyle(lpK).fontSize === getComputedStyle(pvK).fontSize;
+  })();
+  const defaultClicked = clickSetting('Preview font type', 'harald') || clickSetting('Preview font type', 'default');
+  await sleep(300);
+  lpV2.familyRestores = defaultClicked && famOf('.cm-content') === famBefore
+    && famOf('.lp-render p') === famOf('#preview p');
 
+  /* Tables render via the preview pipeline (the "tables broken" report);
+     clicking one reveals the raw markdown; leaving re-renders it. */
+  replaceEditorContent('| Col A | Col B |\n|---|---|\n| **bold** | plain |\n\ntail line');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(450);
+  lpV2.tableRendered = !!document.querySelector('.lp-render table')
+    && !!document.querySelector('.lp-render th')
+    && !!document.querySelector('.lp-render td strong');
+  lpV2.tableParity = (() => {
+    const a = document.querySelector('.lp-render td');
+    const b = document.querySelector('#preview td');
+    if (!a || !b) return false;
+    const ca = getComputedStyle(a), cb = getComputedStyle(b);
+    return ca.fontSize === cb.fontSize && ca.fontFamily === cb.fontFamily;
+  })();
+  const tblEl = document.querySelector('.lp-render table');
+  const tWidget = tblEl && tblEl.closest('.lp-render');
+  if (tWidget) tWidget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  await sleep(300);
+  lpV2.tableClickReveals = !document.querySelector('.lp-render table')
+    && cmText().includes('| Col A | Col B |');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(300);
+  lpV2.tableReturns = !!document.querySelector('.lp-render table');
+
+  /* Reader padding drives the live-preview column width. */
   const rpClicked = clickSetting('Reader padding', '50');
   await sleep(300);
   const cmMaxW = getComputedStyle(document.querySelector('.cm-content')).maxWidth;
-  lpPhase2.readerPadding = rpClicked && Math.abs(parseFloat(cmMaxW) - window.innerWidth * 0.5) < 3;
+  lpV2.readerPadding = rpClicked && Math.abs(parseFloat(cmMaxW) - window.innerWidth * 0.5) < 3;
   clickSetting('Reader padding', '100%'); // label of the val:'default' option
   await sleep(200);
-  lpPhase2.readerPaddingResets =
+  lpV2.readerPaddingResets =
     getComputedStyle(document.querySelector('.cm-content')).maxWidth === 'none';
 
   window.setLivePreviewMode(false);
-  await sleep(150);
+  await sleep(200);
   const lpOffState = {
-    decorationsGone: !document.querySelector('.cm-line.lp-h1'),
+    decorationsGone: !document.querySelector('.lp-render'),
     paneBack:        getComputedStyle(document.getElementById('preview-pane')).display !== 'none',
     persistedOff:    settingsNow().livePreviewMode === false,
   };
@@ -311,5 +363,5 @@
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
-           lpOnState, lpOffState, lpPhase2 };
+           lpOnState, lpOffState, lpV2 };
 })()
