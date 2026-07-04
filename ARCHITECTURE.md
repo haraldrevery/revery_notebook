@@ -34,6 +34,7 @@ revery_notebook/
 ├── electron/
 │   ├── main.js                       ← Main process wiring: window, IPC, policy
 │   ├── fs_core.js                    ← Pure FS logic (atomic writes, settings store) — unit tested
+│   ├── zip_core.js                   ← Dependency-free zip writer for project export — unit tested
 │   └── preload.js                    ← contextBridge (exposes window.electronAPI)
 ├── tauri/
 │   ├── Cargo.toml / tauri.conf.json  ← Rust deps, window config, CSP
@@ -297,6 +298,7 @@ unwatched automatically when a new file opens).
 | `getLastOpenedFile()` | `settings:get-last-opened-file` | reads `userData/revery_settings.json` |
 | `setLastOpenedFile(p)` | `settings:set-last-opened-file` | writes `userData/revery_settings.json` |
 | `getAppDataPath()` | `app:get-data-path` | `app.getPath('userData')` |
+| `exportProjectZip()` | `project:export-zip` | save dialog + `zip_core.buildZip` + atomic write |
 
 ### Window Close Flow
 
@@ -616,12 +618,30 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
 | `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata |
 | `test/crash_consistency.test.js` | A child process is SIGKILLed mid-write 12 times; the target file must always contain exactly one complete payload |
-| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `atomic_write_file`, `is_cross_device_err` |
+| `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output |
+| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side
 atomic-write strategy — both `fs:write-file` and `dialog:save-file` call
 `atomicWriteFile()`. Do not re-inline that logic into handlers; it is what
 the tests pin down.
+
+### Zip Project Export
+
+File menu → *Zip Project Export* (desktop only; the entry is omitted in
+web mode). The renderer calls `NativeAPI.exportProjectZip()` with **no
+arguments**: the backend uses its own trusted project root as the
+source and a native save dialog for the destination, so the renderer
+can neither choose what is read nor where it is written. The walk
+skips symlinks (a link inside the project can never leak outside
+content into the archive), excludes the destination zip itself, and
+enforces caps (65,000 entries / 512 MB — no zip64) with clear errors.
+Electron builds the archive in `electron/zip_core.js` (dependency-free
+PKZIP writer over node's zlib); Tauri uses the `zip` crate
+(deflate-only features). Both write the archive through their atomic
+write path, so a crash cannot leave a truncated zip. There is **no
+password option** by design: classic zip encryption is broken, and a
+fake lock would be worse than none.
 
 Note for VSCode users: launching the app from an integrated terminal can
 inherit `ELECTRON_RUN_AS_NODE=1` from the editor, which makes

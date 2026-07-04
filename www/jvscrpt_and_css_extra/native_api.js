@@ -341,6 +341,11 @@ writeVolatileNow(path, content) {
     toggleMaximizeWindow() {
       return window.electronAPI.toggleMaximizeWindow();
     },
+
+    /** Export the project folder as a .zip; main owns the save dialog. */
+    exportProjectZip() {
+      return window.electronAPI.exportProjectZip();
+    },
 /* Triggers the existing close-request flow → quit modal appears. */
     closeWindow() {
       return window.electronAPI.closeWindow();
@@ -589,6 +594,11 @@ getVolatileContent(path) {
 
     toggleMaximizeWindow() {
       return this._invoke('toggle_maximize_window');
+    },
+
+    /** Export the project folder as a .zip; Rust owns the save dialog. */
+    exportProjectZip() {
+      return this._invoke('export_project_zip');
     },
 
 /* Triggers the existing CloseRequested flow → quit modal appears. */
@@ -909,6 +919,7 @@ getVolatileContent(path) {
 
     watchFile: () => notSupported('watchFile'),
     unwatchFile: () => Promise.resolve(),
+    exportProjectZip: () => notSupported('exportProjectZip'),
 
     async getLastOpenedFile() {
       try {

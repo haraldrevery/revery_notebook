@@ -89,6 +89,11 @@ window.uiTranslations = {
   "New File": { "Swedish": "Ny fil" },
   "Import File": { "Swedish": "Importera fil" },
   "Import Template ▸": { "Swedish": "Importera mall ▸" },
+  "Zip Project Export": { "Swedish": "Zip-export av projekt" },
+  "Open a project folder first.": { "Swedish": "Öppna en projektmapp först." },
+  "Project exported.": { "Swedish": "Projektet har exporterats." },
+  "items": { "Swedish": "objekt" },
+  "The zip export failed.": { "Swedish": "Zip-exporten misslyckades." },
   "Save as...": { "Swedish": "Spara som..." },
   "Export as .md": { "Swedish": "Exportera som .md" },
   "Export as .txt": { "Swedish": "Exportera som .txt" },
@@ -880,6 +885,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Slow Hardware Mode</strong> — one switch for older machines: fewer disk writes while typing, calmer preview rendering, no background image, and lighter file cards. Saving stays exactly as crash-safe as before.</li>
           <li><strong>Background &amp; opacity</strong> — pick one of the built-in preview backgrounds, turn it off, or import your own image (kept locally and downscaled automatically). "Background opacity" tunes how strongly it shows through.</li>
           <li><strong>Live Preview (experimental)</strong> — renders your document directly in the editor through the same renderer as the preview pane, so everything looks identical: typography, headings, quotes, lists, images, tables, LaTeX math (including multi-line $$…$$) and colored code blocks. The block you are editing shows its raw markdown; click any rendered block to edit it. Your file on disk always stays plain markdown.</li>
+          <li><strong>Zip Project Export</strong> (desktop) — File menu → Zip Project Export saves your whole project folder as a .zip archive wherever you choose. Great for backups before big rewrites. The archive is written safely (never half-finished) and is not password protected — use encrypted storage if your notes are sensitive.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
@@ -945,6 +951,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Långsam hårdvara-läge</strong> — ett reglage för äldre datorer: färre diskskrivningar medan du skriver, lugnare förhandsgranskning, ingen bakgrundsbild och lättare filkort. Sparandet är precis lika kraschsäkert som annars.</li>
           <li><strong>Bakgrund &amp; opacitet</strong> — välj en av de inbyggda förhandsgranskningsbakgrunderna, stäng av den, eller importera en egen bild (sparas lokalt och skalas ner automatiskt). "Bakgrundsopacitet" styr hur tydligt den syns.</li>
           <li><strong>Live Preview (experimentell)</strong> — renderar dokumentet direkt i redigeraren genom samma renderare som förhandsgranskningen, så allt ser identiskt ut: typografi, rubriker, citat, listor, bilder, tabeller, LaTeX-matematik (även flerradig $$…$$) och färgkodade kodblock. Blocket du redigerar visar sin råa markdown; klicka på ett renderat block för att redigera det. Din fil på disk är alltid ren markdown.</li>
+          <li><strong>Zip-export av projekt</strong> (skrivbord) — Arkiv-menyn → Zip-export av projekt sparar hela din projektmapp som ett .zip-arkiv där du vill. Perfekt för säkerhetskopior före stora omskrivningar. Arkivet skrivs säkert (aldrig halvfärdigt) och är inte lösenordsskyddat — använd krypterad lagring om dina anteckningar är känsliga.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">

@@ -404,8 +404,13 @@
     persistedOff:    settingsNow().livePreviewMode === false,
   };
 
+  /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
+         so the File menu must not contain the entry (buildMenu gating). */
+  const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
+    .some((b) => (b.textContent || '').includes('Zip Project Export'));
+
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
-           lpOnState, lpOffState, lpV2 };
+           lpOnState, lpOffState, lpV2, zipEntryHidden };
 })()
