@@ -165,47 +165,10 @@
           img.addEventListener('error', () => view.requestMeasure());
         });
       }
-      const src = this.src;
       /* Click-to-edit: place the cursor in the block, which reveals its
          raw markdown. Interactive children (copy button, checkboxes)
          keep their own behavior.                                       */
-      wrap.addEventListener('mousedown', (e) => {
-        if (e.target.closest('.code-copy-btn') || e.target.closest('.lp-task-checkbox')) return;
-        e.preventDefault();
-        const view2 = window.cmView;
-        if (!view2) return;
-        let pos;
-        try { pos = view2.posAtDOM(wrap); } catch (_) { return; }
-        /* Refine to the clicked line: estimate from the click's vertical
-           position within the rendered block. Falls back to the start. */
-        try {
-          const rect = wrap.getBoundingClientRect();
-          if (rect.height > 0) {
-            const frac = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-            const lines = src.split('\n');
-            const lineIdx = Math.min(lines.length - 1, Math.floor(frac * lines.length));
-            for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
-          }
-        } catch (_) { /* keep block start */ }
-        /* Pin the clicked line under the pointer: the widget→raw swap
-           (and the previous active block re-collapsing) changes content
-           heights, so a plain scrollIntoView makes the view jump. The
-           y:'start' + yMargin effect scrolls so the clicked source line
-           sits exactly at the pointer's height after the reflow.       */
-        let scrollEffect;
-        try {
-          const scrollRect = view2.scrollDOM.getBoundingClientRect();
-          const lineH = view2.defaultLineHeight || 24;
-          const yMargin = Math.max(0, Math.min(
-            e.clientY - scrollRect.top,
-            view2.scrollDOM.clientHeight - 3 * lineH));
-          scrollEffect = EditorView.scrollIntoView(pos, { y: 'start', yMargin });
-        } catch (_) { /* fall back to no scroll adjustment */ }
-        view2.dispatch(scrollEffect
-          ? { selection: { anchor: pos }, effects: scrollEffect }
-          : { selection: { anchor: pos } });
-        view2.focus();
-      });
+      attachClickToEdit(wrap, this.src);
       /* The app must never open links — same policy as everywhere else.
          The wrapper nav-guards are the backstop; this stops it locally. */
       wrap.addEventListener('click', (e) => {
@@ -215,6 +178,83 @@
       return wrap;
     }
     ignoreEvent() { return false; } // our own handlers need the events
+  }
+
+  /* Shared click-to-edit wiring for rendered block widgets (markdown
+     blocks AND the YAML pill box): map the click's vertical position to
+     a source line, pin that line under the pointer through the reflow,
+     and dispatch as a POINTER selection — semantically true, and it lets
+     the YAML autocomplete's click-to-open listener react to it.        */
+  function attachClickToEdit(wrap, src) {
+    wrap.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.code-copy-btn') || e.target.closest('.lp-task-checkbox')) return;
+      e.preventDefault();
+      const view2 = window.cmView;
+      if (!view2) return;
+      let pos;
+      try { pos = view2.posAtDOM(wrap); } catch (_) { return; }
+      /* Refine to the clicked line: estimate from the click's vertical
+         position within the rendered block. Falls back to the start. */
+      try {
+        const rect = wrap.getBoundingClientRect();
+        if (rect.height > 0) {
+          const frac = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+          const lines = src.split('\n');
+          const lineIdx = Math.min(lines.length - 1, Math.floor(frac * lines.length));
+          for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
+        }
+      } catch (_) { /* keep block start */ }
+      /* Pin the clicked line under the pointer: the widget→raw swap
+         (and the previous active block re-collapsing) changes content
+         heights, so a plain scrollIntoView makes the view jump. The
+         y:'start' + yMargin effect scrolls so the clicked source line
+         sits exactly at the pointer's height after the reflow.       */
+      let scrollEffect;
+      try {
+        const scrollRect = view2.scrollDOM.getBoundingClientRect();
+        const lineH = view2.defaultLineHeight || 24;
+        const yMargin = Math.max(0, Math.min(
+          e.clientY - scrollRect.top,
+          view2.scrollDOM.clientHeight - 3 * lineH));
+        scrollEffect = EditorView.scrollIntoView(pos, { y: 'start', yMargin });
+      } catch (_) { /* fall back to no scroll adjustment */ }
+      view2.dispatch(scrollEffect
+        ? { selection: { anchor: pos }, effects: scrollEffect, userEvent: 'select.pointer' }
+        : { selection: { anchor: pos }, userEvent: 'select.pointer' });
+      view2.focus();
+    });
+  }
+
+  /* ── YAML frontmatter widget ─────────────────────────────────────────
+     Renders the frontmatter as the SAME "Properties" pill box the
+     classic preview/reader shows (shared buildYamlRenderHtml in
+     markdown_editor_core_cm.js — escapeHtml'd there). Clicking a pill
+     places the cursor on that source line, which reveals the raw YAML
+     and pops the suggestions menu (the pointer-selection contract with
+     yamlClickToComplete in cm_setup.js).                              */
+  class YamlWidget extends WidgetType {
+    constructor(src) { super(); this.src = src; }
+    eq(other) { return other.src === this.src; }
+    toDOM() {
+      const wrap = document.createElement('div');
+      wrap.className = 'lp-yaml';
+      let html = '';
+      try {
+        const m = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)\s*$/.exec(this.src);
+        if (m && typeof buildYamlRenderHtml === 'function') {
+          html = buildYamlRenderHtml(m[1], this.src.indexOf('\n') + 1);
+        }
+      } catch (_) { /* fall through to raw */ }
+      if (html) {
+        wrap.innerHTML = html; // every key/value escapeHtml'd by the builder
+      } else {
+        wrap.textContent = this.src;
+        wrap.classList.add('lp-render-fallback');
+      }
+      attachClickToEdit(wrap, this.src);
+      return wrap;
+    }
+    ignoreEvent() { return false; }
   }
 
   /* ── Block segmentation + decoration build ───────────────────────── */
@@ -241,15 +281,25 @@
       }).range(from, to));
     }
 
-    /* Frontmatter keeps its dim mono line styling. */
+    /* Frontmatter: rendered as the preview's "Properties" pill box when
+       not being edited (parity with reader mode); dim raw lines while
+       the cursor is inside it.                                        */
     if (fmEnd) {
-      let pos = 0;
-      for (;;) {
-        const line = doc.lineAt(pos);
-        if (line.from >= fmEnd) break;
-        ranges.push(Decoration.line({ class: 'lp-frontmatter' }).range(line.from));
-        if (line.to >= doc.length) break;
-        pos = line.to + 1;
+      blockRanges.push({ from: 0, to: fmEnd });
+      if (!intersects(0, fmEnd)) {
+        ranges.push(Decoration.replace({
+          widget: new YamlWidget(doc.sliceString(0, fmEnd)),
+          block: true,
+        }).range(0, fmEnd));
+      } else {
+        let pos = 0;
+        for (;;) {
+          const line = doc.lineAt(pos);
+          if (line.from >= fmEnd) break;
+          ranges.push(Decoration.line({ class: 'lp-frontmatter' }).range(line.from));
+          if (line.to >= doc.length) break;
+          pos = line.to + 1;
+        }
       }
     }
     return { deco: Decoration.set(ranges, true), blockRanges };

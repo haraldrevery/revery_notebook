@@ -38,5 +38,13 @@ if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
   initSearch();
   initCloseHandler();
   runBoot();
+
+  /* Pre-warm the YAML index shortly after boot so the first click into
+     frontmatter gets instant suggestions. Deliberately NOT a cache file
+     in the project root: the index only re-reads changed files (mtime
+     cache), and this app never writes non-user files into the notes
+     folder — sync tools and the data-safety story stay clean. */
+  setTimeout(() => { try { getYamlIndex('').catch(() => {}); } catch (_) {} },
+             window.slowHardwareMode ? 12000 : 4000);
 }
 

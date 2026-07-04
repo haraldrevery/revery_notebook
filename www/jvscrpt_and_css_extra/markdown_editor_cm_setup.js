@@ -292,23 +292,50 @@ const lineNumbersCompartment = new Compartment();
     const line = state.doc.lineAt(pos);
     if (line.number === 1 || line.from >= closeAt) return null; // outside the block
 
-    const before = line.text.slice(0, pos - line.from);
-    let mode = null, key = null, from = pos, prefix = '';
+    /* TOKEN-AWARE replacement: from..to always spans the WHOLE current
+       token (key, value segment, or list item), never just the text
+       before the cursor. Accepting a suggestion with the cursor in the
+       middle of "alpha" must produce "gamma", never "gammapha". CM
+       filters options by the from..cursor slice, so clicking at the
+       start of a token shows the full list.                           */
+    const lineText = line.text;
+    const col = pos - line.from;
+    let mode = null, key = null, from = pos, to = pos;
     let m;
-    if ((m = /^([A-Za-z0-9_][\w-]*)\s*:\s(.*)$/.exec(before)) || (m = /^([A-Za-z0-9_][\w-]*)\s*:()$/.exec(before))) {
-      /* After "key:" — completing a VALUE. For inline lists take the text
-         after the last separator so "tags: [alpha, be|" completes "be". */
+
+    const kvLine = /^([A-Za-z0-9_][\w-]*)(\s*):(.*)$/.exec(lineText);
+    if (kvLine && col <= kvLine[1].length) {
+      /* Cursor inside the KEY of an existing "key: value" line —
+         replace the key only, keep the colon and value. */
+      mode = 'key-replace';
+      from = line.from;
+      to = line.from + kvLine[1].length;
+    } else if (kvLine && col > lineText.indexOf(':')) {
+      /* In the VALUE area — replace the whole segment between the
+         nearest , or [ before the cursor and the next , or ] after. */
       mode = 'value';
-      key = m[1];
-      const valPart = m[2] || '';
-      const lastSep = Math.max(valPart.lastIndexOf(','), valPart.lastIndexOf('['));
-      prefix = valPart.slice(lastSep + 1).replace(/^\s+/, '');
-      from = pos - prefix.length;
-    } else if ((m = /^\s*-\s+(.*)$/.exec(before))) {
-      /* "- item" under a block-list key: the owning key is above. */
+      key = kvLine[1];
+      const valStart = lineText.indexOf(':') + 1;
+      const val = lineText.slice(valStart);
+      const rel = col - valStart;
+      const segStart = Math.max(val.lastIndexOf(',', rel - 1), val.lastIndexOf('[', rel - 1)) + 1;
+      let segEnd = val.length;
+      for (const stop of [',', ']']) {
+        const i = val.indexOf(stop, rel);
+        if (i !== -1 && i < segEnd) segEnd = i;
+      }
+      const lead = /^\s*/.exec(val.slice(segStart))[0].length;
+      from = line.from + valStart + segStart + lead;
+      to = line.from + valStart + segEnd;
+      while (to > from && /\s/.test(lineText[(to - line.from) - 1])) to--;
+      if (from > pos) from = pos;
+      if (to < pos) to = pos;
+    } else if ((m = /^(\s*-\s+)(.*)$/.exec(lineText)) && col >= m[1].length) {
+      /* "- item" under a block-list key: replace the whole item text. */
       mode = 'value';
-      prefix = m[1];
-      from = pos - prefix.length;
+      from = line.from + m[1].length;
+      to = line.from + (m[1] + m[2].replace(/\s+$/, '')).length;
+      if (to < pos) to = pos;
       for (let n = line.number - 1; n >= 2; n--) {
         const t = state.doc.line(n).text;
         const kv = /^([A-Za-z0-9_][\w-]*)\s*:/.exec(t);
@@ -316,10 +343,12 @@ const lineNumbersCompartment = new Compartment();
         if (!/^\s*-\s/.test(t)) break;
       }
       if (!key) return null;
-    } else if ((m = /^([A-Za-z0-9_-]*)$/.exec(before))) {
+    } else if (!lineText.includes(':') && (m = /^([A-Za-z0-9_-]*)\s*$/.exec(lineText))) {
+      /* Bare (partial) key on its own line. */
       mode = 'key';
-      prefix = m[1];
       from = line.from;
+      to = line.from + m[1].length;
+      if (to < pos) to = pos;
     } else {
       return null;
     }
@@ -336,10 +365,12 @@ const lineNumbersCompartment = new Compartment();
     if (!index) return null;
 
     let options;
-    if (mode === 'key') {
+    if (mode === 'key' || mode === 'key-replace') {
       options = (index.keys || []).map((k) => ({
         label: k.label,
-        apply: k.label + ': ',
+        /* On a bare line the colon is added; inside an existing
+           "key: value" line the colon is already there. */
+        apply: mode === 'key' ? k.label + ': ' : k.label,
         boost: Math.min(k.count || 1, 99) / 100,
       }));
     } else {
@@ -349,11 +380,17 @@ const lineNumbersCompartment = new Compartment();
         boost: Math.min(v.count || 1, 99) / 100,
       }));
     }
+    /* Never suggest the exact token the cursor is already on — accepting
+       it would be a no-op, and it shadows real suggestions (the current
+       half-typed token is itself in the merged index). */
+    const currentToken = state.doc.sliceString(from, to);
+    options = options.filter((o) => o.label !== currentToken);
     if (!options.length) return null;
     return {
       from,
+      to,
       options,
-      validFor: mode === 'key' ? /^[\w-]*$/ : /^[^,\[\]\n]*$/,
+      validFor: (mode === 'key' || mode === 'key-replace') ? /^[\w-]*$/ : /^[^,\[\]\n]*$/,
     };
   }
 
