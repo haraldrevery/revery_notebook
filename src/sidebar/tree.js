@@ -561,6 +561,16 @@ async function renderTree() {
           { label: 'Delete',           action: () => deleteNode(nodePath, 'file'), danger: true },
         ];
 
+    renderContextMenu(x, y, items);
+  }
+
+  /* Shared renderer for every sidebar context menu (per-item, multi-select
+     and the empty-space root menu). Builds the buttons, positions the menu
+     inside the viewport and shows it. */
+  function renderContextMenu(x, y, items) {
+    const menu = document.getElementById('context-menu');
+    if (!menu) return;
+
     menu.innerHTML = '';
     items.forEach(item => {
       if (item.sep) {
@@ -589,6 +599,20 @@ async function renderTree() {
     menu.style.top     = Math.min(y, vh - mh - 8) + 'px';
     menu.style.display = '';
     menu.classList.add('show');
+  }
+
+  /* Right-click on empty space in the folder panel: a root-level menu.
+     Only the bare tree background reaches here — per-item and per-card
+     contextmenu handlers stopPropagation. Targets the project root
+     (empty space = the whole project, the VS Code / Obsidian convention). */
+  function showRootContextMenu(x, y) {
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return;
+    renderContextMenu(x, y, [
+      { label: 'New File',         action: () => createNewFile(S.rootPath) },
+      { label: 'New Folder',       action: () => createNewFolder(S.rootPath) },
+      { sep: true },
+      { label: 'Show in Explorer', action: () => window.NativeAPI.showInExplorer(S.rootPath) },
+    ]);
   }
 
   /* ══════════════════════════════════════════════════════════════════
@@ -631,6 +655,13 @@ export function initTree() {
       updateToggleAllBtn();
     });
   }
+
+  /* Right-click on the tree background (not on an item/card — those
+     stopPropagation) opens the root-level menu. */
+  treeEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showRootContextMenu(e.clientX, e.clientY);
+  });
 
   document.addEventListener('click', (e) => {
     const menu = document.getElementById('context-menu');

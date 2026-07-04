@@ -1042,6 +1042,25 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (btnMin)   btnMin.addEventListener('click',   function () { window.NativeAPI.minimizeWindow(); });
     if (btnMax)   btnMax.addEventListener('click',   function () { window.NativeAPI.toggleMaximizeWindow(); });
+
+    /* Double-click the drag bar to toggle maximize. On Electron the
+       topbar is a native drag region (-webkit-app-region: drag), so the
+       OS handles this gesture already — we only wire it for Tauri, whose
+       data-tauri-drag-region does not toggle-maximize on double-click
+       here. Gating to isTauri also prevents any double-toggle. Ignore
+       double-clicks that land on interactive controls (buttons, inputs,
+       menus) — only the bare drag region maximizes, matching a native
+       titlebar. */
+    if (isTauri) {
+      var topbar = document.getElementById('topbar');
+      if (topbar) {
+        topbar.addEventListener('dblclick', function (e) {
+          if (e.target.closest('button, input, select, textarea, a, .menu-container, #doc-title')) return;
+          window.NativeAPI.toggleMaximizeWindow();
+        });
+      }
+    }
+
         if (btnClose) {
 
 

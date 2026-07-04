@@ -2476,6 +2476,11 @@ ${filePath}`,
         { label: "Delete", action: () => deleteNode(nodePath, "file"), danger: true }
       ]
     );
+    renderContextMenu(x, y, items);
+  }
+  function renderContextMenu(x, y, items) {
+    const menu = document.getElementById("context-menu");
+    if (!menu) return;
     menu.innerHTML = "";
     items.forEach((item) => {
       if (item.sep) {
@@ -2503,6 +2508,15 @@ ${filePath}`,
     menu.style.top = Math.min(y, vh - mh - 8) + "px";
     menu.style.display = "";
     menu.classList.add("show");
+  }
+  function showRootContextMenu(x, y) {
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return;
+    renderContextMenu(x, y, [
+      { label: "New File", action: () => createNewFile(S.rootPath) },
+      { label: "New Folder", action: () => createNewFolder(S.rootPath) },
+      { sep: true },
+      { label: "Show in Explorer", action: () => window.NativeAPI.showInExplorer(S.rootPath) }
+    ]);
   }
   function highlightActiveFile(filePath) {
     if (S.sidebarViewMode === "card") {
@@ -2534,6 +2548,10 @@ ${filePath}`,
         updateToggleAllBtn();
       });
     }
+    treeEl.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showRootContextMenu(e.clientX, e.clientY);
+    });
     document.addEventListener("click", (e) => {
       const menu = document.getElementById("context-menu");
       if (menu) {
