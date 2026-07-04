@@ -28,7 +28,8 @@ const {
     EditorState, StateField, StateEffect, Compartment, RangeSetBuilder, Prec,
     history, historyKeymap, defaultKeymap,
     markdown, Strikethrough, TaskList, Table, codeLanguages, syntaxHighlighting, defaultHighlightStyle,
-    lineNumbers
+    lineNumbers,
+    autocompletion, startCompletion, completionStatus
   } = CM;  // Note: language-data pack omitted (see codemirror-bundle.js)
 
 const lineNumbersCompartment = new Compartment();
@@ -258,6 +259,122 @@ const lineNumbersCompartment = new Compartment();
     },
   }];
 
+  // ── 5d. YAML frontmatter autocomplete ──────────────────────────────────
+  // CLAUDE.md feature: suggest the project's existing frontmatter keys and
+  // values (tags etc.) while editing YAML, so standard metadata never has
+  // to be retyped. Built on the first-party @codemirror/autocomplete
+  // engine — no custom popup fighting the editor. The source gates itself
+  // to the frontmatter region, so nothing changes anywhere else in the
+  // document. Data comes from window.sidebarYamlIndex (project-wide scan,
+  // mtime-cached, provided by the sidebar bundle; in web mode it indexes
+  // the current document only). Always on — it can only ever appear
+  // inside frontmatter.
+
+  /* Start offset of the CLOSING '---'/'...' line of a leading YAML block,
+     or 0 when the document has no frontmatter. Same rules as the live
+     preview's protected region (markdown_editor_livepreview.js). */
+  function _fmCloseLineStart(state) {
+    const doc = state.doc;
+    if (doc.lines < 2 || doc.line(1).text.replace(/\r$/, '') !== '---') return 0;
+    const maxScan = Math.min(doc.lines, 60);
+    for (let n = 2; n <= maxScan; n++) {
+      const t = doc.line(n).text.replace(/\r$/, '');
+      if (t === '---' || t === '...') return doc.line(n).from;
+    }
+    return 0;
+  }
+
+  async function yamlCompletionSource(context) {
+    const state = context.state;
+    const pos = context.pos;
+    const closeAt = _fmCloseLineStart(state);
+    if (!closeAt) return null;
+    const line = state.doc.lineAt(pos);
+    if (line.number === 1 || line.from >= closeAt) return null; // outside the block
+
+    const before = line.text.slice(0, pos - line.from);
+    let mode = null, key = null, from = pos, prefix = '';
+    let m;
+    if ((m = /^([A-Za-z0-9_][\w-]*)\s*:\s(.*)$/.exec(before)) || (m = /^([A-Za-z0-9_][\w-]*)\s*:()$/.exec(before))) {
+      /* After "key:" — completing a VALUE. For inline lists take the text
+         after the last separator so "tags: [alpha, be|" completes "be". */
+      mode = 'value';
+      key = m[1];
+      const valPart = m[2] || '';
+      const lastSep = Math.max(valPart.lastIndexOf(','), valPart.lastIndexOf('['));
+      prefix = valPart.slice(lastSep + 1).replace(/^\s+/, '');
+      from = pos - prefix.length;
+    } else if ((m = /^\s*-\s+(.*)$/.exec(before))) {
+      /* "- item" under a block-list key: the owning key is above. */
+      mode = 'value';
+      prefix = m[1];
+      from = pos - prefix.length;
+      for (let n = line.number - 1; n >= 2; n--) {
+        const t = state.doc.line(n).text;
+        const kv = /^([A-Za-z0-9_][\w-]*)\s*:/.exec(t);
+        if (kv) { key = kv[1]; break; }
+        if (!/^\s*-\s/.test(t)) break;
+      }
+      if (!key) return null;
+    } else if ((m = /^([A-Za-z0-9_-]*)$/.exec(before))) {
+      mode = 'key';
+      prefix = m[1];
+      from = line.from;
+    } else {
+      return null;
+    }
+
+    /* Only the frontmatter slice is passed for current-doc merging —
+       never the whole document (docs can be large; frontmatter is tiny). */
+    let index = null;
+    try {
+      if (typeof window.sidebarYamlIndex === 'function') {
+        const fmSlice = state.doc.sliceString(0, Math.min(closeAt + 4, state.doc.length));
+        index = await window.sidebarYamlIndex(fmSlice);
+      }
+    } catch (_) { /* index unavailable — no completions, never an error */ }
+    if (!index) return null;
+
+    let options;
+    if (mode === 'key') {
+      options = (index.keys || []).map((k) => ({
+        label: k.label,
+        apply: k.label + ': ',
+        boost: Math.min(k.count || 1, 99) / 100,
+      }));
+    } else {
+      const vals = (index.values && index.values[key]) || [];
+      options = vals.map((v) => ({
+        label: v.label,
+        boost: Math.min(v.count || 1, 99) / 100,
+      }));
+    }
+    if (!options.length) return null;
+    return {
+      from,
+      options,
+      validFor: mode === 'key' ? /^[\w-]*$/ : /^[^,\[\]\n]*$/,
+    };
+  }
+
+  /* Clicking into the frontmatter opens the menu (the CLAUDE.md UX:
+     "when clicking on the rendered YAML part, a drop menu is shown").
+     Pointer selections only — arrow-key travel through the block should
+     not pop UI. With selectOnOpen:false below, Enter still inserts a
+     newline until the user actually arrows onto a suggestion.          */
+  const yamlClickToComplete = EditorView.updateListener.of((update) => {
+    if (!update.selectionSet) return;
+    if (!update.transactions.some((tr) => tr.isUserEvent('select.pointer'))) return;
+    const st = update.state;
+    const closeAt = _fmCloseLineStart(st);
+    if (!closeAt) return;
+    const head = st.selection.main.head;
+    const ln = st.doc.lineAt(head);
+    if (ln.number === 1 || ln.from >= closeAt) return;
+    if (completionStatus(st) !== null) return; // already open or pending
+    setTimeout(() => { try { startCompletion(update.view); } catch (_) {} }, 0);
+  });
+
   // ═════════════════════════════════════════════════════════════════════════
   // 6.  BUILD INITIAL EDITOR STATE
   // ═════════════════════════════════════════════════════════════════════════
@@ -283,6 +400,14 @@ const lineNumbersCompartment = new Compartment();
       placeholderCompartment.of(placeholder('Start writing\u2026')),
       lineNumbersCompartment.of([]), // Initialize empty, Settings will toggle this
       livePreviewCompartment.of([]), // Initialize empty, Settings will toggle this
+      /* YAML frontmatter autocomplete (5d). override: this is the ONLY
+         completion source; it returns null outside frontmatter, so the
+         engine stays inert everywhere else. selectOnOpen:false keeps
+         Enter inserting newlines until the user arrows onto an option
+         (the menu auto-opens on click — never steal the Enter key).
+         icons:false matches the app's clean menu aesthetic.           */
+      autocompletion({ override: [yamlCompletionSource], selectOnOpen: false, icons: false }),
+      yamlClickToComplete,
       Prec.highest(keymap.of(tabKeymap)),
       Prec.high(keymap.of([...escapeKeymap, ...autoWrapKeymap])),
       keymap.of([...defaultKeymap, ...historyKeymap]),

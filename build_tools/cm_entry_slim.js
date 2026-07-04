@@ -4,6 +4,10 @@ export { EditorState, StateField, StateEffect, Compartment, RangeSetBuilder, Pre
 export { history, historyKeymap, defaultKeymap, undo, redo } from '@codemirror/commands';
 export { markdown } from '@codemirror/lang-markdown';
 export { Strikethrough, TaskList, Table } from '@lezer/markdown'; // GFM parser extensions
+/* YAML frontmatter autocomplete (first-party engine — no editor conflicts).
+   The completion SOURCE lives in cm_setup.js and gates itself to the
+   frontmatter region; these exports are the engine + control functions. */
+export { autocompletion, startCompletion, closeCompletion, completionStatus, moveCompletionSelection, acceptCompletion } from '@codemirror/autocomplete';
 
 /* ── Fenced-code syntax colors ─────────────────────────────────────────
    Curated language set built on @codemirror/legacy-modes stream parsers:

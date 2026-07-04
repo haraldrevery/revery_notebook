@@ -3658,7 +3658,158 @@ Restore these changes, or discard and keep the saved version.`,
     })();
   }
 
+  // src/sidebar/project_scan.js
+  var MAX_FILES = 800;
+  var LIST_TTL_MS = 15 * 1e3;
+  var _cache = { at: 0, root: null, files: null };
+  async function listProjectTextFiles(exts) {
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return [];
+    const wanted = new Set((exts && exts.length ? exts : ["md"]).map((e) => e.toLowerCase()));
+    const now = Date.now();
+    if (!_cache.files || _cache.root !== S.rootPath || now - _cache.at >= LIST_TTL_MS) {
+      const files = [];
+      const walk = async (dir) => {
+        if (files.length >= MAX_FILES) return;
+        let entries;
+        try {
+          entries = await window.NativeAPI.readDirectory(dir);
+        } catch (_) {
+          return;
+        }
+        for (const e of entries) {
+          if (files.length >= MAX_FILES) return;
+          if (!e || !e.name || e.name.startsWith(".")) continue;
+          if (e.type === "dir") {
+            await walk(e.path);
+          } else {
+            files.push({ path: e.path, name: e.name, mtime: e.mtime });
+          }
+        }
+      };
+      await walk(S.rootPath);
+      _cache = { at: now, root: S.rootPath, files };
+    }
+    return _cache.files.filter((f) => {
+      const dot = f.name.lastIndexOf(".");
+      return dot > 0 && wanted.has(f.name.slice(dot + 1).toLowerCase());
+    });
+  }
+
+  // src/sidebar/yaml_index.js
+  var INDEX_TTL_MS = 30 * 1e3;
+  var MAX_FILE_BYTES = 1024 * 1024;
+  var MAX_KEYS = 200;
+  var MAX_VALUES_PER_KEY = 300;
+  var READ_BATCH = 8;
+  var _fileCache = /* @__PURE__ */ new Map();
+  var _built = { at: 0, root: null, agg: null };
+  function parseFrontmatterBlock(text) {
+    const m = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)(?:\r?\n|$)/.exec(text || "");
+    if (!m) return null;
+    const keys = [];
+    const pairs = /* @__PURE__ */ new Map();
+    let currentKey = null;
+    const addVals = (key, vals) => {
+      if (!vals.length) return;
+      const arr = pairs.get(key) || [];
+      arr.push(...vals);
+      pairs.set(key, arr);
+    };
+    for (const rawLine of m[1].split("\n")) {
+      const line = rawLine.replace(/\r$/, "");
+      const kv = /^([A-Za-z0-9_][\w-]*)\s*:\s*(.*)$/.exec(line);
+      if (kv) {
+        currentKey = kv[1];
+        keys.push(currentKey);
+        addVals(currentKey, splitYamlValues(kv[2]));
+        continue;
+      }
+      const li = /^\s*-\s+(.+)$/.exec(line);
+      if (li && currentKey) addVals(currentKey, splitYamlValues(li[1]));
+    }
+    return { keys, pairs };
+  }
+  function splitYamlValues(raw) {
+    let v = (raw || "").trim();
+    if (!v) return [];
+    let parts;
+    if (v.startsWith("[") && v.endsWith("]")) {
+      parts = v.slice(1, -1).split(",");
+    } else {
+      parts = [v];
+    }
+    return parts.map((s) => s.trim().replace(/^["']|["']$/g, "")).filter((s) => s && s.length <= 80);
+  }
+  function newAgg() {
+    return { keyCounts: /* @__PURE__ */ new Map(), valueCounts: /* @__PURE__ */ new Map() };
+  }
+  function foldParsed(agg, parsed) {
+    if (!parsed) return;
+    for (const k of parsed.keys) {
+      agg.keyCounts.set(k, (agg.keyCounts.get(k) || 0) + 1);
+    }
+    for (const [k, vals] of parsed.pairs) {
+      let vc = agg.valueCounts.get(k);
+      if (!vc) {
+        vc = /* @__PURE__ */ new Map();
+        agg.valueCounts.set(k, vc);
+      }
+      for (const v of vals) vc.set(v, (vc.get(v) || 0) + 1);
+    }
+  }
+  async function buildProjectAgg() {
+    const agg = newAgg();
+    const files = await listProjectTextFiles(["md"]);
+    for (let i = 0; i < files.length; i += READ_BATCH) {
+      const batch = files.slice(i, i + READ_BATCH);
+      await Promise.all(batch.map(async (f) => {
+        const cached = _fileCache.get(f.path);
+        if (cached && cached.mtime === f.mtime) return;
+        let parsed = null;
+        try {
+          const content = await window.NativeAPI.readFile(f.path);
+          if (typeof content === "string" && content.length <= MAX_FILE_BYTES) {
+            parsed = parseFrontmatterBlock(content);
+          }
+        } catch (_) {
+        }
+        _fileCache.set(f.path, { mtime: f.mtime, parsed });
+      }));
+    }
+    const live = new Set(files.map((f) => f.path));
+    for (const [p, entry] of _fileCache) {
+      if (!live.has(p)) {
+        _fileCache.delete(p);
+        continue;
+      }
+      foldParsed(agg, entry.parsed);
+    }
+    return agg;
+  }
+  function serialize(agg) {
+    const sortDesc = (m) => Array.from(m.entries()).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([label, count]) => ({ label, count }));
+    const keys = sortDesc(agg.keyCounts).slice(0, MAX_KEYS);
+    const values = {};
+    for (const [k, vc] of agg.valueCounts) {
+      values[k] = sortDesc(vc).slice(0, MAX_VALUES_PER_KEY);
+    }
+    return { keys, values };
+  }
+  async function getYamlIndex(currentDocFm) {
+    const root = window.NativeAPI && window.NativeAPI.isDesktop ? typeof window.sidebarGetRootPath === "function" ? window.sidebarGetRootPath() : null : "(web)";
+    const now = Date.now();
+    if (!_built.agg || _built.root !== root || now - _built.at >= INDEX_TTL_MS) {
+      _built = { at: now, root, agg: await buildProjectAgg() };
+    }
+    const merged = newAgg();
+    for (const [k, c] of _built.agg.keyCounts) merged.keyCounts.set(k, c);
+    for (const [k, vc] of _built.agg.valueCounts) merged.valueCounts.set(k, new Map(vc));
+    foldParsed(merged, parseFrontmatterBlock(currentDocFm));
+    return serialize(merged);
+  }
+
   // src/sidebar/index.js
+  window.sidebarYamlIndex = getYamlIndex;
   if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
     const btn = document.getElementById("btn-sidebar");
     if (btn) btn.style.display = "none";

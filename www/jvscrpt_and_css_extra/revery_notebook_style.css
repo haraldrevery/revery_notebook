@@ -2154,3 +2154,30 @@ body.live-preview-active #editor-pane {
   font-size: 0.85em;
   opacity: 0.55;
 }
+
+/* ── YAML frontmatter autocomplete tooltip ────────────────────────────
+   The CM engine positions/scrolls it; only the skin lives here. Theme
+   variables drive all four themes (dark/light/paper/forest) for free. */
+.cm-tooltip.cm-tooltip-autocomplete {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-md);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-brand, inherit);
+  z-index: 60;
+}
+.cm-tooltip-autocomplete > ul {
+  max-height: 14em; /* scrollable, like the settings submenus */
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.cm-tooltip-autocomplete > ul > li {
+  color: var(--text);
+  padding: 4px 10px;
+  border-left: 2px solid transparent;
+}
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-left-color: var(--accent, #7a8ee0);
+}

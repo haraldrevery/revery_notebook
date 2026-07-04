@@ -8,6 +8,7 @@
     "build:watch": "node build_cm.js --watch"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.7.1",
     "@codemirror/lang-markdown": "^6.3.2",
     "@codemirror/language": "^6.10.8",
