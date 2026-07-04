@@ -342,6 +342,50 @@
   await sleep(300);
   lpV2.tableReturns = !!document.querySelector('.lp-render table');
 
+  /* Click-to-edit must not make the view jump: after the widget→raw
+     swap (plus surrounding blocks reflowing) the clicked line must
+     still sit at the pointer's height (scroll pinning). */
+  const longDoc = [];
+  for (let i = 0; i < 15; i++) longDoc.push('Paragraph number ' + i + ' with some filler text.', '');
+  longDoc.push('| Col A | Col B |', '|---|---|', '| a | b |', '| c | d |', '');
+  for (let i = 15; i < 30; i++) longDoc.push('Paragraph number ' + i + ' with some filler text.', '');
+  replaceEditorContent(longDoc.join('\n'));
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(500);
+  lpV2.clickUnderPointer = await (async () => {
+    const view = window.cmView;
+    if (!view) return false;
+    /* Scroll the table's DOC position into view through CM itself —
+       widget DOM only exists for blocks inside the drawn viewport, so
+       a mid-document table isn't queryable until scrolled to. */
+    const tPos = editor.value.indexOf('| Col A');
+    if (tPos < 0) return false;
+    view.dispatch({ effects: CM.EditorView.scrollIntoView(tPos, { y: 'center' }) });
+    /* Poll rather than fixed sleeps: under a full parallel test run the
+       renderer's measure/rAF cycles can lag well past any fixed delay. */
+    let tbl2 = null;
+    for (let w = 0; w < 3000 && !tbl2; w += 150) {
+      await sleep(150);
+      tbl2 = document.querySelector('.lp-render table');
+    }
+    if (!tbl2) return false;
+    const wrapEl = tbl2.closest('.lp-render');
+    const rect = wrapEl.getBoundingClientRect();
+    if (rect.height === 0) return false;
+    const clickY = rect.top + rect.height / 2;
+    wrapEl.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true,
+      clientX: rect.left + 10, clientY: clickY,
+    }));
+    const lineH = view.defaultLineHeight || 24;
+    for (let w = 0; w < 3000; w += 150) {
+      await sleep(150);
+      const coords = view.coordsAtPos(view.state.selection.main.head);
+      if (coords && Math.abs(coords.top - clickY) <= 1.5 * lineH) return true;
+    }
+    return false;
+  })();
+
   /* Reader padding drives the live-preview column width. */
   const rpClicked = clickSetting('Reader padding', '50');
   await sleep(300);
