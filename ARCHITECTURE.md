@@ -643,6 +643,21 @@ write path, so a crash cannot leave a truncated zip. There is **no
 password option** by design: classic zip encryption is broken, and a
 fake lock would be worse than none.
 
+### YAML Frontmatter Autocomplete
+
+Editing the frontmatter block suggests the keys and values used across
+the project (first-party `@codemirror/autocomplete`; the source in
+`markdown_editor_cm_setup.js` gates itself to the frontmatter region, so
+the engine is inert everywhere else — always on, no setting). Data feed:
+`window.sidebarYamlIndex` from `src/sidebar/yaml_index.js`, which parses
+each note's frontmatter and caches the result **per file by mtime** —
+rebuilds only re-read changed files. File enumeration comes from
+`src/sidebar/project_scan.js` (`listProjectTextFiles`): a **shared,
+TTL-cached primitive intended for reuse** — a future project-wide search
+should consume it rather than growing its own walker. Caps: 800 files,
+1 MB/file, 200 keys, 300 values per key. Web mode indexes the current
+document only. Read-only by construction.
+
 Note for VSCode users: launching the app from an integrated terminal can
 inherit `ELECTRON_RUN_AS_NODE=1` from the editor, which makes
 `require('electron')` return a path string and the app crash at

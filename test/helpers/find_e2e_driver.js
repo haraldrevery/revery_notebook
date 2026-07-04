@@ -409,8 +409,51 @@
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
     .some((b) => (b.textContent || '').includes('Zip Project Export'));
 
+  /* 13. YAML frontmatter autocomplete (web mode: current-doc index).
+         Covers: key suggestions, click-to-open on a value position,
+         arrow+enter acceptance (after the engine's interactionDelay),
+         and silence outside the frontmatter block. */
+  const fmTooltip = () => document.querySelector('.cm-tooltip-autocomplete');
+  const fmLabels = () => Array.from(
+    document.querySelectorAll('.cm-tooltip-autocomplete .cm-completionLabel'))
+    .map((el) => el.textContent);
+  const fmWait = async () => {
+    for (let w = 0; w < 3000 && !fmTooltip(); w += 100) await sleep(100);
+    return !!fmTooltip();
+  };
+  const yamlComplete = {};
+
+  replaceEditorContent('---\ntags: [alpha, beta]\nstatus: done\nta\n---\n\nbody text');
+  const keyPos = editor.value.indexOf('\nta\n') + 3;
+  window.cmView.focus();
+  editor.setSelectionRange(keyPos, keyPos);
+  CM.startCompletion(window.cmView);
+  yamlComplete.keyMenu = await fmWait();
+  yamlComplete.keySuggests = fmLabels().includes('tags');
+
+  replaceEditorContent('---\ntags: [alpha, beta]\nstatus: done\ntags: \n---\n\nbody');
+  const valPos = editor.value.indexOf('tags: \n') + 6;
+  window.cmView.dispatch({ selection: { anchor: valPos }, userEvent: 'select.pointer' });
+  yamlComplete.clickOpens = await fmWait();
+  const vl = fmLabels();
+  yamlComplete.valueSuggests = vl.includes('alpha') && vl.includes('beta');
+
+  await sleep(400); // clear the engine's interactionDelay before key events
+  const fmCd = window.cmView.contentDOM;
+  fmCd.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  await sleep(150);
+  fmCd.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await sleep(200);
+  yamlComplete.accepts = /^tags: (alpha|beta)$/.test(editor.value.split('\n')[3]);
+
+  const bodyPos = editor.value.indexOf('body');
+  editor.setSelectionRange(bodyPos + 2, bodyPos + 2);
+  CM.startCompletion(window.cmView);
+  await sleep(600);
+  yamlComplete.bodyQuiet = !fmTooltip();
+
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
-           lpOnState, lpOffState, lpV2, zipEntryHidden };
+           lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete };
 })()

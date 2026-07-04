@@ -11,6 +11,12 @@ import { initFileOps } from './fileops.js';
 import { initDnd } from './dnd.js';
 import { initEditorMedia } from './editor_media.js';
 import { initCloseHandler, runBoot } from './lifecycle.js';
+import { getYamlIndex } from './yaml_index.js';
+
+/* YAML autocomplete data feed for the editor (cm_setup.js). Exposed in
+   BOTH modes: on desktop it indexes the whole project; in web mode it
+   degrades to the current document's frontmatter (passed by the caller). */
+window.sidebarYamlIndex = getYamlIndex;
 
 /* ── Guard: desktop only ─────────────────────────────────────────── */
 if (!window.NativeAPI || !window.NativeAPI.isDesktop) {

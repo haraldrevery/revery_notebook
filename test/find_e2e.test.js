@@ -111,4 +111,11 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
 
   // 12. zip export is desktop-only — absent from the File menu in web mode
   assert.equal(r.zipEntryHidden, true, 'Zip Project Export must be hidden in web mode');
+
+  // 13. YAML frontmatter autocomplete: keys, click-to-open, accept, gated
+  assert.deepEqual(r.yamlComplete, {
+    keyMenu: true, keySuggests: true,
+    clickOpens: true, valueSuggests: true,
+    accepts: true, bodyQuiet: true,
+  }, 'frontmatter autocomplete must suggest keys/values, open on click, accept via arrows+enter, and stay silent outside frontmatter');
 });
