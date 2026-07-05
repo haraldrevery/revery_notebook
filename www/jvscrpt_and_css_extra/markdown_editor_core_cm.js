@@ -641,6 +641,18 @@ function scrollToHeading(lineIndex) {
   }
   const charEnd = charStart + (lines[lineIndex] ? lines[lineIndex].length : 0);
 
+  /* Live preview: the outline must NAVIGATE, not edit — selecting the
+     heading would flip its rendered block to raw markdown, and the
+     ratio-scroll below is meaningless against rendered block heights.
+     Scroll precisely via CM and leave selection and focus untouched.  */
+  if (document.body.classList.contains('live-preview-active')
+      && window.cmView && window.CM && CM.EditorView) {
+    window.cmView.dispatch({
+      effects: CM.EditorView.scrollIntoView(charStart, { y: 'start', yMargin: 60 }),
+    });
+    return;
+  }
+
   /* Scroll editor so the heading sits near the top of the viewport */
   const totalLines  = lines.length || 1;
   const scrollRatio = lineIndex / totalLines;

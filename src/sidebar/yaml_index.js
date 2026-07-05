@@ -61,18 +61,17 @@ export function parseFrontmatterBlock(text) {
   return { keys, pairs };
 }
 
-/* Inline arrays split on commas; plain scalars stay whole (so
-   "title: Hello, world" is ONE value, but "tags: [a, b]" is two). */
+/* Comma-separated values are treated as LISTS in both spellings —
+   "tags: a, b" and "tags: [a, b]" index identically. This matches the
+   editor-side completion, which already segments values at commas, so
+   the two dialects behave the same everywhere. (Strict YAML calls the
+   unbracketed form a single string, but for tag-like metadata the list
+   reading is what users mean — and consistency beats pedantry.)      */
 function splitYamlValues(raw) {
   let v = (raw || '').trim();
   if (!v) return [];
-  let parts;
-  if (v.startsWith('[') && v.endsWith(']')) {
-    parts = v.slice(1, -1).split(',');
-  } else {
-    parts = [v];
-  }
-  return parts
+  if (v.startsWith('[') && v.endsWith(']')) v = v.slice(1, -1);
+  return v.split(',')
     .map((s) => s.trim().replace(/^["']|["']$/g, ''))
     .filter((s) => s && s.length <= 80);
 }

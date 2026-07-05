@@ -2280,3 +2280,40 @@ body.live-preview-active #editor-pane {
   white-space: normal;
 }
 .lp-yaml .yaml-render { margin-top: 4px; }
+
+
+/* Live preview padding parity: the content surface uses the SAME
+   padding as #preview/reader mode (40px 52px 80px desktop, 28px 20px
+   80px mobile — keep in sync with the #preview rules). The editor's own
+   padding lives on .cm-content via the CM theme (--editor-padding), so
+   the override targets the SAME element (!important beats the injected
+   theme). Toggling LP off restores the Editor padding setting
+   untouched — same pattern as the pane width and fonts. */
+body.live-preview-active #editor .cm-content {
+  padding: 40px 52px 80px !important;
+}
+@media (max-width: 899px) {
+  body.live-preview-active #editor .cm-content {
+    padding: 28px 20px 80px !important;
+  }
+}
+
+/* Outline panel font-size buttons (drive the existing Outline font size
+   setting; nothing else in the UI is affected). */
+#outline-size-controls {
+  float: right;
+  display: inline-flex;
+  gap: 2px;
+}
+#outline-size-controls button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0 5px;
+  touch-action: manipulation;
+}
+#outline-size-controls button:hover { color: var(--text); }
