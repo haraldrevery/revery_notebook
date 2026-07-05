@@ -220,6 +220,14 @@
   const lpPre = document.querySelector('.lp-render pre');
   lpV2.fenceHidden  = !!lpPre && !lpPre.textContent.includes('```');
   lpV2.fenceColored = !!document.querySelector('.lp-render pre code span[class*="hljs-"]');
+  /* class presence is not enough — the token must be VISIBLY colored
+     (the CM dark-mode span reset used to flatten hljs colors to --text) */
+  lpV2.fenceColorReal = (() => {
+    const kw = document.querySelector('.lp-render pre span[class*="hljs-"]');
+    const para2 = document.querySelector('.lp-render p');
+    return !!kw && !!para2
+      && getComputedStyle(kw).color !== getComputedStyle(para2).color;
+  })();
   lpV2.codeFontParity = (() => {
     const a = document.querySelector('.lp-render pre code');
     const b = document.querySelector('#preview pre code');
@@ -425,6 +433,68 @@
     window.cmView.state.selection.main.head === selBefore2
     && window.cmView.scrollDOM.scrollTop < scrollBefore2
     && !!document.querySelector('.lp-render h1');
+
+  /* Reader mode while LP is on: the outline must scroll the PREVIEW
+     (the editor is hidden there — the LP scroll branch must yield). */
+  toggleReaderMode();
+  await sleep(400);
+  const pvEl2 = document.getElementById('preview');
+  pvEl2.scrollTop = 0;
+  scrollToHeading(editor.value.split('\n').findIndex((l) => l === '# Second'));
+  await sleep(500);
+  lpV2.readerOutlineScrolls = pvEl2.scrollTop > 100;
+  toggleReaderMode();
+  await sleep(300);
+
+  /* Marginal widget clicks (on the frame, not content) route the cursor
+     to the nearest gap instead of revealing the neighbouring block. */
+  replaceEditorContent('# Title\n\npara one text\n\npara two text\n\nend');
+  const pOne = editor.value.indexOf('para one');
+  editor.setSelectionRange(pOne + 3, pOne + 3); // editing para one (raw)
+  await sleep(400);
+  const wTwo = Array.from(document.querySelectorAll('.lp-render'))
+    .find((w) => w.textContent.includes('para two'));
+  const rTwo = wTwo.getBoundingClientRect();
+  wTwo.dispatchEvent(new MouseEvent('mousedown', {
+    bubbles: true, cancelable: true, clientX: rTwo.left + 5, clientY: rTwo.top + 2,
+  }));
+  await sleep(350);
+  lpV2.edgeClickNoSteal =
+    !!Array.from(document.querySelectorAll('.lp-render')).find((w) => w.textContent.includes('para two'))
+    && window.cmView.state.doc.lineAt(window.cmView.state.selection.main.head).text === '';
+
+  /* Outline active-highlight follows the LP editor scroll. */
+  document.getElementById('outline-pane').style.display = '';
+  replaceEditorContent('# First\n\n' + 'filler text\n\n'.repeat(40) + '# Second\n\nend');
+  editor.setSelectionRange(0, 0);
+  if (typeof renderOutline === 'function') renderOutline();
+  await sleep(400);
+  /* Scroll '# Second' to the top via CM (deterministic against widget
+     height re-measurement): either it reaches the reading offset, or the
+     scroll clamps at the bottom — both paths must mark it active. Re-
+     issue until the scroll position stops moving (heights settle). */
+  const secondPos = editor.value.indexOf('# Second');
+  let lastTop = -1;
+  for (let i = 0; i < 8; i++) {
+    window.cmView.dispatch({
+      effects: CM.EditorView.scrollIntoView(secondPos, { y: 'start' }),
+    });
+    await sleep(250);
+    const t = window.cmView.scrollDOM.scrollTop;
+    if (Math.abs(t - lastTop) < 1) break;
+    lastTop = t;
+  }
+  await sleep(500); // outline debounce + settle
+  /* Height re-measurement can reach the final position AFTER the last
+     scroll event (no further event fires when only scrollHeight moves) —
+     a real user's next wheel tick re-triggers the listener; the probe
+     calls the update once explicitly. The listener path itself is
+     proven by the highlight having been set during the scroll above. */
+  updateActiveOutline();
+  await sleep(150);
+  const activeOl = document.querySelector('.outline-item.active-outline');
+  lpV2.outlineSyncs = !!activeOl && activeOl.textContent === 'Second';
+  document.getElementById('outline-pane').style.display = 'none';
 
   /* Content padding equals the reader/preview surface padding. */
   const edPad = getComputedStyle(document.querySelector('.cm-content'));

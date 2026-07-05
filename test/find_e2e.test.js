@@ -97,7 +97,7 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     hrWidget: true, bullet: true, imageWidget: true,
     headingUpper: true, texture: true, imageParity: true, hrRevealsRaw: true,
     strikeRendered: true, copyButton: true, copyClickSafe: true,
-    fenceHidden: true, fenceColored: true, codeFontParity: true, copyNoReveal: true,
+    fenceHidden: true, fenceColored: true, fenceColorReal: true, codeFontParity: true, copyNoReveal: true,
     taskBoxes: true, taskDoneStyled: true, taskToggled: true,
     mathInline: true, mathBlock: true, mathMultiline: true,
     currencySafe: true, codeMathRaw: true,
@@ -105,7 +105,8 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     sizeMatchesPreview: true, h1Parity: true, sizeNotEditorBound: true,
     familyFollows: true, familyRestores: true, katexSizeParity: true,
     tableRendered: true, tableParity: true, tableClickReveals: true, tableReturns: true,
-    clickUnderPointer: true, outlineScrollOnly: true, paddingParity: true,
+    clickUnderPointer: true, outlineScrollOnly: true, readerOutlineScrolls: true,
+    edgeClickNoSteal: true, outlineSyncs: true, paddingParity: true,
     readerPadding: true, readerPaddingResets: true,
   }, 'v2 blocks must render through the preview pipeline with computed-style parity: headers, code font+colors, hidden fences, image sizing, tables, multi-line math');
 

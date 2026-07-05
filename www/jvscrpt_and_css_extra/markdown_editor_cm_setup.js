@@ -171,13 +171,17 @@ const lineNumbersCompartment = new Compartment();
     '&.highlight-flash .cm-selectionBackground': {
       backgroundColor: 'rgba(255,200,60,0.6) !important',
     },
-    // Fix unreadable syntax highlighting colors in dark mode.
-    '[data-theme="dark"] & .cm-content span:not(.cm-placeholder)': {
+    // Fix unreadable syntax highlighting colors in dark mode. Live-preview
+    // widget content (.lp-render/.lp-yaml) is EXCLUDED: it carries its own
+    // colors — hljs token classes in code fences, KaTeX, YAML pill tints —
+    // which this blanket !important used to silently flatten to --text.
+    '[data-theme="dark"] & .cm-content span:not(.cm-placeholder):not(.lp-render *):not(.lp-yaml *)': {
       color: 'var(--text) !important',
     },
     // Strip bold, font-size changes, and underlines that defaultHighlightStyle applies
     // to heading, strong, link, and url tokens — the editor renders as plain text.
-    '.cm-content span:not(.cm-placeholder)': {
+    // Same widget exclusion: prose/hljs spans keep their own weight and size.
+    '.cm-content span:not(.cm-placeholder):not(.lp-render *):not(.lp-yaml *)': {
       fontWeight: 'normal !important',
       textDecoration: 'none !important',
       fontSize: 'inherit !important',
