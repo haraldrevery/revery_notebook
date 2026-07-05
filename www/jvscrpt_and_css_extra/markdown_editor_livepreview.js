@@ -177,15 +177,23 @@
       });
       return wrap;
     }
-    ignoreEvent() { return false; } // our own handlers need the events
+    /* true = CodeMirror never ALSO handles events on the widget. With
+       false, CM's own pointer handling dispatched a competing cursor
+       placement for every mousedown — which is why clicking the copy
+       button (or a task checkbox) used to flip the block to raw. Our
+       DOM listeners above fully own widget interaction.               */
+    ignoreEvent() { return true; }
   }
 
   /* Shared click-to-edit wiring for rendered block widgets (markdown
      blocks AND the YAML pill box): map the click's vertical position to
      a source line, pin that line under the pointer through the reflow,
      and dispatch as a POINTER selection — semantically true, and it lets
-     the YAML autocomplete's click-to-open listener react to it.        */
-  function attachClickToEdit(wrap, src) {
+     the YAML autocomplete's click-to-open listener react to it.
+     `resolvePos(e, view)` (optional) lets a widget supply an exact doc
+     position for a click target (the YAML pills do); returning null
+     falls back to the vertical-fraction estimate.                     */
+  function attachClickToEdit(wrap, src, resolvePos) {
     wrap.addEventListener('mousedown', (e) => {
       if (e.target.closest('.code-copy-btn') || e.target.closest('.lp-task-checkbox')) return;
       e.preventDefault();
@@ -193,17 +201,25 @@
       if (!view2) return;
       let pos;
       try { pos = view2.posAtDOM(wrap); } catch (_) { return; }
-      /* Refine to the clicked line: estimate from the click's vertical
-         position within the rendered block. Falls back to the start. */
-      try {
-        const rect = wrap.getBoundingClientRect();
-        if (rect.height > 0) {
-          const frac = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-          const lines = src.split('\n');
-          const lineIdx = Math.min(lines.length - 1, Math.floor(frac * lines.length));
-          for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
-        }
-      } catch (_) { /* keep block start */ }
+      let resolved = null;
+      if (resolvePos) {
+        try { resolved = resolvePos(e, view2); } catch (_) { resolved = null; }
+      }
+      if (resolved != null) {
+        pos = Math.max(0, Math.min(resolved, view2.state.doc.length));
+      } else {
+        /* Refine to the clicked line: estimate from the click's vertical
+           position within the rendered block. Falls back to the start. */
+        try {
+          const rect = wrap.getBoundingClientRect();
+          if (rect.height > 0) {
+            const frac = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+            const lines = src.split('\n');
+            const lineIdx = Math.min(lines.length - 1, Math.floor(frac * lines.length));
+            for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
+          }
+        } catch (_) { /* keep block start */ }
+      }
       /* Pin the clicked line under the pointer: the widget→raw swap
          (and the previous active block re-collapsing) changes content
          heights, so a plain scrollIntoView makes the view jump. The
@@ -251,10 +267,28 @@
         wrap.textContent = this.src;
         wrap.classList.add('lp-render-fallback');
       }
-      attachClickToEdit(wrap, this.src);
+      /* Clicking a PILL lands the cursor at the start of that key's first
+         value (pills carry data-start = doc offset of their source line),
+         so the suggestions menu opens with the FULL value list for
+         exactly that key. Elsewhere in the box: line-fraction fallback. */
+      attachClickToEdit(wrap, this.src, (e, view) => {
+        const pill = e.target.closest ? e.target.closest('.yaml-pill') : null;
+        if (!pill || !pill.dataset || pill.dataset.start === undefined) return null;
+        const ds = parseInt(pill.dataset.start, 10);
+        if (!Number.isFinite(ds)) return null;
+        const line = view.state.doc.lineAt(Math.max(0, Math.min(ds, view.state.doc.length)));
+        const colon = line.text.indexOf(':');
+        if (colon === -1) return line.from;
+        let p = colon + 1;
+        while (p < line.text.length && /[\s\[]/.test(line.text[p])) p++;
+        return line.from + p;
+      });
       return wrap;
     }
-    ignoreEvent() { return false; }
+    /* CM must never ALSO handle events on the widget: its own pointer
+       handling would dispatch a competing cursor placement at the widget
+       boundary (which closed the menu before it could open).          */
+    ignoreEvent() { return true; }
   }
 
   /* ── Block segmentation + decoration build ───────────────────────── */

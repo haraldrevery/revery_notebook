@@ -176,7 +176,8 @@ window.applyDOMTranslations = function() {
   updateTxt('#btn-export .btn-label-mobile', 'Export');
   updateTxt('#editor-pane .pane-label', 'Markdown');
   updateTxt('#preview-pane .pane-label', 'Preview');
-  updateTxt('#outline-pane .pane-label', 'Outline');
+  // Target the title span only — the pane label also hosts the +/- font buttons.
+  updateTxt('#outline-pane-title', 'Outline');
   updateTxt('#preview-empty span', 'Nothing here yet');
   
   updateTitle('#btn-logo', 'Harald Revery — Menu');
@@ -374,6 +375,26 @@ function applyOutlineFontSize() {
   const uiScale = uiSize / 100;
   document.documentElement.style.setProperty('--outline-font-size', ((0.76 * scale) / uiScale).toFixed(3) + 'rem');
 }
+
+/* Canonical setter — shared by the Settings submenu and the +/- buttons
+   on the outline panel. Clamps to the submenu's own range, persists,
+   and keeps the Settings checkmark in sync. Touches ONLY the outline
+   font variable, nothing else in the UI. */
+window.setOutlineFontSize = function (pct) {
+  outlineFontSize = Math.max(70, Math.min(240, Math.round(pct / 10) * 10));
+  applyOutlineFontSize();
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+  if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
+};
+window.getOutlineFontSize = function () { return outlineFontSize; };
+
+/* The +/- buttons on the outline panel header. */
+(function initOutlineSizeButtons() {
+  const plus  = document.getElementById('outline-font-plus');
+  const minus = document.getElementById('outline-font-minus');
+  if (plus)  plus.addEventListener('click',  (e) => { e.stopPropagation(); window.setOutlineFontSize(outlineFontSize + 10); });
+  if (minus) minus.addEventListener('click', (e) => { e.stopPropagation(); window.setOutlineFontSize(outlineFontSize - 10); });
+})();
 
 /* Apply UI size: injects a <style> override that counteracts the root
    font-size change for prose headings, which use hardcoded rem values in
@@ -1443,10 +1464,8 @@ const editorPaddingOptions = [
     btn.textContent = (outlineFontSize === pct ? '■ ' : '\u00a0\u00a0') + pct + '%';
     btn.onclick = (e) => {
       e.stopPropagation();
-      outlineFontSize = pct;
-      applyOutlineFontSize();
+      window.setOutlineFontSize(pct); // canonical: applies + persists + resyncs
       settingsDropdown.classList.remove('show');
-      buildSettingsMenu();
     };
     outlineSizeSub.appendChild(btn);
   });

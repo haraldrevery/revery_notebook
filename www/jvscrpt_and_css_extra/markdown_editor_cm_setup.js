@@ -364,6 +364,8 @@ const lineNumbersCompartment = new Compartment();
     } catch (_) { /* index unavailable — no completions, never an error */ }
     if (!index) return null;
 
+    const currentToken = state.doc.sliceString(from, to);
+
     let options;
     if (mode === 'key' || mode === 'key-replace') {
       options = (index.keys || []).map((k) => ({
@@ -375,17 +377,44 @@ const lineNumbersCompartment = new Compartment();
       }));
     } else {
       const vals = (index.values && index.values[key]) || [];
+      /* Every value option replaces the WHOLE clicked segment via a
+         function apply (from..to spans the value). This decouples what
+         is SHOWN from what is REPLACED: on an explicit open the menu can
+         list all values with an empty filter while still cleanly
+         swapping the value the user landed on. */
+      const applyValue = (view, completion) => {
+        view.dispatch({
+          changes: { from, to, insert: completion.label },
+          selection: { anchor: from + completion.label.length },
+          userEvent: 'input.complete',
+        });
+      };
       options = vals.map((v) => ({
         label: v.label,
+        apply: applyValue,
         boost: Math.min(v.count || 1, 99) / 100,
       }));
     }
-    /* Never suggest the exact token the cursor is already on — accepting
-       it would be a no-op, and it shadows real suggestions (the current
-       half-typed token is itself in the merged index). */
-    const currentToken = state.doc.sliceString(from, to);
-    options = options.filter((o) => o.label !== currentToken);
     if (!options.length) return null;
+
+    /* Explicit open (pill click / Ctrl+Space) vs. implicit (typing):
+       - EXPLICIT: show ALL options with an empty filter (from = the
+         cursor, so CM has no existing text to match against), the
+         current value DEMOTED to the bottom. Function applies still
+         replace the full from..to segment. This is what makes clicking a
+         "tags: [alpha, beta]" pill list both alpha and beta.
+       - IMPLICIT: filter by the typed prefix (from..to spans it) and
+         demote the exact current token so a half-typed value that leaked
+         into the current-doc index can't shadow the real suggestion.   */
+    options = options.map((o) =>
+      o.label === currentToken ? Object.assign({}, o, { boost: -99 }) : o);
+
+    /* The empty-filter reveal only applies to VALUES (whose function
+       apply replaces the whole segment). Keys keep span-replace so an
+       explicit key completion still overwrites the key text. */
+    if (context.explicit && mode === 'value') {
+      return { from: pos, options };
+    }
     return {
       from,
       to,

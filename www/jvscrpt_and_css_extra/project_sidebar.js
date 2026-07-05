@@ -3739,13 +3739,8 @@ Restore these changes, or discard and keep the saved version.`,
   function splitYamlValues(raw) {
     let v = (raw || "").trim();
     if (!v) return [];
-    let parts;
-    if (v.startsWith("[") && v.endsWith("]")) {
-      parts = v.slice(1, -1).split(",");
-    } else {
-      parts = [v];
-    }
-    return parts.map((s) => s.trim().replace(/^["']|["']$/g, "")).filter((s) => s && s.length <= 80);
+    if (v.startsWith("[") && v.endsWith("]")) v = v.slice(1, -1);
+    return v.split(",").map((s) => s.trim().replace(/^["']|["']$/g, "")).filter((s) => s && s.length <= 80);
   }
   function newAgg() {
     return { keyCounts: /* @__PURE__ */ new Map(), valueCounts: /* @__PURE__ */ new Map() };

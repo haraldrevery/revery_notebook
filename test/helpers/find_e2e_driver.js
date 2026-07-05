@@ -209,6 +209,14 @@
   if (copyBtn) copyBtn.click(); // must not throw / must not edit the doc
   await sleep(150);
   lpV2.copyClickSafe = editor.value.includes('const x = 1;');
+  /* a real MOUSEDOWN on the copy button must NOT flip the block to raw
+     (widgets own their events now — CM never double-handles) */
+  const copyBtn2 = document.querySelector('.cm-content .code-copy-btn');
+  if (copyBtn2) {
+    copyBtn2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await sleep(250);
+  }
+  lpV2.copyNoReveal = !!document.querySelector('.lp-render pre');
   const lpPre = document.querySelector('.lp-render pre');
   lpV2.fenceHidden  = !!lpPre && !lpPre.textContent.includes('```');
   lpV2.fenceColored = !!document.querySelector('.lp-render pre code span[class*="hljs-"]');
@@ -405,6 +413,26 @@
     return false;
   })();
 
+  /* Outline click must NAVIGATE only: no selection change, no reveal. */
+  replaceEditorContent('# First\n\n' + 'filler text\n\n'.repeat(40) + '# Second\n\nend');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(400);
+  const selBefore2 = window.cmView.state.selection.main.head;
+  const scrollBefore2 = window.cmView.scrollDOM.scrollTop;
+  scrollToHeading(0); // same function the outline buttons call
+  await sleep(400);
+  lpV2.outlineScrollOnly =
+    window.cmView.state.selection.main.head === selBefore2
+    && window.cmView.scrollDOM.scrollTop < scrollBefore2
+    && !!document.querySelector('.lp-render h1');
+
+  /* Content padding equals the reader/preview surface padding. */
+  const edPad = getComputedStyle(document.querySelector('.cm-content'));
+  const pvPad = getComputedStyle(document.getElementById('preview'));
+  lpV2.paddingParity = edPad.paddingLeft === pvPad.paddingLeft
+    && edPad.paddingTop === pvPad.paddingTop
+    && edPad.paddingBottom === pvPad.paddingBottom;
+
   /* Reader padding drives the live-preview column width. */
   const rpClicked = clickSetting('Reader padding', '50');
   await sleep(300);
@@ -485,8 +513,51 @@
   await sleep(200);
   yamlComplete.midTokenClean = /^tags: (alpha|beta)$/.test(editor.value.split('\n')[2]);
 
+  /* Clicking a YAML pill in live preview opens the FULL value menu for
+     that key (the current value is demoted, never hidden). */
+  window.setLivePreviewMode(true);
+  replaceEditorContent('---\ntags: [alpha, beta]\nstatus: done\n---\n\nbody');
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(400);
+  const tagsPill = Array.from(document.querySelectorAll('.lp-yaml .yaml-pill'))
+    .find((p) => p.textContent.startsWith('tags'));
+  if (tagsPill) {
+    tagsPill.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true,
+      clientY: tagsPill.getBoundingClientRect().top + 4,
+    }));
+  }
+  yamlComplete.pillOpensMenu = await fmWait();
+  const pl = fmLabels();
+  yamlComplete.pillValueMenu = pl.includes('alpha') && pl.includes('beta');
+  if (CM.closeCompletion) CM.closeCompletion(window.cmView);
+  window.setLivePreviewMode(false);
+  await sleep(200);
+
+  /* Unbracketed comma values index as lists too ("tag1, tag2"). */
+  replaceEditorContent('---\ntags: red, green blue\ntags: \n---\n\nbody');
+  const cPos = editor.value.indexOf('tags: \n') + 6;
+  window.cmView.focus();
+  window.cmView.dispatch({ selection: { anchor: cPos }, userEvent: 'select.pointer' });
+  const commaOpened = await fmWait();
+  const cl = fmLabels();
+  yamlComplete.commaListValues = commaOpened && cl.includes('red') && cl.includes('green blue');
+  if (CM.closeCompletion) CM.closeCompletion(window.cmView);
+
+  /* Outline +/- buttons scale only the outline font var, persisted. */
+  const pctBefore = window.getOutlineFontSize();
+  const varBefore = document.documentElement.style.getPropertyValue('--outline-font-size');
+  document.getElementById('outline-font-plus').click();
+  const grew = window.getOutlineFontSize() === Math.min(240, pctBefore + 10)
+    && document.documentElement.style.getPropertyValue('--outline-font-size') !== varBefore;
+  document.getElementById('outline-font-minus').click();
+  const outlineFontButtons = grew
+    && window.getOutlineFontSize() === pctBefore
+    && settingsNow().outlineFontSize === pctBefore;
+
   return { safeCount, safeLabel, redosCount, redosElapsed, recoveredCount,
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
-           lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete };
+           lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
+           outlineFontButtons };
 })()
