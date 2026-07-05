@@ -147,65 +147,114 @@ function centralHeader(nameBuf, method, dos, crc, csize, usize, extAttrs, offset
   return h;
 }
 
-/* ── Build the archive ────────────────────────────────────────────────────
- * buildZip(rootPath, { excludePath }) → { buffer, entries, bytes }
- * Throws with a user-presentable message on cap violations / IO errors.  */
-function buildZip(rootPath, opts) {
-  const { files, dirs, totalBytes } = walkProject(rootPath, opts);
-
+/* ── Core assembler ───────────────────────────────────────────────────────
+ * items: [{ name, data (Buffer | null = directory), mtime }] in archive
+ * order. Directory names must carry their trailing '/'.                  */
+function assembleZip(items) {
   const chunks  = [];
   const central = [];
   let offset = 0;
 
   const push = (buf) => { chunks.push(buf); offset += buf.length; };
 
-  /* Directory entries first — preserves empty folders on extract. */
-  for (const d of dirs) {
-    const nameBuf = Buffer.from(d.rel + '/', 'utf8');
-    const dos = dosDateTime(d.mtime);
+  for (const item of items) {
+    const nameBuf = Buffer.from(item.name, 'utf8');
+    const dos = dosDateTime(item.mtime);
     const at = offset;
-    push(localHeader(nameBuf, 0, dos, 0, 0, 0));
-    push(nameBuf);
-    central.push(centralHeader(nameBuf, 0, dos, 0, 0, 0, 0x10, at));
-    central.push(nameBuf);
-  }
-
-  for (const f of files) {
-    const nameBuf = Buffer.from(f.rel, 'utf8');
-    const data = fs.readFileSync(f.abs);
-    const crc = crc32(data);
-    const dos = dosDateTime(f.mtime);
-    /* Deflate, but keep whichever representation is smaller (tiny or
-       already-compressed files often grow under deflate).             */
-    const deflated = zlib.deflateRawSync(data);
-    const useDeflate = deflated.length < data.length;
-    const method = useDeflate ? 8 : 0;
-    const payload = useDeflate ? deflated : data;
-    const at = offset;
-    push(localHeader(nameBuf, method, dos, crc, payload.length, data.length));
-    push(nameBuf);
-    push(payload);
-    central.push(centralHeader(nameBuf, method, dos, crc, payload.length, data.length, 0, at));
-    central.push(nameBuf);
+    if (item.data == null) {
+      /* Directory entry — preserves empty folders on extract. */
+      push(localHeader(nameBuf, 0, dos, 0, 0, 0));
+      push(nameBuf);
+      central.push(centralHeader(nameBuf, 0, dos, 0, 0, 0, 0x10, at));
+      central.push(nameBuf);
+    } else {
+      const data = item.data;
+      const crc = crc32(data);
+      /* Deflate, but keep whichever representation is smaller (tiny or
+         already-compressed files often grow under deflate).           */
+      const deflated = zlib.deflateRawSync(data);
+      const useDeflate = deflated.length < data.length;
+      const method = useDeflate ? 8 : 0;
+      const payload = useDeflate ? deflated : data;
+      push(localHeader(nameBuf, method, dos, crc, payload.length, data.length));
+      push(nameBuf);
+      push(payload);
+      central.push(centralHeader(nameBuf, method, dos, crc, payload.length, data.length, 0, at));
+      central.push(nameBuf);
+    }
   }
 
   const cdStart = offset;
   for (const c of central) push(c);
   const cdSize = offset - cdStart;
-  const entryCount = files.length + dirs.length;
 
   const eocd = Buffer.alloc(22);
   eocd.writeUInt32LE(0x06054B50, 0);    // PK\x05\x06
   eocd.writeUInt16LE(0, 4);             // this disk
   eocd.writeUInt16LE(0, 6);             // cd start disk
-  eocd.writeUInt16LE(entryCount, 8);
-  eocd.writeUInt16LE(entryCount, 10);
+  eocd.writeUInt16LE(items.length, 8);
+  eocd.writeUInt16LE(items.length, 10);
   eocd.writeUInt32LE(cdSize, 12);
   eocd.writeUInt32LE(cdStart, 16);
   eocd.writeUInt16LE(0, 20);            // comment len
   push(eocd);
 
-  return { buffer: Buffer.concat(chunks), entries: entryCount, bytes: totalBytes };
+  return Buffer.concat(chunks);
 }
 
-module.exports = { buildZip, walkProject, crc32, MAX_ENTRIES, MAX_TOTAL_BYTES };
+/* ── Build the archive from a project folder ──────────────────────────────
+ * buildZip(rootPath, { excludePath }) → { buffer, entries, bytes }
+ * Throws with a user-presentable message on cap violations / IO errors.  */
+function buildZip(rootPath, opts) {
+  const { files, dirs, totalBytes } = walkProject(rootPath, opts);
+  const items = [
+    ...dirs.map((d) => ({ name: d.rel + '/', data: null, mtime: d.mtime })),
+    ...files.map((f) => ({ name: f.rel, data: fs.readFileSync(f.abs), mtime: f.mtime })),
+  ];
+  return { buffer: assembleZip(items), entries: items.length, bytes: totalBytes };
+}
+
+/* ── Build the archive from in-memory entries ─────────────────────────────
+ * buildZipFromEntries([{ name: 'dir/file.ext', data: Buffer|string }])
+ *   → { buffer, entries, bytes }
+ * Parent directory entries ('dir/') are inserted automatically. Used by
+ * the LaTeX project export (main.tex + images/*). Same caps as the
+ * project export.                                                        */
+function buildZipFromEntries(entries) {
+  const now = new Date();
+  const dirSet = new Set();
+  const items = [];
+
+  for (const e of entries) {
+    if (!e || typeof e.name !== 'string' || !e.name || e.name.endsWith('/')) {
+      throw new Error('Invalid zip entry name');
+    }
+    if (e.name.includes('..') || e.name.startsWith('/') || e.name.includes('\0')) {
+      throw new Error(`Unsafe zip entry name: ${e.name}`);
+    }
+    const parts = e.name.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const d = parts.slice(0, i).join('/') + '/';
+      if (!dirSet.has(d)) {
+        dirSet.add(d);
+        items.push({ name: d, data: null, mtime: now });
+      }
+    }
+  }
+
+  let bytes = 0;
+  for (const e of entries) {
+    const data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(String(e.data), 'utf8');
+    bytes += data.length;
+    if (bytes > MAX_TOTAL_BYTES) {
+      throw new Error('Export is too large for zip (limit 512 MB).');
+    }
+    items.push({ name: e.name, data, mtime: e.mtime || now });
+  }
+  if (items.length > MAX_ENTRIES) {
+    throw new Error(`Too many zip entries (limit ${MAX_ENTRIES}).`);
+  }
+  return { buffer: assembleZip(items), entries: items.length, bytes };
+}
+
+module.exports = { buildZip, buildZipFromEntries, walkProject, crc32, MAX_ENTRIES, MAX_TOTAL_BYTES };

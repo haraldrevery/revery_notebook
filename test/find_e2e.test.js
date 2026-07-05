@@ -121,6 +121,14 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     pillOpensMenu: true, pillValueMenu: true, commaListValues: true,
   }, 'frontmatter autocomplete must suggest keys/values, open on click (incl. LP pills), accept via arrows+enter, replace whole tokens, index comma lists, and stay silent outside frontmatter');
 
+  // 13b. export suite: LaTeX templates/engines/TOC + PDF options, menu entries
+  assert.deepEqual(r.exportSuite, {
+    reportClass: true, chapterPromotion: true, xelatexFontspec: true, tocOn: true,
+    articleSection: true, pdflatexInputenc: true, noTitleNoToc: true,
+    pdfFrontPage: true, pdfTocLinks: true, pdfPageOpts: true, pdfDefaultsClean: true,
+    pdfMenuEntry: true, latexMenuEntry: true,
+  }, 'export builders must honor LaTeX templates/engines/title/TOC and PDF front-page/TOC/@page options; both menu entries present');
+
   // 14. outline +/- buttons scale only the outline font, persisted
   assert.equal(r.outlineFontButtons, true, 'outline font buttons must step and persist the existing setting');
 });

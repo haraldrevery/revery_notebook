@@ -21,7 +21,7 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const { execFileSync } = require('node:child_process');
 
-const { buildZip, walkProject, crc32, MAX_ENTRIES } = require('../electron/zip_core.js');
+const { buildZip, buildZipFromEntries, walkProject, crc32, MAX_ENTRIES } = require('../electron/zip_core.js');
 
 function makeFixture(label) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `revery-zip-${label}-`));
@@ -138,4 +138,33 @@ test('deterministic output for identical trees', () => {
   const a = buildZip(root, {}).buffer;
   const b = buildZip(root, {}).buffer;
   assert.ok(a.equals(b), 'same tree → byte-identical archive');
+});
+
+test('buildZipFromEntries: files + auto parent dirs, valid archive', () => {
+  const { buffer, entries } = buildZipFromEntries([
+    { name: 'main.tex', data: '\\documentclass{article}' },
+    { name: 'images/åäö bild.png', data: Buffer.from([0x89, 0x50, 0x4E, 0x47]) },
+    { name: 'images/two.png', data: Buffer.from([1, 2, 3]) },
+  ]);
+  assert.equal(entries, 4); // images/ dir auto-inserted
+  const items = readZip(buffer);
+  const names = items.map((e) => e.name).sort();
+  assert.deepEqual(names, ['images/', 'images/two.png', 'images/åäö bild.png', 'main.tex']);
+  const tex = items.find((e) => e.name === 'main.tex');
+  assert.equal(tex.data.toString('utf8'), '\\documentclass{article}');
+  for (const it of items) {
+    if (it.data.length) assert.equal(crc32(it.data), it.crc, `CRC for ${it.name}`);
+  }
+  if (hasUnzip()) {
+    const tmpZip = path.join(os.tmpdir(), `revery-zipent-${process.pid}.zip`);
+    fs.writeFileSync(tmpZip, buffer);
+    try { execFileSync('unzip', ['-t', tmpZip], { stdio: 'pipe' }); }
+    finally { fs.rmSync(tmpZip, { force: true }); }
+  }
+});
+
+test('buildZipFromEntries rejects unsafe names', () => {
+  assert.throws(() => buildZipFromEntries([{ name: '../evil.txt', data: 'x' }]), /Unsafe/);
+  assert.throws(() => buildZipFromEntries([{ name: '/abs.txt', data: 'x' }]), /Unsafe/);
+  assert.throws(() => buildZipFromEntries([{ name: 'dir/', data: 'x' }]), /Invalid/);
 });

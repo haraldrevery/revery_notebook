@@ -521,6 +521,35 @@
     persistedOff:    settingsNow().livePreviewMode === false,
   };
 
+  /* 11b. Export suite builders (web mode: pure builders, no dialogs).
+     LaTeX templates/engines/TOC + PDF front-page/TOC/@page options. */
+  window.setLivePreviewMode(false);
+  await sleep(150);
+  replaceEditorContent('---\ntitle: My Doc\nauthor: Ada\n---\n\n# Intro\n\nBody **text**.\n\n## Sub\n\n$x^2$\n');
+  docTitle.value = 'My Doc';
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  await sleep(150);
+  const exportSuite = {};
+  const texR = window.exporterBuildLatex({ template: 'report', engine: 'xelatex', titlePage: true, toc: true });
+  exportSuite.reportClass = texR.tex.includes('\\documentclass{report}');
+  exportSuite.chapterPromotion = texR.tex.includes('\\chapter{');
+  exportSuite.xelatexFontspec = texR.tex.includes('fontspec') && !texR.tex.includes('inputenc');
+  exportSuite.tocOn = texR.tex.includes('\\tableofcontents');
+  const texA = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', titlePage: false, toc: false });
+  exportSuite.articleSection = texA.tex.includes('\\section{Intro}') && !texA.tex.includes('\\chapter{');
+  exportSuite.pdflatexInputenc = texA.tex.includes('inputenc');
+  exportSuite.noTitleNoToc = !texA.tex.includes('\\maketitle') && !texA.tex.includes('\\tableofcontents');
+  const pdfF = window.exporterBuildPdfHtml({ frontPage: true, frontTitle: '', frontAuthor: '', toc: true, format: 'book', marginPreset: 'wide', fontPt: 12, pageSize: 'Letter' });
+  exportSuite.pdfFrontPage = pdfF.html.includes('<section class="front-page');
+  exportSuite.pdfTocLinks = pdfF.html.includes('<nav class="toc"') && /href="#h-\d+"/.test(pdfF.html);
+  exportSuite.pdfPageOpts = pdfF.html.includes('size: letter') && pdfF.html.includes('font-size: 12pt') && pdfF.html.includes('@page :left');
+  const pdfD = window.exporterBuildPdfHtml({ frontPage: false, toc: false });
+  exportSuite.pdfDefaultsClean = !pdfD.html.includes('<section class="front-page') && !pdfD.html.includes('<nav class="toc"');
+  exportSuite.pdfMenuEntry = Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
+    .some((b) => (b.textContent || '').includes('.pdf'));
+  exportSuite.latexMenuEntry = Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
+    .some((b) => (b.textContent || '').includes('LaTeX project'));
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
@@ -629,5 +658,5 @@
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
            lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
-           outlineFontButtons };
+           outlineFontButtons, exportSuite };
 })()

@@ -346,6 +346,16 @@ writeVolatileNow(path, content) {
     exportProjectZip() {
       return window.electronAPI.exportProjectZip();
     },
+
+    /** Print a self-contained HTML document to PDF (dialog in main). */
+    exportPdf(html, opts) {
+      return window.electronAPI.exportPdf(html, opts);
+    },
+
+    /** LaTeX project zip: main.tex + images/ (dialog in main). */
+    exportLatexZip(tex, images, baseName) {
+      return window.electronAPI.exportLatexZip(tex, images, baseName);
+    },
 /* Triggers the existing close-request flow → quit modal appears. */
     closeWindow() {
       return window.electronAPI.closeWindow();
@@ -599,6 +609,15 @@ getVolatileContent(path) {
     /** Export the project folder as a .zip; Rust owns the save dialog. */
     exportProjectZip() {
       return this._invoke('export_project_zip');
+    },
+
+    /* No direct-to-PDF API in the webview: the exporter falls back to
+       its same-origin print-iframe path (system dialog → Save as PDF). */
+    exportPdf: null,
+
+    /** LaTeX project zip: main.tex + images/ (dialog in Rust). */
+    exportLatexZip(tex, images, baseName) {
+      return this._invoke('export_latex_zip', { tex, images, baseName });
     },
 
 /* Triggers the existing CloseRequested flow → quit modal appears. */
@@ -920,6 +939,8 @@ getVolatileContent(path) {
     watchFile: () => notSupported('watchFile'),
     unwatchFile: () => Promise.resolve(),
     exportProjectZip: () => notSupported('exportProjectZip'),
+    exportPdf: null,          // exporter uses the print-iframe path
+    exportLatexZip: null,     // exporter falls back to single-.tex download
 
     async getLastOpenedFile() {
       try {

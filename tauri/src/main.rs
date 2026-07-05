@@ -1620,6 +1620,138 @@ async fn export_project_zip(
     })
 }
 
+/* ── LaTeX project export (zip) ──────────────────────────────────────────
+   main.tex plus the referenced images under images/. Every image path is
+   validated against the trusted root before reading — the renderer picks
+   archive names, never filesystem locations. Same dialog + atomic-write
+   pattern as the project zip.                                          */
+
+#[derive(serde::Deserialize)]
+struct LatexImage {
+    #[serde(rename = "srcPath")]
+    src_path: String,
+    #[serde(rename = "zipName")]
+    zip_name: String,
+}
+
+/// Build a zip from in-memory (name, bytes) entries with deflate.
+fn build_zip_from_entries(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (name, _) in entries {
+        if name.is_empty() || name.starts_with('/') || name.contains("..") || name.contains('\u{0}') {
+            return Err(format!("Unsafe zip entry name: {name}"));
+        }
+        let parts: Vec<&str> = name.split('/').collect();
+        for i in 1..parts.len() {
+            dirs.insert(parts[..i].join("/"));
+        }
+    }
+    for d in &dirs {
+        w.add_directory(d, opts).map_err(|e| format!("zip dir failed: {e}"))?;
+    }
+    for (name, data) in entries {
+        w.start_file(name, opts).map_err(|e| format!("zip entry failed: {e}"))?;
+        w.write_all(data).map_err(|e| format!("zip write failed: {e}"))?;
+    }
+    let cursor = w.finish().map_err(|e| format!("zip finish failed: {e}"))?;
+    Ok(cursor.into_inner())
+}
+
+#[tauri::command]
+async fn export_latex_zip(
+    app: AppHandle,
+    tex: String,
+    images: Vec<LatexImage>,
+    base_name: Option<String>,
+    root_state: State<'_, RootPath>,
+) -> Result<ZipExportResult, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    let mut entries: Vec<(String, Vec<u8>)> = vec![("main.tex".into(), tex.into_bytes())];
+    if !images.is_empty() {
+        let root = get_root(&root_state)?;
+        for img in &images {
+            if img.zip_name.is_empty()
+                || img.zip_name.contains('/')
+                || img.zip_name.contains('\\')
+                || img.zip_name.contains("..")
+            {
+                return Err(format!("Invalid image name in export: {}", img.zip_name));
+            }
+            let safe = safe_path_inside(&img.src_path, &root)?;
+            let meta = std::fs::metadata(&safe)
+                .map_err(|e| format!("Cannot read image {}: {e}", img.zip_name))?;
+            if !meta.is_file() || meta.len() > 20 * 1024 * 1024 {
+                return Err(format!("Image too large or not a file: {}", img.zip_name));
+            }
+            let data = std::fs::read(&safe)
+                .map_err(|e| format!("Cannot read image {}: {e}", img.zip_name))?;
+            entries.push((format!("images/{}", img.zip_name), data));
+        }
+    }
+
+    let base = base_name
+        .map(|b| b.trim().replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], ""))
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "latex-project".into());
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("Export LaTeX Project")
+        .add_filter("Zip Archive", &["zip"])
+        .set_file_name(&format!("{}_{}.zip", base, today_stamp_utc()))
+        .save_file(move |p| {
+            let _ = tx.send(p);
+        });
+
+    let chosen = match rx.await.unwrap_or(None) {
+        None => {
+            return Ok(ZipExportResult {
+                ok: None,
+                canceled: Some(true),
+                path: None,
+                entries: None,
+                bytes: None,
+            })
+        }
+        Some(c) => c,
+    };
+    let path_str = match chosen {
+        FilePath::Path(pb) => pb.to_string_lossy().into_owned(),
+        FilePath::Url(u) => u.to_string(),
+    };
+    let dest = safe_path(&path_str)?;
+
+    let total: u64 = entries.iter().map(|(_, d)| d.len() as u64).sum();
+    let count = entries.len();
+    let zip_bytes = build_zip_from_entries(&entries)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let unique_name = format!(
+        "{}.{}.revery_tmp",
+        dest.file_name().ok_or("Path has no filename")?.to_string_lossy(),
+        now
+    );
+    let tmp = dest.with_file_name(unique_name);
+    atomic_write_file(&tmp, &dest, &zip_bytes)?;
+
+    Ok(ZipExportResult {
+        ok: Some(true),
+        canceled: None,
+        path: Some(path_str),
+        entries: Some(count),
+        bytes: Some(total),
+    })
+}
+
 
 ///Keep async
 /// Show a native OS dialog and return the button index pressed.
@@ -2627,6 +2759,7 @@ tauri::Builder::default()
             list_volatile_backups,
             save_file,
             export_project_zip,
+            export_latex_zip,
             show_message_box,
             confirm_close,
             watch_file,
@@ -2916,6 +3049,31 @@ mod tests {
             let name = archive.by_index(i).unwrap().name().to_string();
             assert_ne!(name, "export.zip");
         }
+    }
+
+    #[test]
+    fn zip_from_entries_roundtrip_with_auto_dirs() {
+        let entries = vec![
+            ("main.tex".to_string(), b"\\documentclass{article}".to_vec()),
+            ("images/pic one.png".to_string(), vec![0x89, 0x50, 0x4E, 0x47]),
+        ];
+        let bytes = build_zip_from_entries(&entries).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.contains(&"images/".to_string()), "{names:?}");
+        assert!(names.contains(&"main.tex".to_string()));
+        use std::io::Read;
+        let mut tex = String::new();
+        archive.by_name("main.tex").unwrap().read_to_string(&mut tex).unwrap();
+        assert!(tex.starts_with("\\documentclass"));
+    }
+
+    #[test]
+    fn zip_from_entries_rejects_unsafe_names() {
+        assert!(build_zip_from_entries(&[("../evil".to_string(), vec![1])]).is_err());
+        assert!(build_zip_from_entries(&[("/abs".to_string(), vec![1])]).is_err());
     }
 
     #[test]

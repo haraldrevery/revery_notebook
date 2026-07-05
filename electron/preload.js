@@ -100,6 +100,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportProjectZip: () =>
     ipcRenderer.invoke('project:export-zip'),
 
+  /** Print the given self-contained HTML to a PDF (dialog in main). */
+  exportPdf: (html, opts) =>
+    ipcRenderer.invoke('export:pdf', html, opts),
+
+  /** Export main.tex + referenced images as a LaTeX project zip. */
+  exportLatexZip: (tex, images, baseName) =>
+    ipcRenderer.invoke('export:latex-zip', tex, images, baseName),
+
 /**
    * Request a close.  Triggers the existing 'window:close-request' flow
    * so the quit-confirmation modal appears — same as clicking the OS button.
