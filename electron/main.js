@@ -50,7 +50,7 @@ const {
   purgeOldVolatileFiles: purgeVolatileDir,
   createSettingsStore,
 } = require('./fs_core');
-const { buildZip } = require('./zip_core');
+const { buildZip, buildZipFromEntries } = require('./zip_core');
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 const getSettingsFile = () => path.join(app.getPath('userData'), 'revery_settings.json');
@@ -735,6 +735,104 @@ ipcMain.handle('project:export-zip', async () => {
   const { buffer, entries, bytes } = buildZip(root, { excludePath: dest });
   atomicWriteFile(dest, buffer);
   return { ok: true, path: dest, entries, bytes };
+});
+
+/* ── PDF export ───────────────────────────────────────────────────────────
+   The renderer builds a self-contained print document (its own preview
+   pipeline + @page CSS from the export options) and sends the HTML here.
+   It is written to a TEMP FILE under userData and loaded in a hidden,
+   sandboxed window: a file:// origin so project images keep loading
+   (data: URLs cannot reference file:// subresources). printToPDF with
+   preferCSSPageSize gives a vector, selectable-text PDF. Destination
+   comes exclusively from the save dialog; written atomically.          */
+ipcMain.handle('export:pdf', async (_event, html, opts) => {
+  if (typeof html !== 'string' || html.length > 64 * 1024 * 1024) {
+    throw new Error('Invalid export document');
+  }
+  opts = opts || {};
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const base = (typeof opts.baseName === 'string' && opts.baseName.trim())
+    ? opts.baseName.trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '') : 'document';
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: `${base}_${stamp}.pdf`,
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  const dest = validatePath(result.filePath);
+
+  const tmpHtml = path.join(
+    app.getPath('userData'),
+    `revery_pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
+  let printWin = null;
+  try {
+    fs.writeFileSync(tmpHtml, html, 'utf8');
+    printWin = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        sandbox: true,
+        nodeIntegration: false,
+        contextIsolation: true,
+        webSecurity: true,
+      },
+    });
+    await printWin.loadFile(tmpHtml);
+    /* Give webfonts/KaTeX/images a beat to settle before printing. */
+    await new Promise((r) => setTimeout(r, 350));
+    const pdf = await printWin.webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: true,
+      displayHeaderFooter: opts.pageNumbers === true,
+      headerTemplate: '<span></span>',
+      footerTemplate:
+        '<div style="font-size:8px; width:100%; text-align:center; color:#888;">' +
+        '<span class="pageNumber"></span> / <span class="totalPages"></span></div>',
+    });
+    atomicWriteFile(dest, pdf);
+    return { ok: true, path: dest, bytes: pdf.length };
+  } finally {
+    if (printWin && !printWin.isDestroyed()) printWin.destroy();
+    try { fs.rmSync(tmpHtml, { force: true }); } catch (_) {}
+  }
+});
+
+/* ── LaTeX project export (zip) ───────────────────────────────────────────
+   Receives the generated main.tex plus the referenced images as
+   PROJECT-RELATIVE paths with their target names inside the archive.
+   Every image path is validated against the trusted root before reading
+   (the renderer chooses names, never locations). Same dialog + atomic
+   write + entry-zip pattern as everything else.                        */
+ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName) => {
+  if (typeof tex !== 'string') throw new Error('Invalid LaTeX document');
+  const root = requireRoot();
+
+  const entries = [{ name: 'main.tex', data: tex }];
+  for (const img of (Array.isArray(images) ? images : [])) {
+    if (!img || typeof img.srcPath !== 'string' || typeof img.zipName !== 'string') continue;
+    if (!/^[\w. \-()À-￿]+$/.test(img.zipName)) {
+      throw new Error(`Invalid image name in export: ${img.zipName}`);
+    }
+    const safe = validatePathInside(img.srcPath, root);
+    const stat = fs.statSync(safe);
+    if (!stat.isFile() || stat.size > 20 * 1024 * 1024) {
+      throw new Error(`Image too large or not a file: ${img.zipName}`);
+    }
+    entries.push({ name: `images/${img.zipName}`, data: fs.readFileSync(safe) });
+  }
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const base = (typeof baseName === 'string' && baseName.trim())
+    ? baseName.trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '') : 'latex-project';
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: `${base}_${stamp}.zip`,
+    filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  const dest = validatePath(result.filePath);
+
+  const { buffer, entries: count, bytes } = buildZipFromEntries(entries);
+  atomicWriteFile(dest, buffer);
+  return { ok: true, path: dest, entries: count, bytes };
 });
 
 /* ── Window lifecycle ─────────────────────────────────────────────────── */

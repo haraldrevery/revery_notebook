@@ -2317,3 +2317,67 @@ body.live-preview-active #editor .cm-content {
   touch-action: manipulation;
 }
 #outline-size-controls button:hover { color: var(--text); }
+
+/* ── Export options popup (markdown_editor_export.js) ──────────────────
+   Reuses .modal-overlay/.modal-content; these style the option rows and
+   the modal buttons in the app's own aesthetic (all four themes via
+   variables). The modal is scrollable for the taller PDF section.     */
+.export-modal-content {
+  max-width: 460px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.export-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+.export-row > label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.export-select, .export-text {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-md);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 4px 8px;
+  max-width: 55%;
+}
+.export-text { flex: 1; }
+.export-select:focus, .export-text:focus { outline: none; border-color: var(--accent, #7a8ee0); }
+.export-inline { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.export-row input[type="range"] { max-width: 55%; accent-color: var(--accent, #7a8ee0); }
+.export-row input[type="checkbox"] { accent-color: var(--accent, #7a8ee0); width: 1em; height: 1em; }
+.export-note {
+  margin-top: 12px;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  font-style: italic;
+  line-height: 1.4;
+}
+.modal-btn {
+  background: none;
+  border: 1px solid var(--border-md);
+  border-radius: 3px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  transition: background 0.12s, border-color 0.12s;
+}
+.modal-btn:hover { background: var(--bg-hover); }
+.modal-btn-primary {
+  border-color: var(--accent, #7a8ee0);
+  color: var(--accent, #7a8ee0);
+}
+.modal-btn-primary:hover { background: var(--bg-hover); }

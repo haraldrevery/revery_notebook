@@ -299,6 +299,8 @@ unwatched automatically when a new file opens).
 | `setLastOpenedFile(p)` | `settings:set-last-opened-file` | writes `userData/revery_settings.json` |
 | `getAppDataPath()` | `app:get-data-path` | `app.getPath('userData')` |
 | `exportProjectZip()` | `project:export-zip` | save dialog + `zip_core.buildZip` + atomic write |
+| `exportPdf(html, opts)` | `export:pdf` | temp file → hidden window → `printToPDF` → save dialog → atomic write |
+| `exportLatexZip(tex, images, base)` | `export:latex-zip` | validate image paths + `zip_core.buildZipFromEntries` + atomic write |
 
 ### Window Close Flow
 
@@ -618,7 +620,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
 | `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata |
 | `test/crash_consistency.test.js` | A child process is SIGKILLed mid-write 12 times; the target file must always contain exactly one complete payload |
-| `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output |
+| `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output; `buildZipFromEntries` (LaTeX-project assembler) auto parent-dirs + unsafe-name rejection |
 | `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side
@@ -642,6 +644,35 @@ PKZIP writer over node's zlib); Tauri uses the `zip` crate
 write path, so a crash cannot leave a truncated zip. There is **no
 password option** by design: classic zip encryption is broken, and a
 fake lock would be worse than none.
+
+### PDF & LaTeX Export
+
+File menu → *Export as .pdf* / *LaTeX project (.zip)* open one options
+popup (`markdown_editor_export.js` — the exporters were split out here so
+`actions_cm.js` stays lean; option state lives in its own localStorage
+key `revery_export_settings`).
+
+**PDF** uses the PRINT pipeline, not a JS PDF library: the document is
+built from the preview's own rendered HTML (KaTeX→MathML, hljs colors),
+with the options (front page, clickable TOC, article/book `@page`
+margins, font/page size, page numbers) applied as print CSS. Electron
+sends the HTML to `export:pdf` — a temp file loaded in a hidden,
+sandboxed window, `printToPDF` with `preferCSSPageSize` → a vector,
+selectable PDF, written atomically. Tauri and web print a hidden
+same-origin iframe (`srcdoc`, verified to load under the CSP with no
+violation) → the system "Save as PDF". The print-engine TOC has clickable
+links but no page numbers (a browser-print limitation — the LaTeX export
+is the page-numbered path).
+
+**LaTeX project (.zip)** replaces the old single-`.tex` export: the
+markdown→LaTeX converter (moved out of `actions_cm.js`) plus every
+referenced project image, rewritten to `images/<name>` (deduped,
+LaTeX-safe names) so the archive is a compile-ready project. Options:
+pdflatex/xelatex, article/report/book template (report/book promote
+`#`→`\chapter`), title page, table of contents. The renderer sends the
+`.tex` and the image paths (project-relative); the backend re-validates
+every path against the trusted root before reading, then
+`buildZipFromEntries`. Web mode falls back to a single-`.tex` download.
 
 ### YAML Frontmatter Autocomplete
 

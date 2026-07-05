@@ -991,7 +991,8 @@ const fileActions = [
   { label: 'Export as .md', action: 'file_export_md' },
   { label: 'Export as .txt', action: 'file_export_txt' },
   { label: 'Export as .html', action: 'file_export_html' },
-  { label: 'Export as .tex', action: 'file_export_tex' },
+  { label: 'Export as .pdf', action: 'file_export_pdf' },
+  { label: 'LaTeX project (.zip)', action: 'file_export_tex' },
   { type: 'divider', desktopOnly: true },
   /* Whole-project zip export — desktop only (web mode has no project). */
   { label: 'Zip Project Export', action: 'file_zip_export', desktopOnly: true }

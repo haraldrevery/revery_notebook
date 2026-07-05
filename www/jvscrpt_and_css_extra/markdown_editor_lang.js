@@ -94,6 +94,44 @@ window.uiTranslations = {
   "Project exported.": { "Swedish": "Projektet har exporterats." },
   "items": { "Swedish": "objekt" },
   "The zip export failed.": { "Swedish": "Zip-exporten misslyckades." },
+  "Export as .pdf": { "Swedish": "Exportera som .pdf" },
+  "LaTeX project (.zip)": { "Swedish": "LaTeX-projekt (.zip)" },
+  "PDF export": { "Swedish": "PDF-export" },
+  "LaTeX project export": { "Swedish": "LaTeX-projektexport" },
+  "The PDF export failed.": { "Swedish": "PDF-exporten misslyckades." },
+  "The LaTeX export failed.": { "Swedish": "LaTeX-exporten misslyckades." },
+  "Front page": { "Swedish": "Förstasida" },
+  "Front title": { "Swedish": "Titel" },
+  "Author": { "Swedish": "Författare" },
+  "Document title": { "Swedish": "Dokumentets titel" },
+  "Author name": { "Swedish": "Författarens namn" },
+  "Front image": { "Swedish": "Bild på förstasidan" },
+  "Choose image…": { "Swedish": "Välj bild…" },
+  "Change image…": { "Swedish": "Byt bild…" },
+  "No image": { "Swedish": "Ingen bild" },
+  "Image opacity": { "Swedish": "Bildens opacitet" },
+  "Front layout": { "Swedish": "Layout förstasida" },
+  "Centered": { "Swedish": "Centrerad" },
+  "Opposite corners": { "Swedish": "Motsatta hörn" },
+  "Table of contents": { "Swedish": "Innehållsförteckning" },
+  "Format": { "Swedish": "Format" },
+  "Article (symmetric)": { "Swedish": "Artikel (symmetrisk)" },
+  "Book (mirrored margins)": { "Swedish": "Bok (speglade marginaler)" },
+  "Margins": { "Swedish": "Marginaler" },
+  "Narrow": { "Swedish": "Smal" },
+  "Normal": { "Swedish": "Normal" },
+  "Wide": { "Swedish": "Bred" },
+  "Font size": { "Swedish": "Teckenstorlek" },
+  "Page size": { "Swedish": "Sidstorlek" },
+  "Page numbers": { "Swedish": "Sidnummer" },
+  "Engine": { "Swedish": "Motor" },
+  "Template": { "Swedish": "Mall" },
+  "Article": { "Swedish": "Artikel" },
+  "Report": { "Swedish": "Rapport" },
+  "Book": { "Swedish": "Bok" },
+  "Title page": { "Swedish": "Titelsida" },
+  "Exports a zip project: main.tex + images/ folder.": { "Swedish": "Exporterar ett zip-projekt: main.tex + images/-mapp." },
+  "Contents": { "Swedish": "Innehåll" },
   "Add media": { "Swedish": "Lägg till media" },
   "Search project…": { "Swedish": "Sök i projektet…" },
   "Searching…": { "Swedish": "Söker…" },
@@ -895,6 +933,8 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>YAML suggestions</strong> — click into the frontmatter block (the <code>---</code> section at the top of a note) and a menu offers the keys and values already used across your project, so tags and metadata never need retyping. Arrow keys select, Enter inserts, Escape closes; it also opens as you type. Works only inside frontmatter.</li>
           <li><strong>Project search</strong> (desktop) — the magnifier in the file panel (or Ctrl+Shift+F) searches every note in your project. Click a result to open the file with the match selected; Escape brings the file tree back. Plain text matching — use the in-document find bar (Ctrl+F) for regex.</li>
           <li><strong>Outline text size</strong> — the − and + buttons in the Outline panel header scale just the outline list (also under Settings → Outline font size); nothing else in the UI changes.</li>
+          <li><strong>PDF export</strong> — File menu → Export as .pdf opens an options window: optional front page (title, author, a low-opacity background image, centered or corner layout), clickable table of contents, article or book layout, margins, font size, page size and page numbers. It renders exactly like the preview (fonts, code colors, math). On the desktop app it saves a real PDF; in the browser it opens the system print dialog (choose “Save as PDF”).</li>
+          <li><strong>LaTeX project export</strong> — File menu → LaTeX project (.zip) exports a ready-to-compile folder: main.tex plus an images/ folder with every referenced picture. Options: pdflatex or xelatex, article/report/book template, title page and table of contents. (In the browser it downloads a single .tex file.)</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
@@ -965,6 +1005,8 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>YAML-förslag</strong> — klicka i frontmatter-blocket (<code>---</code>-sektionen överst i en anteckning) så visas en meny med nycklar och värden som redan används i ditt projekt, så taggar och metadata aldrig behöver skrivas om. Piltangenter väljer, Enter infogar, Escape stänger; menyn öppnas också medan du skriver. Fungerar bara inuti frontmatter.</li>
           <li><strong>Projektsökning</strong> (skrivbord) — förstoringsglaset i filpanelen (eller Ctrl+Shift+F) söker i alla anteckningar i ditt projekt. Klicka på en träff för att öppna filen med träffen markerad; Escape tar tillbaka filträdet. Ren textsökning — använd dokumentsökningen (Ctrl+F) för regex.</li>
           <li><strong>Dispositionens textstorlek</strong> — knapparna − och + i dispositionspanelens rubrik skalar bara dispositionslistan (finns även under Inställningar → Dispositionens teckenstorlek); inget annat i gränssnittet påverkas.</li>
+          <li><strong>PDF-export</strong> — Arkiv-menyn → Exportera som .pdf öppnar ett alternativfönster: valfri förstasida (titel, författare, en bakgrundsbild med låg opacitet, centrerad eller hörnlayout), klickbar innehållsförteckning, artikel- eller boklayout, marginaler, teckenstorlek, sidstorlek och sidnummer. Den renderas exakt som förhandsgranskningen (typsnitt, kodfärger, matematik). I skrivbordsappen sparas en riktig PDF; i webbläsaren öppnas systemets utskriftsdialog (välj ”Spara som PDF”).</li>
+          <li><strong>LaTeX-projektexport</strong> — Arkiv-menyn → LaTeX-projekt (.zip) exporterar en färdig att kompilera-mapp: main.tex plus en images/-mapp med alla refererade bilder. Alternativ: pdflatex eller xelatex, mall för artikel/rapport/bok, titelsida och innehållsförteckning. (I webbläsaren laddas en enda .tex-fil ner.)</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
