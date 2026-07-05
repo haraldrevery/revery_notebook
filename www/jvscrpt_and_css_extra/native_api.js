@@ -1041,6 +1041,29 @@ document.addEventListener('DOMContentLoaded', function () {
     /* Mark body so CSS can activate -webkit-app-region:drag on the topbar */
     document.body.classList.add('desktop-app');
 
+    /* ── Block WebView page-zoom gestures (Tauri only) ──────────────────
+       Electron disables pinch / visual zoom by default; WebKitGTK does
+       not, so on Tauri a trackpad pinch (and Ctrl + wheel) zooms the
+       WHOLE app — annoying when the user only meant to scroll. This is
+       WebView chrome, unrelated to the app's own UI-size setting (that's
+       CSS on <html>). We suppress ONLY the zoom vectors:
+         • Ctrl + wheel  (page zoom; trackpad pinch synthesizes this on
+           macOS/Windows) — plain wheel scroll is left untouched;
+         • the WebKit gesture events (WKWebView trackpad pinch).
+       Nothing in the app uses Ctrl+wheel or gesture events, so there is
+       no behaviour to override. Note: on Linux WebKitGTK a trackpad
+       pinch may be consumed natively before it reaches JS — verify on
+       the built app; if it persists there it needs a webview-level
+       (Rust) change instead. */
+    if (isTauri) {
+      window.addEventListener('wheel', function (e) {
+        if (e.ctrlKey) e.preventDefault();
+      }, { passive: false, capture: true });
+      ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (type) {
+        window.addEventListener(type, function (e) { e.preventDefault(); }, { passive: false });
+      });
+    }
+
     /* On macOS the native traffic-light buttons handle Min/Max/Close, so we
        hide our custom HTML buttons and keep the topbar draggable only.      */
     if (navigator.userAgent.includes('Macintosh')) {
