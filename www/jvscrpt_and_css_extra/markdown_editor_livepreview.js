@@ -201,24 +201,41 @@
       if (!view2) return;
       let pos;
       try { pos = view2.posAtDOM(wrap); } catch (_) { return; }
-      let resolved = null;
-      if (resolvePos) {
-        try { resolved = resolvePos(e, view2); } catch (_) { resolved = null; }
-      }
-      if (resolved != null) {
-        pos = Math.max(0, Math.min(resolved, view2.state.doc.length));
+      /* MARGINAL clicks — on the widget's own empty frame rather than any
+         rendered content — route the cursor to the nearest position
+         OUTSIDE the block instead of revealing it. This is the "clicked
+         near the edge of the raw text but the neighbouring block got
+         selected" fix: the neighbour's hit-box starts exactly where the
+         raw text ends, so a near-miss must fall back to the raw side. */
+      const marginal = e.target === wrap
+        || (e.target.classList && e.target.classList.contains('prose'));
+      if (marginal) {
+        const blockFrom = pos;
+        const blockTo = Math.min(view2.state.doc.length, blockFrom + src.length);
+        const rect0 = wrap.getBoundingClientRect();
+        const upper = rect0.height > 0 && e.clientY < rect0.top + rect0.height / 2;
+        pos = upper ? Math.max(0, blockFrom - 1)
+                    : Math.min(view2.state.doc.length, blockTo + 1);
       } else {
-        /* Refine to the clicked line: estimate from the click's vertical
-           position within the rendered block. Falls back to the start. */
-        try {
-          const rect = wrap.getBoundingClientRect();
-          if (rect.height > 0) {
-            const frac = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-            const lines = src.split('\n');
-            const lineIdx = Math.min(lines.length - 1, Math.floor(frac * lines.length));
-            for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
-          }
-        } catch (_) { /* keep block start */ }
+        let resolved = null;
+        if (resolvePos) {
+          try { resolved = resolvePos(e, view2); } catch (_) { resolved = null; }
+        }
+        if (resolved != null) {
+          pos = Math.max(0, Math.min(resolved, view2.state.doc.length));
+        } else {
+          /* Refine to the clicked line: estimate from the click's vertical
+             position within the rendered block. Falls back to the start. */
+          try {
+            const rect = wrap.getBoundingClientRect();
+            if (rect.height > 0) {
+              const frac = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+              const lines = src.split('\n');
+              const lineIdx = Math.min(lines.length - 1, Math.floor(frac * lines.length));
+              for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
+            }
+          } catch (_) { /* keep block start */ }
+        }
       }
       /* Pin the clicked line under the pointer: the widget→raw swap
          (and the previous active block re-collapsing) changes content

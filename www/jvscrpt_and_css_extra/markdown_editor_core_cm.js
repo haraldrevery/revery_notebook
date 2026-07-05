@@ -644,12 +644,23 @@ function scrollToHeading(lineIndex) {
   /* Live preview: the outline must NAVIGATE, not edit — selecting the
      heading would flip its rendered block to raw markdown, and the
      ratio-scroll below is meaningless against rendered block heights.
-     Scroll precisely via CM and leave selection and focus untouched.  */
+     Scroll precisely via CM and leave selection and focus untouched.
+     ONLY when the editor is the visible surface: in Reader mode (and the
+     mobile Preview view) the editor is hidden and the PREVIEW must
+     scroll — fall through to the classic path for those.              */
   if (document.body.classList.contains('live-preview-active')
+      && !document.body.classList.contains('reader-mode-active')
+      && document.body.dataset.view !== 'preview'
       && window.cmView && window.CM && CM.EditorView) {
     window.cmView.dispatch({
       effects: CM.EditorView.scrollIntoView(charStart, { y: 'start', yMargin: 60 }),
     });
+    /* Highlight the clicked section immediately, same as the classic
+       path does via the preview scroll. */
+    window.isNavigatingOutline = true;
+    clearTimeout(window.outlineNavTimer);
+    window.outlineNavTimer = setTimeout(() => { window.isNavigatingOutline = false; }, 300);
+    updateActiveOutline(lineIndex);
     return;
   }
 
@@ -858,6 +869,30 @@ function updateActiveOutline(forcedRawLine = null) {
 
   let targetRawLine = forcedRawLine;
 
+  /* Live preview: the preview pane is hidden and never scrolls, so the
+     active section comes from the EDITOR viewport instead — the raw line
+     near the top of the visible area (same 140px reading offset as the
+     preview logic below). posAtCoords avoids any height-space math.    */
+  if (targetRawLine === null
+      && document.body.classList.contains('live-preview-active')
+      && !document.body.classList.contains('reader-mode-active')
+      && document.body.dataset.view !== 'preview'
+      && window.cmView) {
+    try {
+      const view = window.cmView;
+      const sd = view.scrollDOM;
+      if (Math.abs((sd.scrollHeight - sd.scrollTop) - sd.clientHeight) <= 5) {
+        /* Absolute bottom: the last heading may never cross the reading
+           offset — force it active (same safeguard as the preview path). */
+        targetRawLine = view.state.doc.lines - 1;
+      } else {
+        const rect = sd.getBoundingClientRect();
+        const pos = view.posAtCoords({ x: rect.left + 10, y: rect.top + 140 }, false);
+        targetRawLine = view.state.doc.lineAt(pos).number - 1; // buttons use 0-based lines
+      }
+    } catch (_) { /* fall through to the preview-based logic */ }
+  }
+
     if (targetRawLine === null) {
     // Find all heading elements in the preview that have a mapped source line
     const headings = Array.from(preview.querySelectorAll('h1, h2, h3, h4, h5, h6'))
@@ -938,6 +973,15 @@ function updateActiveOutline(forcedRawLine = null) {
 
 preview.addEventListener('scroll', () => {
   if (window.isNavigatingOutline) return; // Prevent natural scroll from immediately overriding your click
+  clearTimeout(window.outlineScrollTimer);
+  window.outlineScrollTimer = setTimeout(updateActiveOutline, 150);
+});
+
+/* Live preview: the outline highlight follows the EDITOR scroll (the
+   preview pane is hidden there). Same debounce + navigation guard.   */
+editor.addEventListener('scroll', () => {
+  if (!document.body.classList.contains('live-preview-active')) return;
+  if (window.isNavigatingOutline) return;
   clearTimeout(window.outlineScrollTimer);
   window.outlineScrollTimer = setTimeout(updateActiveOutline, 150);
 });
