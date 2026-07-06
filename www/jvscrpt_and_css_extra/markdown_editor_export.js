@@ -1100,18 +1100,29 @@ ${parts.bodyHtml}
   function buildPdfSection() {
     const p = exportSettings.pdf;
     const wrap = document.createElement('div');
+    const rerender = () => { const fresh = buildPdfSection(); wrap.replaceWith(fresh); };
 
     wrap.appendChild(toggleRow('Front page', () => p.frontPage, (v) => { p.frontPage = v; }));
     wrap.appendChild(row('Front title', textInput(p.frontTitle, 'Document title', (v) => { p.frontTitle = v; })));
     wrap.appendChild(row('Author', textInput(p.frontAuthor, 'Author name', (v) => { p.frontAuthor = v; })));
 
-    /* front image picker + clear */
-    const imgControls = document.createElement('div');
-    imgControls.className = 'export-inline';
-    const pickBtn = document.createElement('button');
-    pickBtn.className = 'modal-btn';
-    pickBtn.textContent = T(p.frontImage ? 'Change image…' : 'Choose image…');
-    pickBtn.addEventListener('click', () => {
+    /* Cover image: None · the built-in background textures · Custom…
+       A texture is stored as a www-relative asset path (resolved by the
+       export document's <base href>); a custom upload is a downscaled data:
+       URL. Both drop straight into background-image:url(...) at export time. */
+    const BG = (typeof BACKGROUND_OPTIONS !== 'undefined') ? BACKGROUND_OPTIONS : [];
+    const assetPath = (u) => String(u).replace(/^\.\.\//, '');   // '../image_assets/x' → 'image_assets/x'
+    const coverValues = [['none', 'None']]
+      .concat(BG.filter((o) => o.url).map((o) => [o.val, o.label]))
+      .concat([['custom', 'Custom…']]);
+    const coverGet = () => {
+      const fi = p.frontImage;
+      if (!fi) return 'none';
+      if (String(fi).startsWith('data:')) return 'custom';
+      const hit = BG.find((o) => o.url && assetPath(o.url) === fi);
+      return hit ? hit.val : 'custom';
+    };
+    const pickCustomCover = () => {
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/*';
@@ -1130,25 +1141,22 @@ ${parts.bodyHtml}
             canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
             p.frontImage = canvas.toDataURL('image/jpeg', 0.82);
             saveSettings();
-            pickBtn.textContent = T('Change image…');
+            rerender();
           };
           img.src = readerObj.result;
         };
         readerObj.readAsDataURL(f);
       };
       input.click();
-    });
-    const clearBtn = document.createElement('button');
-    clearBtn.className = 'modal-btn';
-    clearBtn.textContent = T('No image');
-    clearBtn.addEventListener('click', () => {
-      p.frontImage = null;
-      saveSettings();
-      pickBtn.textContent = T('Choose image…');
-    });
-    imgControls.appendChild(pickBtn);
-    imgControls.appendChild(clearBtn);
-    wrap.appendChild(row('Cover image (full page)', imgControls));
+    };
+    wrap.appendChild(row('Cover image (full page)', dropdown(
+      coverValues, coverGet,
+      (v) => {
+        if (v === 'none') { p.frontImage = null; saveSettings(); return; }
+        if (v === 'custom') { pickCustomCover(); return; }
+        const opt = BG.find((o) => o.val === v);
+        if (opt && opt.url) { p.frontImage = assetPath(opt.url); saveSettings(); }
+      })));
 
     const opacity = document.createElement('input');
     opacity.type = 'range';

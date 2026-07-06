@@ -135,6 +135,7 @@ window.uiTranslations = {
   "Exports a zip project: main.tex + images/ folder.": { "Swedish": "Exporterar ett zip-projekt: main.tex + images/-mapp." },
   "Some templates require XeLaTeX.": { "Swedish": "Vissa mallar kräver XeLaTeX." },
   "Cover image (full page)": { "Swedish": "Omslagsbild (hel sida)" },
+  "Custom…": { "Swedish": "Anpassad…" },
   "Font": { "Swedish": "Typsnitt" },
   "Serif": { "Swedish": "Serif" },
   "Sans-serif": { "Swedish": "Sans-serif" },
