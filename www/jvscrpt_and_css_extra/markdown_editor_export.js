@@ -155,19 +155,19 @@
   const LATEX_TEMPLATES = {
     article: {
       label: 'Article', documentclass: 'article', classOptions: '',
-      engine: null, headings: 'section', bundleFonts: [],
+      engines: ['pdflatex', 'xelatex'], headings: 'section', bundleFonts: [],
       preamble: classicPreamble,
       titlePage: () => `\\maketitle`,
     },
     report: {
       label: 'Report', documentclass: 'report', classOptions: '',
-      engine: null, headings: 'chapter', bundleFonts: [],
+      engines: ['pdflatex', 'xelatex'], headings: 'chapter', bundleFonts: [],
       preamble: classicPreamble,
       titlePage: () => `\\maketitle`,
     },
     book: {
       label: 'Book', documentclass: 'book', classOptions: '',
-      engine: null, headings: 'chapter', bundleFonts: [],
+      engines: ['pdflatex', 'xelatex'], headings: 'chapter', bundleFonts: [],
       preamble: classicPreamble,
       titlePage: () => `\\maketitle`,
     },
@@ -177,21 +177,41 @@
        Requires XeLaTeX (fontspec). Multi-file/bibliography/index machinery
        from the original template is dropped — the body is injected here. */
     'book-revery': {
-      label: 'Book (Revery)', documentclass: 'extbook', classOptions: '11pt,a4paper',
-      engine: 'xelatex', headings: 'chapter',
+      label: 'Book (Revery)', documentclass: 'extbook', classOptions: '14pt,a4paper,twoside,openright',
+      engines: ['xelatex'], headings: 'chapter',
       bundleFonts: ['HaraldReveryTextFont.ttf', 'HaraldReveryMonoFont.ttf'],
+      /* The Revery text font has tall natural leading and large glyphs, so it
+         needs the same tuning as the standalone book.tex: a 14.5pt body on a
+         23pt baseline, a compressed \setstretch, light letter-spacing, and math
+         sizes pinned so equations don't inflate with the large body font.
+         Print-ready structure: \frontmatter (roman) → \mainmatter (arabic from
+         1), twoside/openright, and emptypage so inserted blank versos are
+         truly blank/unnumbered. */
+      afterBegin: () => `\\fontsize{14.5pt}{23pt}\\selectfont\n\\frontmatter`,
+      beforeBody: () => `\\mainmatter`,
       preamble: (meta, esc) => [
         `\\usepackage{amsmath}`,
         `% ── Revery brand fonts (bundled alongside this main.tex) ──`,
         `\\setmainfont{HaraldReveryTextFont}[`,
         `  Path=./, Extension=.ttf,`,
         `  BoldFont=HaraldReveryTextFont, ItalicFont=HaraldReveryTextFont,`,
-        `  BoldItalicFont=HaraldReveryTextFont, SmallCapsFont=HaraldReveryTextFont]`,
+        `  BoldItalicFont=HaraldReveryTextFont, SmallCapsFont=HaraldReveryTextFont,`,
+        `  LetterSpace=4]`,
         `\\setmonofont{HaraldReveryMonoFont}[`,
         `  Path=./, Extension=.ttf,`,
         `  BoldFont=HaraldReveryMonoFont, ItalicFont=HaraldReveryMonoFont,`,
-        `  BoldItalicFont=HaraldReveryMonoFont]`,
+        `  BoldItalicFont=HaraldReveryMonoFont,`,
+        `  LetterSpace=5]`,
         `\\newcommand{\\headingfont}{\\ttfamily}`,
+        ``,
+        `% Pin math sizes so equations stay ~11pt under the large 14.5pt body.`,
+        `\\DeclareMathSizes{10}{11}{10}{8}`,
+        `\\DeclareMathSizes{10.95}{11}{10}{8}`,
+        `\\DeclareMathSizes{12}{11}{10}{8}`,
+        `\\DeclareMathSizes{14}{11}{10}{8}`,
+        `\\DeclareMathSizes{14.5}{11}{10}{8}`,
+        `\\DeclareMathSizes{17}{11}{10}{8}`,
+        `\\DeclareMathSizes{20}{11}{10}{8}`,
         ``,
         `\\usepackage{graphicx}`,
         `\\usepackage{longtable}`,
@@ -221,22 +241,27 @@
         `\\usepackage{fancyhdr}`,
         `\\pagestyle{fancy}`,
         `\\fancyhf{}`,
-        `\\fancyhead[L]{\\small\\nouppercase{\\rightmark}}`,
-        `\\fancyhead[R]{\\small\\thepage}`,
+        `\\fancyhead[LO]{\\small\\nouppercase{\\rightmark}}`,
+        `\\fancyhead[RO]{\\small\\thepage}`,
+        `\\fancyhead[LE]{\\small\\thepage}`,
+        `\\fancyhead[RE]{\\small\\nouppercase{\\leftmark}}`,
         `\\renewcommand{\\headrulewidth}{0.4pt}`,
         `\\fancypagestyle{plain}{\\fancyhf{}\\fancyfoot[C]{\\small\\thepage}\\renewcommand{\\headrulewidth}{0pt}}`,
         ``,
-        `\\usepackage{microtype}`,
+        `\\usepackage[protrusion=true,verbose=silent]{microtype}`,
+        `\\emergencystretch=1em`,
+        `\\widowpenalty=10000`,
+        `\\clubpenalty=10000`,
         `\\usepackage{setspace}`,
-        `\\setstretch{1.1}`,
+        `\\setstretch{0.68}`,
         `\\setlength{\\parindent}{0pt}`,
         `\\setlength{\\parskip}{0.5em}`,
         ``,
+        `\\usepackage{emptypage}`,
         `\\usepackage{hyperref}`,
-        `\\hypersetup{hidelinks}`,
+        `\\hypersetup{hidelinks, pdftitle={${esc(meta.title)}}, pdfauthor={${esc(meta.author)}}}`,
       ],
       titlePage: (meta, esc) => [
-        `\\begin{titlepage}`,
         `\\thispagestyle{empty}`,
         `\\vspace*{\\fill}`,
         `\\begin{center}`,
@@ -245,7 +270,6 @@
         `  {\\large ${meta.date}}`,
         `\\end{center}`,
         `\\vspace*{\\fill}`,
-        `\\end{titlepage}`,
       ].filter(Boolean).join('\n'),
     },
 
@@ -255,9 +279,10 @@
        are dropped — the body converter emits amsmath math and verbatim. */
     'homework-revery': {
       label: 'Homework (Revery)', documentclass: 'article', classOptions: 'a4paper,11pt',
-      engine: 'xelatex', headings: 'section', bundleFonts: [],
+      engines: ['xelatex'], headings: 'section', bundleFonts: [],
       preamble: (meta, esc) => [
-        `\\usepackage{amsmath}`,
+        `\\usepackage{amsmath, amsthm}`,
+        `\\usepackage{amssymb}`,
         `\\usepackage{nicefrac}`,
         `% ── Fonts: system serif; swap to the open fonts below if unavailable ──`,
         `\\setmainfont{Times New Roman}`,
@@ -277,7 +302,7 @@
         `\\renewcommand\\thesubfigure{(\\alph{subfigure})}`,
         `\\usepackage{xcolor}`,
         ``,
-        `\\usepackage[a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,headheight=14pt]{geometry}`,
+        `\\usepackage[a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,marginparwidth=15mm,headheight=14pt]{geometry}`,
         `\\usepackage{microtype}`,
         `\\usepackage{setspace}`,
         `\\setstretch{1.15}`,
@@ -293,7 +318,7 @@
         `\\renewcommand{\\headrulewidth}{0.4pt}`,
         ``,
         `\\usepackage{hyperref}`,
-        `\\hypersetup{hidelinks}`,
+        `\\hypersetup{hidelinks, pdftitle={${esc(meta.title)}}, pdfauthor={${esc(meta.author)}}}`,
       ].filter(Boolean),
       titlePage: (meta, esc) => [
         `\\begin{titlepage}`,
@@ -618,16 +643,20 @@
     const body = restoreProtected(output.join('\n'));
 
     /* ── 10. Assemble the .tex document from the template descriptor ──
-       A descriptor may FORCE its engine (the brand templates need
-       fontspec); otherwise the user's engine choice is honored. */
+       Honor the user's engine when the template supports it; otherwise fall
+       back to the template's first supported engine (a backstop so a stale
+       combo never emits pdflatex for a fontspec-only template). */
     const meta = { title: metaTitle, author: metaAuthor, date: metaDate };
-    const engine = desc.engine || opts.engine;
+    const engine = desc.engines.includes(opts.engine) ? opts.engine : desc.engines[0];
     const engineLines = (engine === 'xelatex')
       ? [`% Compile with xelatex`, `\\usepackage{fontspec}`]
       : [`% Compile with pdflatex`, `\\usepackage[utf8]{inputenc}`, `\\usepackage[T1]{fontenc}`];
 
     /* Title page, then the TOC on its own fresh page (clearpage before it
-       when both are on, and after it so body content starts clean). */
+       when both are on, and after it so body content starts clean). A
+       template may inject structure right after \begin{document}
+       (afterBegin — e.g. body font size + \frontmatter) and just before the
+       body (beforeBody — e.g. \mainmatter). */
     const front = [];
     if (opts.titlePage) front.push(desc.titlePage(meta, latexEsc));
     if (opts.titlePage && opts.toc) front.push(`\\clearpage`);
@@ -640,7 +669,9 @@
       ...desc.preamble(meta, latexEsc),
       ``,
       `\\begin{document}`,
+      ...(desc.afterBegin ? [desc.afterBegin(meta, latexEsc)] : []),
       ...front,
+      ...(desc.beforeBody ? [desc.beforeBody(meta, latexEsc)] : []),
       body.trim(),
       ``,
       `\\end{document}`,
@@ -1158,31 +1189,51 @@ ${parts.bodyHtml}
     return wrap;
   }
 
+  /* First template (registry order) that supports the given engine. */
+  function firstTemplateFor(engine) {
+    const hit = Object.keys(LATEX_TEMPLATES).find((id) => LATEX_TEMPLATES[id].engines.includes(engine));
+    return hit || 'article';
+  }
+
   function buildLatexSection() {
     const l = exportSettings.latex;
+
+    /* Engine is the master: the Template menu only lists templates that
+       support the selected engine, so fontspec-only templates (custom fonts)
+       are hidden under pdflatex. Sanitize any stale saved combo by promoting
+       the engine to one the chosen template supports. */
+    const cur = LATEX_TEMPLATES[l.template] || LATEX_TEMPLATES.article;
+    if (!cur.engines.includes(l.engine)) l.engine = cur.engines[0];
+
     const wrap = document.createElement('div');
+    const rerender = () => { const fresh = buildLatexSection(); wrap.replaceWith(fresh); };
+
     wrap.appendChild(row('Engine', dropdown(
       [['pdflatex', 'pdflatex'], ['xelatex', 'xelatex']],
-      () => l.engine, (v) => { l.engine = v; })));
-    wrap.appendChild(row('Template', dropdown(
-      [['article', 'Article'], ['report', 'Report'], ['book', 'Book'],
-       ['book-revery', 'Book (Revery)'], ['homework-revery', 'Homework (Revery)']],
-      () => l.template,
+      () => l.engine,
       (v) => {
-        l.template = v;
-        /* The brand templates require fontspec — force the engine and
-           re-render so the Engine row reflects it (the builder forces it
-           too, as a backstop). */
-        const desc = LATEX_TEMPLATES[v];
-        if (desc && desc.engine) l.engine = desc.engine;
-        setTimeout(() => { const fresh = buildLatexSection(); wrap.replaceWith(fresh); }, 0);
+        l.engine = v;
+        /* If the current template can't run on this engine, drop back to the
+           first compatible one, then re-render so the Template list reflects
+           the new engine. */
+        if (!(LATEX_TEMPLATES[l.template] || {}).engines?.includes(v)) {
+          l.template = firstTemplateFor(v);
+        }
+        setTimeout(rerender, 0);
       })));
+
+    const templateOpts = Object.keys(LATEX_TEMPLATES)
+      .filter((id) => LATEX_TEMPLATES[id].engines.includes(l.engine))
+      .map((id) => [id, LATEX_TEMPLATES[id].label]);
+    wrap.appendChild(row('Template', dropdown(
+      templateOpts, () => l.template, (v) => { l.template = v; })));
+
     wrap.appendChild(toggleRow('Title page', () => l.titlePage, (v) => { l.titlePage = v; }));
     wrap.appendChild(toggleRow('Table of contents', () => l.toc, (v) => { l.toc = v; }));
 
     const note = document.createElement('div');
     note.className = 'export-note';
-    note.textContent = T('Exports a zip project: main.tex + images/ folder.');
+    note.textContent = T('Exports a zip project: main.tex + images/ folder.') + ' ' + T('Some templates require XeLaTeX.');
     wrap.appendChild(note);
     return wrap;
   }
@@ -1244,4 +1295,8 @@ ${parts.bodyHtml}
   window.exporterBuildLatex = buildLatexDocument;
   window.exporterBuildPdfHtml = buildPdfDocument;
   window.exporterPrintInApp = printInApp;
+  /* The template ids offered for a given engine — the exact source of truth
+     the export modal filters on (engine-compatibility gating). */
+  window.exporterTemplatesForEngine = (engine) =>
+    Object.keys(LATEX_TEMPLATES).filter((id) => LATEX_TEMPLATES[id].engines.includes(engine));
 })();

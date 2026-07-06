@@ -574,10 +574,20 @@
      preamble, FORCED xelatex (even when pdflatex is passed), correct heading
      depth, and the book template reports its bundled fonts. */
   const texBookR = window.exporterBuildLatex({ template: 'book-revery', engine: 'pdflatex', titlePage: true, toc: true });
-  exportSuite.bookReveryClass = texBookR.tex.includes('\\documentclass[11pt,a4paper]{extbook}')
-    && texBookR.tex.includes('\\titleformat{\\chapter}') && texBookR.tex.includes('AccentColor');
+  exportSuite.bookReveryClass = texBookR.tex.includes('\\documentclass[14pt,a4paper,twoside,openright]{extbook}')
+    && texBookR.tex.includes('\\titleformat{\\chapter}') && texBookR.tex.includes('AccentColor')
+    && texBookR.tex.includes('\\setstretch{0.68}') && texBookR.tex.includes('\\fontsize{14.5pt}{23pt}')
+    && texBookR.tex.includes('\\frontmatter') && texBookR.tex.includes('\\mainmatter')
+    && texBookR.tex.includes('emptypage');
   exportSuite.bookReveryXelatex = texBookR.tex.includes('fontspec')
     && !texBookR.tex.includes('inputenc') && texBookR.tex.includes('\\chapter{');
+  /* Engine gating (the modal's source of truth): fontspec templates are
+     hidden under pdflatex and present under xelatex; classic stay available. */
+  const forPdf = window.exporterTemplatesForEngine('pdflatex');
+  const forXe = window.exporterTemplatesForEngine('xelatex');
+  exportSuite.latexEngineGating = !forPdf.includes('book-revery') && !forPdf.includes('homework-revery')
+    && forPdf.includes('article')
+    && forXe.includes('book-revery') && forXe.includes('homework-revery') && forXe.includes('article');
   exportSuite.bookReveryFonts = Array.isArray(texBookR.fonts)
     && texBookR.fonts.includes('HaraldReveryTextFont.ttf')
     && texBookR.fonts.includes('HaraldReveryMonoFont.ttf');

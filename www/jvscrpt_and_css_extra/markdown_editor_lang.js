@@ -133,6 +133,7 @@ window.uiTranslations = {
   "Homework (Revery)": { "Swedish": "Inlämning (Revery)" },
   "Title page": { "Swedish": "Titelsida" },
   "Exports a zip project: main.tex + images/ folder.": { "Swedish": "Exporterar ett zip-projekt: main.tex + images/-mapp." },
+  "Some templates require XeLaTeX.": { "Swedish": "Vissa mallar kräver XeLaTeX." },
   "Cover image (full page)": { "Swedish": "Omslagsbild (hel sida)" },
   "Font": { "Swedish": "Typsnitt" },
   "Serif": { "Swedish": "Serif" },
