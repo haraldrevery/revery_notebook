@@ -2448,12 +2448,24 @@ body.live-preview-active #editor .cm-content {
 /* ── Export PDF: in-app print path (Tauri / web) ──────────────────────
    markdown_editor_export.js renders the export document into
    #export-print-root and calls window.print(). Hidden on screen; during
-   print (under body.exporting-pdf) the whole app is hidden and only the
-   export document shows. The :not() carries id-level specificity so it
-   beats the general @media print block's `#preview { display:block }`
-   (and hiding #workspace hides #preview via the ancestor anyway).      */
+   print (body.exporting-pdf) the whole app is hidden and only the export
+   document shows.
+
+   The app containers are hidden by EXPLICIT id selectors, not a
+   `> *:not(#export-print-root)` rule: the general Ctrl+P print block
+   above sets `#workspace { display: block !important }`, and WebKitGTK
+   (Tauri) evaluates the specificity of `:not(#id)` differently from
+   Chromium — so the `:not()` version LOST that war on WebKitGTK and the
+   CodeMirror editor leaked into the PDF (stray block borders + clipped
+   descenders). `body.exporting-pdf #workspace` is a clean (1,1,1) that
+   beats the `#workspace` (1,0,0) rule on every engine, no `:not()`
+   ambiguity. #topbar + #workspace are the only visible body children
+   (modals/scrim/context-menu are display:none unless active; the export
+   modal is closed before printing), and #workspace contains the editor,
+   preview and outline — so hiding it removes the whole app.            */
 #export-print-root { display: none; }
 @media print {
-  body.exporting-pdf > *:not(#export-print-root) { display: none !important; }
+  body.exporting-pdf #topbar,
+  body.exporting-pdf #workspace { display: none !important; }
   body.exporting-pdf #export-print-root { display: block !important; }
 }
