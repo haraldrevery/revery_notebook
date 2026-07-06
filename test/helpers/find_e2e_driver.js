@@ -572,11 +572,13 @@
     && pdfFont.html.includes('.front-page .fp-title { font-weight: normal;');
   exportSuite.nonHaraldBoldKept =
     !window.exporterBuildPdfHtml({ font: 'serif' }).html.includes('text-decoration: underline');
-  /* Harald renders small, so its PDF body is scaled up by 1/0.7 to match other
-     fonts at the same pt (14 → 20.00); other fonts keep the exact pt. */
-  exportSuite.haraldSizeScaled =
-    window.exporterBuildPdfHtml({ font: 'harald-text', fontPt: 14 }).html.includes('font-size: 20.00pt')
-    && window.exporterBuildPdfHtml({ font: 'serif', fontPt: 14 }).html.includes('font-size: 14pt');
+  /* Body size stays font-independent (matches the live preview); only math is
+     shrunk to 0.7 under Harald (1.05 → 0.735em), other fonts keep 1.05em. Body
+     pt is unchanged for both. */
+  exportSuite.haraldMathScaled =
+    window.exporterBuildPdfHtml({ font: 'harald-text', fontPt: 14 }).html.includes('math { font-size: 0.735em')
+    && window.exporterBuildPdfHtml({ font: 'harald-text', fontPt: 14 }).html.includes('font-size: 14pt')
+    && window.exporterBuildPdfHtml({ font: 'serif', fontPt: 14 }).html.includes('math { font-size: 1.05em');
   exportSuite.assetBase = pdfF.html.includes('<base href=')
     && pdfF.html.includes('github-dark.min.css');
   const texClear = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', titlePage: true, toc: true });

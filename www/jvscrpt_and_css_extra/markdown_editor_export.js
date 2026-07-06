@@ -797,15 +797,13 @@ ${P}strong, ${P}b { font-weight: normal; text-decoration: underline; }
 ${P}h1, ${P}h2, ${P}h3, ${P}h4, ${P}h5, ${P}h6 { font-weight: normal; }
 ${P}.front-page .fp-title { font-weight: normal; }` : '';
 
-    /* Harald renders ~0.7× the visual size of a normal font at the same
-       nominal size — the app compensates for this with its manually-tuned
-       --katex-font-size (0.7em for Harald vs 1em for others). Mirror that here
-       so a Harald PDF at N pt reads the same size as any other font at N pt.
-       Everything else (headings, code, cover title) is em-relative, so it
-       scales along. Non-Harald output is left byte-identical. */
-    const HARALD_SIZE_RATIO = 0.7;
-    const basePt = Number(opts.fontPt) || 11;
-    const bodyPt = isHarald ? (basePt / HARALD_SIZE_RATIO).toFixed(2) : String(basePt);
+    /* Match the on-screen renderer's font handling: the app shows every font
+       at the SAME body size (Harald is not scaled relative to other fonts), but
+       shrinks math to 0.7 when Harald so equations match its smaller glyphs
+       (its manually-tuned --katex-font-size: 0.7em for Harald vs 1em others).
+       So the PDF body size stays font-independent, and only math takes the 0.7
+       factor under Harald; other fonts keep the 1.05em math size unchanged. */
+    const mathEm = isHarald ? (1.05 * 0.7).toFixed(3) : '1.05';
 
     /* Book format mirrors inner/outer margins on facing pages. */
     const bookMargins = (opts.format === 'book')
@@ -831,7 +829,7 @@ ${bookMargins}
 ${P}*, ${P}*::before, ${P}*::after { box-sizing: border-box; margin: 0; padding: 0; }
 ${B} {
   font-family: ${font};
-  font-size: ${bodyPt}pt; line-height: 1.6;
+  font-size: ${Number(opts.fontPt) || 11}pt; line-height: 1.6;
   color: #1a1a1a; background: #fff;
 }
 ${P}h1, ${P}h2, ${P}h3, ${P}h4, ${P}h5, ${P}h6 {
@@ -854,7 +852,7 @@ ${P}th, ${P}td { border: 1px solid #ccc; padding: 0.4em 0.6em; text-align: left;
 ${P}th { background: #f3f4f6; }
 ${P}img { max-width: 100%; height: auto; display: block; margin: 1.3em auto; }
 ${P}hr { border: none; border-top: 1px solid #ccc; margin: 1.6em 0; }
-${P}math { font-size: 1.05em; }
+${P}math { font-size: ${mathEm}em; }
 ${P}.front-page { position: relative; height: 100vh; page: cover; page-break-after: always; break-after: page; overflow: hidden; }
 ${P}.fp-bg { position: absolute; inset: 0; background-position: center; background-size: cover; background-repeat: no-repeat; }
 ${P}.front-page .fp-title { font-size: 2.6em; font-weight: 700; letter-spacing: 0.02em; }
