@@ -1,0 +1,9 @@
+{
+  "identifier": "pdf-print",
+  "description": "Minimal capability for the transient PDF print window (pdf_print.html): it only needs to close itself after printing. Deliberately NOT granted core:default, so the print window — which renders user document content — has no broad command surface.",
+  "windows": ["pdf-print"],
+  "permissions": [
+    "core:window:allow-close",
+    "core:webview:allow-webview-close"
+  ]
+}

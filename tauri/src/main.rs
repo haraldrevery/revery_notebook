@@ -2730,6 +2730,13 @@ tauri::Builder::default()
         /* ── Window close interception ── */
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Only the main window drives the quit-confirmation flow.
+                // Auxiliary windows (e.g. the PDF print window) must close
+                // freely — otherwise afterprint / their title-bar X would be
+                // prevented and would spuriously fire the quit modal.
+                if window.label() != "main" {
+                    return;
+                }
                 let close_allowed = window.state::<CloseAllowed>();
                 if !*close_allowed.0.lock().unwrap_or_else(|p| p.into_inner()) {
                     api.prevent_close();

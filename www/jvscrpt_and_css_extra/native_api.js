@@ -611,9 +611,44 @@ getVolatileContent(path) {
       return this._invoke('export_project_zip');
     },
 
-    /* No direct-to-PDF API in the webview: the exporter falls back to
-       its same-origin print-iframe path (system dialog → Save as PDF). */
+    /* No direct-to-PDF API in the webview (kept null so the exporter does
+       NOT take Electron's direct-save branch). Instead Tauri uses a
+       dedicated print window — see exportPdfWindow. */
     exportPdf: null,
+
+    /* SPIKE: print a standalone document in a separate WebviewWindow.
+       The full self-contained export HTML is staged in localStorage (shared
+       across same-origin windows) and pdf_print.html renders + prints it,
+       with none of the live app present to pollute the layout. Resolves once
+       the window is created; rejects (→ caller falls back to printInApp) if
+       the WebviewWindow API or creation fails. */
+    async exportPdfWindow(html) {
+      try { localStorage.setItem('__revery_pdf_payload__', html); }
+      catch (e) { throw new Error('could not stage PDF payload: ' + e); }
+
+      const T = window.__TAURI__;
+      const WW = T && T.webviewWindow && T.webviewWindow.WebviewWindow;
+      if (!WW) throw new Error('WebviewWindow API unavailable');
+
+      /* Close any stale print window from a previous export. */
+      try {
+        const prev = await WW.getByLabel('pdf-print');
+        if (prev) await prev.close();
+      } catch (e) { /* none, or close raced — ignore */ }
+
+      return await new Promise((resolve, reject) => {
+        const w = new WW('pdf-print', {
+          url: 'pdf_print.html',
+          title: 'Export PDF',
+          width: 820,
+          height: 1040,
+          focus: true,
+        });
+        w.once('tauri://created', () => resolve({ ok: true }));
+        w.once('tauri://error', (ev) =>
+          reject(new Error('print window failed: ' + JSON.stringify(ev && ev.payload))));
+      });
+    },
 
     /** LaTeX project zip: main.tex + images/ (dialog in Rust). */
     exportLatexZip(tex, images, baseName) {

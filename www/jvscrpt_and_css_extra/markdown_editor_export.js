@@ -741,9 +741,19 @@ ${parts.bodyHtml}
           });
         }
       }
+    } else if (window.NativeAPI && typeof window.NativeAPI.exportPdfWindow === 'function') {
+      /* Tauri: print a standalone document in a dedicated window so the live
+         app (CodeMirror, #workspace, app CSS) can never leak into the PDF.
+         Falls back to the in-app print path if the window can't be opened. */
+      try {
+        await window.NativeAPI.exportPdfWindow(built.html);
+      } catch (err) {
+        console.error('[export] PDF window failed, falling back to in-app print:', err);
+        printInApp(exportSettings.pdf);
+      }
     } else {
-      /* Tauri / web: render into the page + window.print() → the system
-         print dialog ("Print to File / Save as PDF"). */
+      /* Web: render into the page + window.print() → the system print dialog
+         ("Print to File / Save as PDF"). */
       printInApp(exportSettings.pdf);
     }
   }
