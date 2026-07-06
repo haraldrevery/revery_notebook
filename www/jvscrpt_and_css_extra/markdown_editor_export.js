@@ -43,8 +43,12 @@
       format: 'article',         // 'article' (symmetric) | 'book' (mirrored)
       marginPreset: 'normal',    // 'narrow' | 'normal' | 'wide'
       fontPt: 11,                // 9 | 10 | 11 | 12
-      pageSize: 'A4',            // 'A4' | 'Letter'
+      font: 'serif',             // serif|sans|mono|harald-text|harald-mono
+      pageSize: 'A4',            // 'A4' | 'A5' | 'A6' | 'Letter'
+      newPageH1: false,          // new page before every # / H1
+      newPageH2: false,          // new page before every ## / H2
       pageNumbers: false,
+      coverCounts: false,        // front page counted in the page numbers
     },
     latex: {
       engine: 'pdflatex',        // 'pdflatex' | 'xelatex'
@@ -448,8 +452,11 @@
       `\\date{${metaDate}}`,
       ``,
       `\\begin{document}`,
-      opts.titlePage ? `\\maketitle\n` : ``,
-      opts.toc ? `\\tableofcontents\n\\newpage\n` : ``,
+      /* Title page, then the TOC on its own fresh page (clearpage before
+         it when both are on, and after it so body content starts clean). */
+      opts.titlePage ? `\\maketitle` : ``,
+      (opts.titlePage && opts.toc) ? `\\clearpage` : ``,
+      opts.toc ? `\\tableofcontents\n\\clearpage` : ``,
       body.trim(),
       ``,
       `\\end{document}`,
@@ -495,8 +502,20 @@
     return clone;
   }
 
-  function buildPdfDocument(opts) {
-    opts = Object.assign({}, DEFAULTS.pdf, opts || {});
+  const FONT_STACKS = {
+    serif:         "Georgia, 'Times New Roman', serif",
+    sans:          "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    mono:          "'HaraldMono', 'Courier New', monospace",
+    'harald-text': "'HaraldText', Georgia, serif",
+    'harald-mono': "'HaraldMono', 'Courier New', monospace",
+  };
+  /* A4/A5/A6 are CSS @page size keywords; Letter is 'letter'. */
+  const PAGE_SIZE = { A4: 'A4', A5: 'A5', A6: 'A6', Letter: 'letter' };
+
+  /* Build the shared parts (front page, TOC, body) — called once per
+     export. Adds anchor ids for TOC links and returns the metadata the
+     CSS builder needs. */
+  function pdfParts(opts) {
     if (typeof render === 'function') render(); // preview reflects the latest text
     const clone = cleanProseClone();
     if (!clone) return null;
@@ -505,7 +524,6 @@
     const title = (opts.frontTitle || '').trim() || meta.title || docTitle.value.trim() || 'Untitled';
     const author = (opts.frontAuthor || '').trim() || meta.author || '';
 
-    /* Anchor ids for TOC links */
     const headings = [];
     let hid = 0;
     clone.querySelectorAll('h1, h2, h3').forEach((h) => {
@@ -523,6 +541,9 @@
 
     let frontHtml = '';
     if (opts.frontPage) {
+      /* Full-bleed cover image: an absolutely-positioned layer covering
+         the whole (zero-margin, named 'cover') page at the chosen
+         opacity, with the title/author overlaid. */
       const img = opts.frontImage
         ? `<div class="fp-bg" style="background-image:url('${opts.frontImage}');opacity:${Number(opts.frontOpacity) || 0.18};"></div>`
         : '';
@@ -534,74 +555,113 @@
         `</section>`;
     }
 
+    return { title, author, frontHtml, tocHtml, bodyHtml: clone.innerHTML };
+  }
+
+  /* Print CSS from the options. `scoped` = true prefixes every content
+     rule with #export-print-root (the in-app print path injects into the
+     live document and must not leak styles into the app); `@page` rules
+     stay global either way. `scoped` also SKIPS @font-face — the in-app
+     path already has the brand fonts loaded (same origin), while the
+     Electron self-contained document needs them (resolved via <base>). */
+  function pdfCss(opts, scoped) {
+    const B = scoped ? '#export-print-root' : 'body';       // body-level selector
+    const P = scoped ? '#export-print-root ' : '';          // descendant prefix
     const mm = MARGIN_MM[opts.marginPreset] || 20;
-    const size = opts.pageSize === 'Letter' ? 'letter' : 'A4';
-    /* Book format mirrors inner/outer margins on facing pages. Chromium
-       honors @page :left/:right margins; if a build ignores them it
-       degrades to the symmetric base rule — never broken output.      */
+    const size = PAGE_SIZE[opts.pageSize] || 'A4';
+    const font = FONT_STACKS[opts.font] || FONT_STACKS.serif;
+
+    /* Book format mirrors inner/outer margins on facing pages. */
     const bookMargins = (opts.format === 'book')
       ? `@page :right { margin: ${mm}mm ${Math.max(6, mm - 6)}mm ${mm}mm ${mm + 6}mm; }
 @page :left  { margin: ${mm}mm ${mm + 6}mm ${mm}mm ${Math.max(6, mm - 6)}mm; }`
       : '';
 
-    const css = `
+    const fontFace = scoped ? '' : `
+@font-face { font-family: 'HaraldText'; src: url('fonts/HaraldReveryTextFont.woff2') format('woff2'); font-display: swap; }
+@font-face { font-family: 'HaraldMono'; src: url('fonts/HaraldReveryMonoFont.woff2') format('woff2'); font-display: swap; }`;
+
+    /* New page before H1 / H2 (independent toggles). The first content
+       block never forces a leading blank page. */
+    const breaks =
+      (opts.newPageH1 ? `${P}main h1 { break-before: page; }\n` : '') +
+      (opts.newPageH2 ? `${P}main h2 { break-before: page; }\n` : '') +
+      ((opts.newPageH1 || opts.newPageH2) ? `${P}main > *:first-child { break-before: avoid !important; }\n` : '');
+
+    return `${fontFace}
 @page { size: ${size}; margin: ${mm}mm; }
+@page cover { margin: 0; }
 ${bookMargins}
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: Georgia, 'Times New Roman', serif;
+${P}*, ${P}*::before, ${P}*::after { box-sizing: border-box; margin: 0; padding: 0; }
+${B} {
+  font-family: ${font};
   font-size: ${Number(opts.fontPt) || 11}pt; line-height: 1.6;
   color: #1a1a1a; background: #fff;
 }
-h1, h2, h3, h4, h5, h6 {
+${P}h1, ${P}h2, ${P}h3, ${P}h4, ${P}h5, ${P}h6 {
   font-weight: 700; line-height: 1.25;
   margin-top: 1.6em; margin-bottom: 0.5em;
   break-after: avoid-page;
 }
-h1 { font-size: 1.9em; } h2 { font-size: 1.45em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
-h3 { font-size: 1.2em; } h4, h5, h6 { font-size: 1em; }
-p { margin-bottom: 1.1em; }
-a { color: #1d4ed8; text-decoration: none; }
-ul, ol { margin: 0 0 1.1em 1.6em; }
-li { margin-bottom: 0.2em; }
-blockquote { border-left: 3px solid #999; margin: 1.3em 0; padding: 0.3em 1.1em; color: #555; font-style: italic; }
-code { font-family: 'Courier New', Courier, monospace; font-size: 0.88em; background: #f3f4f6; padding: 0.1em 0.35em; border-radius: 3px; }
-pre { background: #0d1117; color: #c9d1d9; padding: 1em 1.2em; border-radius: 5px; margin: 1.3em 0; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; break-inside: avoid-page; }
-pre code { background: none; padding: 0; color: inherit; font-size: 0.85em; }
-table { width: 100%; border-collapse: collapse; margin: 1.3em 0; font-size: 0.92em; break-inside: avoid-page; }
-th, td { border: 1px solid #ccc; padding: 0.4em 0.6em; text-align: left; }
-th { background: #f3f4f6; }
-img { max-width: 100%; height: auto; display: block; margin: 1.3em auto; }
-hr { border: none; border-top: 1px solid #ccc; margin: 1.6em 0; }
-math { font-size: 1.05em; }
-.front-page { position: relative; height: 96vh; page-break-after: always; overflow: hidden; }
-.fp-bg { position: absolute; inset: 0; background-position: center; background-size: cover; background-repeat: no-repeat; }
-.front-page .fp-title { font-size: 2.6em; font-weight: 700; letter-spacing: 0.02em; }
-.front-page .fp-author { font-size: 1.25em; color: #444; margin-top: 0.8em; }
-.fp-center { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
-.fp-corners .fp-title { position: absolute; top: 10%; left: 0; max-width: 70%; }
-.fp-corners .fp-author { position: absolute; bottom: 8%; right: 0; text-align: right; }
-.toc { page-break-after: always; }
-.toc h2 { margin-top: 0.5em; }
-.toc ol { list-style: none; margin: 1em 0 0 0; }
-.toc li { margin-bottom: 0.35em; }
-.toc a { color: #1a1a1a; }
-.toc .toc-l2 { margin-left: 1.4em; }
-.toc .toc-l3 { margin-left: 2.8em; }
+${P}h1 { font-size: 1.9em; } ${P}h2 { font-size: 1.45em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
+${P}h3 { font-size: 1.2em; } ${P}h4, ${P}h5, ${P}h6 { font-size: 1em; }
+${breaks}${P}p { margin-bottom: 1.1em; }
+${P}a { color: #1d4ed8; text-decoration: none; }
+${P}ul, ${P}ol { margin: 0 0 1.1em 1.6em; }
+${P}li { margin-bottom: 0.2em; }
+${P}blockquote { border-left: 3px solid #999; margin: 1.3em 0; padding: 0.3em 1.1em; color: #555; font-style: italic; }
+${P}code { font-family: 'HaraldMono', 'Courier New', monospace; font-size: 0.88em; background: #f3f4f6; padding: 0.1em 0.35em; border-radius: 3px; }
+${P}pre { background: #0d1117; color: #c9d1d9; padding: 1em 1.2em; border-radius: 5px; margin: 1.3em 0; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; break-inside: avoid-page; }
+${P}pre code { background: none; padding: 0; color: inherit; font-size: 0.85em; }
+${P}table { width: 100%; border-collapse: collapse; margin: 1.3em 0; font-size: 0.92em; break-inside: avoid-page; }
+${P}th, ${P}td { border: 1px solid #ccc; padding: 0.4em 0.6em; text-align: left; }
+${P}th { background: #f3f4f6; }
+${P}img { max-width: 100%; height: auto; display: block; margin: 1.3em auto; }
+${P}hr { border: none; border-top: 1px solid #ccc; margin: 1.6em 0; }
+${P}math { font-size: 1.05em; }
+${P}.front-page { position: relative; height: 100vh; page: cover; page-break-after: always; break-after: page; overflow: hidden; }
+${P}.fp-bg { position: absolute; inset: 0; background-position: center; background-size: cover; background-repeat: no-repeat; }
+${P}.front-page .fp-title { font-size: 2.6em; font-weight: 700; letter-spacing: 0.02em; }
+${P}.front-page .fp-author { font-size: 1.25em; color: #444; margin-top: 0.8em; }
+${P}.fp-center { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+${P}.fp-corners .fp-title { position: absolute; top: 10%; left: 8%; max-width: 70%; z-index: 1; }
+${P}.fp-corners .fp-author { position: absolute; bottom: 8%; right: 8%; text-align: right; z-index: 1; }
+${P}.fp-center .fp-title, ${P}.fp-center .fp-author { position: relative; z-index: 1; }
+${P}.toc { page-break-after: always; break-after: page; }
+${P}.toc h2 { margin-top: 0.5em; }
+${P}.toc ol { list-style: none; margin: 1em 0 0 0; }
+${P}.toc li { margin-bottom: 0.35em; }
+${P}.toc a { color: #1a1a1a; }
+${P}.toc .toc-l2 { margin-left: 1.4em; }
+${P}.toc .toc-l3 { margin-left: 2.8em; }
 `;
+  }
+
+  /* The self-contained document for Electron's printToPDF. <base> points
+     at the app's www/ so relative asset links (the hljs code-color theme
+     and the brand fonts) resolve from the temp file's location. KaTeX is
+     already converted to native MathML by cleanProseClone (no katex.css
+     needed). */
+  function buildPdfDocument(opts) {
+    opts = Object.assign({}, DEFAULTS.pdf, opts || {});
+    const parts = pdfParts(opts);
+    if (!parts) return null;
+    const baseHref = new URL('.', window.location.href).href;
 
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>${escapeHtml(title)}</title>
-<style>${css}</style>
+<base href="${baseHref}">
+<title>${escapeHtml(parts.title)}</title>
+<link rel="stylesheet" href="jvscrpt_and_css_extra/github-dark.min.css">
+<style>${pdfCss(opts, false)}</style>
 </head>
 <body>
-${frontHtml}
-${tocHtml}
+${parts.frontHtml}
+${parts.tocHtml}
 <main>
-${clone.innerHTML}
+${parts.bodyHtml}
 </main>
 </body>
 </html>`;
@@ -609,23 +669,50 @@ ${clone.innerHTML}
     return { html, baseName: exportBaseName() };
   }
 
-  /* ── Print via hidden same-origin iframe (Tauri / web) ──────────── */
-  function printViaIframe(html) {
-    const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
-    iframe.setAttribute('srcdoc', html);
-    document.body.appendChild(iframe);
-    iframe.addEventListener('load', () => {
-      try {
-        iframe.contentWindow.focus();
-        iframe.contentWindow.print();
-      } catch (err) {
-        console.error('[export] iframe print failed:', err);
-      }
-      /* Give the (possibly async) print dialog generous time before
-         tearing the frame down.                                     */
-      setTimeout(() => { try { iframe.remove(); } catch (_) {} }, 60000);
-    });
+  /* ── In-app print (Tauri / web) ───────────────────────────────────
+     WebKitGTK does not reliably print an off-screen iframe, so instead
+     we render the export document INTO the live page (hidden on screen)
+     and print the top window — the exact mechanism the app already uses
+     for Ctrl+P (window.print() + @media print). The content is scoped
+     under #export-print-root and the app is hidden via the
+     body.exporting-pdf print rules (revery_notebook_style.css), so the
+     OS print dialog's "Print to File / Save as PDF" outputs just the
+     document. Everything is torn down on afterprint (+ a timeout
+     fallback in case afterprint never fires).                         */
+  function printInApp(opts) {
+    const parts = pdfParts(opts);
+    if (!parts) return;
+
+    const styleEl = document.createElement('style');
+    styleEl.id = 'export-print-css';
+    styleEl.textContent = pdfCss(opts, true);
+
+    const rootEl = document.createElement('div');
+    rootEl.id = 'export-print-root';
+    rootEl.innerHTML = `${parts.frontHtml}${parts.tocHtml}<main>${parts.bodyHtml}</main>`;
+
+    document.head.appendChild(styleEl);
+    document.body.appendChild(rootEl);
+    document.body.classList.add('exporting-pdf');
+
+    let done = false;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      document.body.classList.remove('exporting-pdf');
+      try { styleEl.remove(); } catch (_) {}
+      try { rootEl.remove(); } catch (_) {}
+      window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
+
+    /* Let layout/fonts settle, then print. */
+    setTimeout(() => {
+      try { window.print(); }
+      catch (err) { console.error('[export] window.print failed:', err); }
+      /* Fallback teardown — some WebViews fire afterprint late or not at all. */
+      setTimeout(cleanup, 60000);
+    }, 200);
   }
 
   /* ══════════════════════════════════════════════════════════════════
@@ -655,8 +742,9 @@ ${clone.innerHTML}
         }
       }
     } else {
-      /* Tauri / web: the system print dialog ("Save as PDF"). */
-      printViaIframe(built.html);
+      /* Tauri / web: render into the page + window.print() → the system
+         print dialog ("Print to File / Save as PDF"). */
+      printInApp(exportSettings.pdf);
     }
   }
 
@@ -700,6 +788,12 @@ ${clone.innerHTML}
   let modal = null;
   let currentMode = 'pdf';
 
+  /* ── App-styled controls ────────────────────────────────────────────
+     The popup uses the software's own dropdown-menu aesthetic instead of
+     native <select>/checkbox: a trigger button that expands an inline
+     `.menu-item`-styled list with the ■ (selected) / □ marker — the same
+     language as the Settings submenus. Persist on every change. */
+
   const row = (labelText, control) => {
     const div = document.createElement('div');
     div.className = 'export-row';
@@ -710,26 +804,57 @@ ${clone.innerHTML}
     return div;
   };
 
-  const select = (values, current, onChange) => {
-    const sel = document.createElement('select');
-    sel.className = 'export-select';
-    values.forEach(([val, labelText]) => {
-      const o = document.createElement('option');
-      o.value = String(val);
-      o.textContent = T(labelText);
-      if (String(val) === String(current)) o.selected = true;
-      sel.appendChild(o);
+  /* Multi-choice dropdown: values = [[val, label], …]. `get`/`set` read
+     and write the live setting so the ■ marker always reflects state. */
+  const dropdown = (values, get, set) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'export-dd';
+    const btn = document.createElement('button');
+    btn.className = 'export-dd-btn';
+    const menu = document.createElement('div');
+    menu.className = 'export-dd-menu';
+
+    const labelFor = () => {
+      const cur = values.find((v) => String(v[0]) === String(get()));
+      return cur ? T(cur[1]) : String(get());
+    };
+    const items = values.map(([val, lab]) => {
+      const item = document.createElement('button');
+      item.className = 'export-dd-item';
+      const paint = () => { item.textContent = (String(val) === String(get()) ? '■  ' : '□  ') + T(lab); };
+      paint();
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        set(val); saveSettings();
+        btn.textContent = labelFor() + '  ▾';
+        items.forEach((it) => it.paint());
+        menu.classList.remove('open');
+      });
+      item.paint = paint;
+      menu.appendChild(item);
+      return item;
     });
-    sel.addEventListener('change', () => { onChange(sel.value); saveSettings(); });
-    return sel;
+    btn.textContent = labelFor() + '  ▾';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasOpen = menu.classList.contains('open');
+      closeExportMenus();
+      if (!wasOpen) menu.classList.add('open');
+    });
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+    return wrap;
   };
 
-  const checkbox = (current, onChange) => {
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = !!current;
-    box.addEventListener('change', () => { onChange(box.checked); saveSettings(); });
-    return box;
+  /* Boolean setting rendered as a full-width ■/□ toggle row (matches the
+     app's on/off menu items). Returns the row element directly. */
+  const toggleRow = (labelText, get, set) => {
+    const btn = document.createElement('button');
+    btn.className = 'export-toggle';
+    const paint = () => { btn.textContent = (get() ? '■  ' : '□  ') + T(labelText); };
+    paint();
+    btn.addEventListener('click', () => { set(!get()); saveSettings(); paint(); });
+    return btn;
   };
 
   const textInput = (current, placeholderText, onChange) => {
@@ -742,11 +867,16 @@ ${clone.innerHTML}
     return inp;
   };
 
+  /* Close any open inline dropdown (also wired to a document click). */
+  function closeExportMenus() {
+    document.querySelectorAll('.export-dd-menu.open').forEach((m) => m.classList.remove('open'));
+  }
+
   function buildPdfSection() {
     const p = exportSettings.pdf;
     const wrap = document.createElement('div');
 
-    wrap.appendChild(row('Front page', checkbox(p.frontPage, (v) => { p.frontPage = v; })));
+    wrap.appendChild(toggleRow('Front page', () => p.frontPage, (v) => { p.frontPage = v; }));
     wrap.appendChild(row('Front title', textInput(p.frontTitle, 'Document title', (v) => { p.frontTitle = v; })));
     wrap.appendChild(row('Author', textInput(p.frontAuthor, 'Author name', (v) => { p.frontAuthor = v; })));
 
@@ -793,47 +923,58 @@ ${clone.innerHTML}
     });
     imgControls.appendChild(pickBtn);
     imgControls.appendChild(clearBtn);
-    wrap.appendChild(row('Front image', imgControls));
+    wrap.appendChild(row('Cover image (full page)', imgControls));
 
     const opacity = document.createElement('input');
     opacity.type = 'range';
-    opacity.min = '0.05'; opacity.max = '0.6'; opacity.step = '0.05';
+    opacity.min = '0.05'; opacity.max = '1'; opacity.step = '0.05';
     opacity.value = String(p.frontOpacity);
     opacity.addEventListener('input', () => { p.frontOpacity = parseFloat(opacity.value); saveSettings(); });
     wrap.appendChild(row('Image opacity', opacity));
 
-    wrap.appendChild(row('Front layout', select(
+    wrap.appendChild(row('Front layout', dropdown(
       [['center', 'Centered'], ['corners', 'Opposite corners']],
-      p.frontLayout, (v) => { p.frontLayout = v; })));
+      () => p.frontLayout, (v) => { p.frontLayout = v; })));
 
-    wrap.appendChild(row('Table of contents', checkbox(p.toc, (v) => { p.toc = v; })));
-    wrap.appendChild(row('Format', select(
+    wrap.appendChild(toggleRow('Table of contents', () => p.toc, (v) => { p.toc = v; }));
+    wrap.appendChild(row('Format', dropdown(
       [['article', 'Article (symmetric)'], ['book', 'Book (mirrored margins)']],
-      p.format, (v) => { p.format = v; })));
-    wrap.appendChild(row('Margins', select(
+      () => p.format, (v) => { p.format = v; })));
+    wrap.appendChild(row('Margins', dropdown(
       [['narrow', 'Narrow'], ['normal', 'Normal'], ['wide', 'Wide']],
-      p.marginPreset, (v) => { p.marginPreset = v; })));
-    wrap.appendChild(row('Font size', select(
+      () => p.marginPreset, (v) => { p.marginPreset = v; })));
+    wrap.appendChild(row('Font', dropdown(
+      [['serif', 'Serif'], ['sans', 'Sans-serif'], ['mono', 'Monospace'],
+       ['harald-text', 'Harald Text'], ['harald-mono', 'Harald Mono']],
+      () => p.font, (v) => { p.font = v; })));
+    wrap.appendChild(row('Font size', dropdown(
       [[9, '9 pt'], [10, '10 pt'], [11, '11 pt'], [12, '12 pt']],
-      p.fontPt, (v) => { p.fontPt = parseInt(v, 10); })));
-    wrap.appendChild(row('Page size', select(
-      [['A4', 'A4'], ['Letter', 'Letter']],
-      p.pageSize, (v) => { p.pageSize = v; })));
-    wrap.appendChild(row('Page numbers', checkbox(p.pageNumbers, (v) => { p.pageNumbers = v; })));
+      () => p.fontPt, (v) => { p.fontPt = parseInt(v, 10); })));
+    wrap.appendChild(row('Page size', dropdown(
+      [['A4', 'A4'], ['A5', 'A5'], ['A6', 'A6'], ['Letter', 'Letter']],
+      () => p.pageSize, (v) => { p.pageSize = v; })));
+    wrap.appendChild(toggleRow('New page before each H1', () => p.newPageH1, (v) => { p.newPageH1 = v; }));
+    wrap.appendChild(toggleRow('New page before each H2', () => p.newPageH2, (v) => { p.newPageH2 = v; }));
+    wrap.appendChild(toggleRow('Page numbers', () => p.pageNumbers, (v) => { p.pageNumbers = v; }));
+
+    const note = document.createElement('div');
+    note.className = 'export-note';
+    note.textContent = T('The front page is never numbered. Page numbers work in the desktop app; in the browser/Tauri they follow the system print dialog.');
+    wrap.appendChild(note);
     return wrap;
   }
 
   function buildLatexSection() {
     const l = exportSettings.latex;
     const wrap = document.createElement('div');
-    wrap.appendChild(row('Engine', select(
+    wrap.appendChild(row('Engine', dropdown(
       [['pdflatex', 'pdflatex'], ['xelatex', 'xelatex']],
-      l.engine, (v) => { l.engine = v; })));
-    wrap.appendChild(row('Template', select(
+      () => l.engine, (v) => { l.engine = v; })));
+    wrap.appendChild(row('Template', dropdown(
       [['article', 'Article'], ['report', 'Report'], ['book', 'Book']],
-      l.template, (v) => { l.template = v; })));
-    wrap.appendChild(row('Title page', checkbox(l.titlePage, (v) => { l.titlePage = v; })));
-    wrap.appendChild(row('Table of contents', checkbox(l.toc, (v) => { l.toc = v; })));
+      () => l.template, (v) => { l.template = v; })));
+    wrap.appendChild(toggleRow('Title page', () => l.titlePage, (v) => { l.titlePage = v; }));
+    wrap.appendChild(toggleRow('Table of contents', () => l.toc, (v) => { l.toc = v; }));
 
     const note = document.createElement('div');
     note.className = 'export-note';
@@ -858,6 +999,12 @@ ${clone.innerHTML}
     content.appendChild(heading);
 
     content.appendChild(currentMode === 'pdf' ? buildPdfSection() : buildLatexSection());
+
+    /* Clicking anywhere in the modal that isn't a dropdown closes any
+       open dropdown (the triggers/items stopPropagation). */
+    content.addEventListener('click', (e) => {
+      if (!e.target.closest('.export-dd')) closeExportMenus();
+    });
 
     const buttons = document.createElement('div');
     buttons.className = 'modal-buttons';
@@ -888,7 +1035,9 @@ ${clone.innerHTML}
 
   /* ── Public surface ─────────────────────────────────────────────── */
   window.exporterOpen = openExportModal;
-  /* Test hooks: pure builders, no dialogs. */
+  /* Test hooks: pure builders + the in-app print path (drives
+     window.print, so tests stub it). No dialogs. */
   window.exporterBuildLatex = buildLatexDocument;
   window.exporterBuildPdfHtml = buildPdfDocument;
+  window.exporterPrintInApp = printInApp;
 })();

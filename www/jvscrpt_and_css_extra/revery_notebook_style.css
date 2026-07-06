@@ -2381,3 +2381,79 @@ body.live-preview-active #editor .cm-content {
   color: var(--accent, #7a8ee0);
 }
 .modal-btn-primary:hover { background: var(--bg-hover); }
+
+/* Export popup: app-styled dropdowns + ■/□ toggles (match the Settings
+   submenu aesthetic — mono, the app's menu bg/hover, inline expansion). */
+.export-dd { position: relative; max-width: 58%; }
+.export-dd-btn {
+  width: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-md);
+  border-radius: 3px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-align: left;
+  padding: 5px 9px;
+}
+.export-dd-btn:hover { border-color: var(--accent, #7a8ee0); }
+.export-dd-menu {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 3px);
+  z-index: 10;
+  min-width: 100%;
+  background: var(--menu-bg, var(--bg-panel));
+  border: 1px solid var(--border-md);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  padding: 4px 0;
+  max-height: 16em;
+  overflow-y: auto;
+  white-space: nowrap;
+}
+.export-dd-menu.open { display: block; }
+.export-dd-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-align: left;
+  padding: 0.5rem 1rem 0.35rem;
+  transition: background 0.1s;
+}
+.export-dd-item:hover { background: var(--bg-hover); }
+.export-toggle {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  text-align: left;
+  padding: 7px 4px;
+  transition: background 0.1s;
+}
+.export-toggle:hover { background: var(--bg-hover); }
+
+/* ── Export PDF: in-app print path (Tauri / web) ──────────────────────
+   markdown_editor_export.js renders the export document into
+   #export-print-root and calls window.print(). Hidden on screen; during
+   print (under body.exporting-pdf) the whole app is hidden and only the
+   export document shows. The :not() carries id-level specificity so it
+   beats the general @media print block's `#preview { display:block }`
+   (and hiding #workspace hides #preview via the ancestor anyway).      */
+#export-print-root { display: none; }
+@media print {
+  body.exporting-pdf > *:not(#export-print-root) { display: none !important; }
+  body.exporting-pdf #export-print-root { display: block !important; }
+}

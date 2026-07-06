@@ -656,11 +656,19 @@ key `revery_export_settings`).
 built from the preview's own rendered HTML (KaTeX→MathML, hljs colors),
 with the options (front page, clickable TOC, article/book `@page`
 margins, font/page size, page numbers) applied as print CSS. Electron
-sends the HTML to `export:pdf` — a temp file loaded in a hidden,
-sandboxed window, `printToPDF` with `preferCSSPageSize` → a vector,
-selectable PDF, written atomically. Tauri and web print a hidden
-same-origin iframe (`srcdoc`, verified to load under the CSP with no
-violation) → the system "Save as PDF". The print-engine TOC has clickable
+sends the HTML (with a `<base href>` at the app's `www/` so the code-
+color theme + brand fonts resolve, and KaTeX pre-converted to MathML) to
+`export:pdf` — a temp file loaded in a hidden, sandboxed window,
+`printToPDF` with `preferCSSPageSize` → a vector, selectable PDF, written
+atomically. **Tauri/web** cannot print an off-screen iframe (WebKitGTK
+ignores it), so they use the **in-app print path**: the export document
+is rendered into `#export-print-root` in the live page, `body.exporting-pdf`
++ an `@media print` rule hide the app and show only that container, and
+`window.print()` opens the system dialog ("Print to File / Save as PDF")
+— the same mechanism Ctrl+P already uses. Options: A4/A5/A6/Letter,
+article/book margins, font, front page (full-bleed named `cover` page,
+never numbered), per-header page breaks, clickable TOC, page numbers
+(Electron footer; Tauri via the print dialog). The print-engine TOC has clickable
 links but no page numbers (a browser-print limitation — the LaTeX export
 is the page-numbered path).
 

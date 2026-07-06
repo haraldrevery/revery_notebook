@@ -550,6 +550,26 @@
   exportSuite.latexMenuEntry = Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
     .some((b) => (b.textContent || '').includes('LaTeX project'));
 
+  /* New PDF options: A5/A6 sizes, per-header page breaks, full-bleed
+     named cover page, font picker, asset base + code-color stylesheet. */
+  const pdfA5 = window.exporterBuildPdfHtml({ pageSize: 'A5' });
+  exportSuite.a5Size = pdfA5.html.includes('size: A5');
+  const pdfA6 = window.exporterBuildPdfHtml({ pageSize: 'A6' });
+  exportSuite.a6Size = pdfA6.html.includes('size: A6');
+  const pdfBreaks = window.exporterBuildPdfHtml({ newPageH1: true, newPageH2: true });
+  exportSuite.newPageHeaders = pdfBreaks.html.includes('main h1 { break-before: page')
+    && pdfBreaks.html.includes('main h2 { break-before: page');
+  const pdfNoBreaks = window.exporterBuildPdfHtml({ newPageH1: false, newPageH2: false });
+  exportSuite.noHeaderBreaks = !pdfNoBreaks.html.includes('break-before: page');
+  exportSuite.coverNamedPage = pdfF.html.includes('page: cover')
+    && pdfF.html.includes('@page cover { margin: 0');
+  const pdfFont = window.exporterBuildPdfHtml({ font: 'harald-text' });
+  exportSuite.fontApplied = pdfFont.html.includes("font-family: 'HaraldText'");
+  exportSuite.assetBase = pdfF.html.includes('<base href=')
+    && pdfF.html.includes('github-dark.min.css');
+  const texClear = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', titlePage: true, toc: true });
+  exportSuite.latexTocClearpage = /\\maketitle\s*\n\\clearpage\s*\n\\tableofcontents\s*\n\\clearpage/.test(texClear.tex);
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))

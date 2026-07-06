@@ -127,7 +127,9 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     articleSection: true, pdflatexInputenc: true, noTitleNoToc: true,
     pdfFrontPage: true, pdfTocLinks: true, pdfPageOpts: true, pdfDefaultsClean: true,
     pdfMenuEntry: true, latexMenuEntry: true,
-  }, 'export builders must honor LaTeX templates/engines/title/TOC and PDF front-page/TOC/@page options; both menu entries present');
+    a5Size: true, a6Size: true, newPageHeaders: true, noHeaderBreaks: true,
+    coverNamedPage: true, fontApplied: true, assetBase: true, latexTocClearpage: true,
+  }, 'export builders must honor LaTeX templates/engines/title/TOC/clearpage and PDF front-page/TOC/@page/A5-A6/per-header-break/font/asset-base options; both menu entries present');
 
   // 14. outline +/- buttons scale only the outline font, persisted
   assert.equal(r.outlineFontButtons, true, 'outline font buttons must step and persist the existing setting');
