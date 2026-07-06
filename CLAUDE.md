@@ -24,8 +24,6 @@ Users can pick an installer that is either an Electron or a Tauri wrapper, eithe
 
 - Better save/load logic. No risk of file corruptions and no race condition (right now I have no idea how safe it is). Risk of users losing data and hardware failure because of this app, must be investigated before anything happens. (First thing to address after code clean up, making it modular to reduce bug risks when working and easier to read etc)
 
-- Right now, emojis were used for icons in the UI. It was supposed to use the emojis from the harald revery font, but this doesn't always work and sometimes renders the emojis using the system font emojis. No idea how to reliably render icons. 
-
 - The app should never open links.  It should not act as a browser. The borderless UI makes it impossible to close the software if the user by mistake clicks a link. 
 
 
@@ -42,3 +40,7 @@ Users can pick an installer that is either an Electron or a Tauri wrapper, eithe
 - Quality of life user experience, check how importing and drag and drop images work. Make it easier for users to work with images in their documents (a little vaguely defined). 
 
 - In Obsidian, when clicking on the rendered YAML part in the text, a drop menu (scrollable) with all existing tags of the project is shown, in that way user doesn't have to type every single time they want to use a standard YAML data for something. This would be a nice feature, but I have no idea if it can be implemented without conflicting with codemirror.
+
+- Zip export of the project, in the file menu, a new option "zip project export" where the whole project is exported as a zip file do desired folder on their PC. Extra: password protection? 
+
+- Pdf export

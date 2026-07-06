@@ -1752,129 +1752,6 @@ async fn export_latex_zip(
     })
 }
 
-/* ── Native PDF print (Linux) ─────────────────────────────────────────────
-   The frontend renders the export document into the live page (hidden by
-   the print stylesheet) and calls this instead of window.print(). We drive
-   WebKitGTK's own PrintOperation NON-interactively (no GTK dialog), so no
-   system headers/footers are added and paper/margins are ours — the output
-   is consistent across machines, unlike the dialog path (which stays as the
-   frontend's fallback if this errors). Margins come from the CSS @page rule
-   (GTK margins set to 0), matching the Electron printToPDF path.         */
-
-#[cfg(target_os = "linux")]
-#[tauri::command]
-async fn export_pdf_native(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    page_size: String,
-    base_name: Option<String>,
-) -> Result<ZipExportResult, String> {
-    use tauri_plugin_dialog::{DialogExt, FilePath};
-
-    let base = base_name
-        .map(|b| b.trim().replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], ""))
-        .filter(|b| !b.is_empty())
-        .unwrap_or_else(|| "document".into());
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("Export PDF")
-        .add_filter("PDF", &["pdf"])
-        .set_file_name(&format!("{}_{}.pdf", base, today_stamp_utc()))
-        .save_file(move |p| {
-            let _ = tx.send(p);
-        });
-    let chosen = match rx.await.unwrap_or(None) {
-        None => {
-            return Ok(ZipExportResult {
-                ok: None, canceled: Some(true), path: None, entries: None, bytes: None,
-            })
-        }
-        Some(c) => c,
-    };
-    let path_str = match chosen {
-        FilePath::Path(pb) => pb.to_string_lossy().into_owned(),
-        FilePath::Url(u) => u.to_string(),
-    };
-    let dest = safe_path(&path_str)?;
-    let dest_uri = format!("file://{}", dest.to_string_lossy());
-
-    let paper: &'static str = match page_size.as_str() {
-        "A5" => "iso_a5",
-        "A6" => "iso_a6",
-        "Letter" => "na_letter",
-        _ => "iso_a4",
-    };
-
-    /* Run the print operation on the webview (main/UI) thread; await its
-       completion signal over a channel — the GTK main loop drives it. */
-    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
-    window
-        .with_webview(move |pw| {
-            use webkit2gtk::PrintOperationExt;
-
-            let wv = pw.inner();
-            let op = webkit2gtk::PrintOperation::new(&wv);
-
-            let settings = gtk::PrintSettings::new();
-            settings.set_printer("Print to File");
-            settings.set("output-uri", Some(dest_uri.as_str()));
-            settings.set("output-file-format", Some("pdf"));
-
-            let page_setup = gtk::PageSetup::new();
-            page_setup.set_paper_size(&gtk::PaperSize::new(Some(paper)));
-            page_setup.set_top_margin(0.0, gtk::Unit::Mm);
-            page_setup.set_bottom_margin(0.0, gtk::Unit::Mm);
-            page_setup.set_left_margin(0.0, gtk::Unit::Mm);
-            page_setup.set_right_margin(0.0, gtk::Unit::Mm);
-
-            op.set_print_settings(&settings);
-            op.set_page_setup(&page_setup);
-
-            /* Keep the operation alive until it finishes (the closure returns
-               immediately after print()); the holder ref is released inside
-               the finished/failed handler, breaking the signal→op cycle. */
-            let holder = std::rc::Rc::new(std::cell::RefCell::new(Some(op.clone())));
-            let dtx = std::rc::Rc::new(std::cell::RefCell::new(Some(done_tx)));
-            {
-                let h = holder.clone();
-                let d = dtx.clone();
-                op.connect_finished(move |_| {
-                    h.borrow_mut().take();
-                    if let Some(t) = d.borrow_mut().take() { let _ = t.send(Ok(())); }
-                });
-            }
-            {
-                let h = holder.clone();
-                let d = dtx.clone();
-                op.connect_failed(move |_, err| {
-                    h.borrow_mut().take();
-                    if let Some(t) = d.borrow_mut().take() { let _ = t.send(Err(err.to_string())); }
-                });
-            }
-            op.print();
-        })
-        .map_err(|e| format!("with_webview failed: {e}"))?;
-
-    match done_rx.await {
-        Ok(Ok(())) => Ok(ZipExportResult {
-            ok: Some(true), canceled: None, path: Some(path_str), entries: None, bytes: None,
-        }),
-        Ok(Err(e)) => Err(format!("Print failed: {e}")),
-        Err(_) => Err("Print did not complete".into()),
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-#[tauri::command]
-async fn export_pdf_native(
-    _page_size: String,
-    _base_name: Option<String>,
-) -> Result<ZipExportResult, String> {
-    Err("Native PDF print is only available on Linux".into())
-}
-
 
 ///Keep async
 /// Show a native OS dialog and return the button index pressed.
@@ -2883,7 +2760,6 @@ tauri::Builder::default()
             save_file,
             export_project_zip,
             export_latex_zip,
-            export_pdf_native,
             show_message_box,
             confirm_close,
             watch_file,

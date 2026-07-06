@@ -25,15 +25,6 @@ base64              = "0.22"
 # classic zip crypto is broken and we refuse to ship fake security.
 zip                 = { version = "2", default-features = false, features = ["deflate"] }
 
-# Native PDF print (Linux). The SAME versions wry already pulls in
-# transitively (webkit2gtk 2.0.2 / gtk 0.18) — declaring them direct lets
-# export_pdf_native drive WebKitPrintOperation for a dialog-free,
-# consistent PDF. Linux-only; other targets fall back to window.print(),
-# so the deps are target-gated.
-[target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = "2.0.2"
-gtk        = "0.18"
-
 [profile.release]
 opt-level = "s"
 lto       = "thin"
