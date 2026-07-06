@@ -1865,8 +1865,8 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
    view toggle) read a touch large — trim ~12%. Scoped to the toolbar so
    other .rv-icon uses are untouched. */
 .sidebar-btn .rv-icon {
-  width: 0.88em;
-  height: 0.88em;
+  width: 0.75em;
+  height: 0.75em;
 }
 
 .sidebar-btn {
