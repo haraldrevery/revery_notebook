@@ -42,7 +42,7 @@
       toc: false,                // user-specified default: off
       format: 'article',         // 'article' (symmetric) | 'book' (mirrored)
       marginPreset: 'normal',    // 'narrow' | 'normal' | 'wide'
-      fontPt: 11,                // 9 | 10 | 11 | 12
+      fontPt: 11,                // 8–18 pt
       font: 'serif',             // serif|sans|mono|harald-text|harald-mono
       pageSize: 'A4',            // 'A4' | 'A5' | 'A6' | 'Letter'
       newPageH1: false,          // new page before every # / H1
@@ -1201,7 +1201,7 @@ ${parts.bodyHtml}
        ['harald-text', 'Harald Text'], ['harald-mono', 'Harald Mono']],
       () => p.font, (v) => { p.font = v; })));
     wrap.appendChild(row('Font size', dropdown(
-      [[9, '9 pt'], [10, '10 pt'], [11, '11 pt'], [12, '12 pt']],
+      [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map((n) => [n, n + ' pt']),
       () => p.fontPt, (v) => { p.fontPt = parseInt(v, 10); })));
     wrap.appendChild(row('Page size', dropdown(
       [['A4', 'A4'], ['A5', 'A5'], ['A6', 'A6'], ['Letter', 'Letter']],
