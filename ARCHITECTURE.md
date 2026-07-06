@@ -660,12 +660,19 @@ sends the HTML (with a `<base href>` at the app's `www/` so the code-
 color theme + brand fonts resolve, and KaTeX pre-converted to MathML) to
 `export:pdf` — a temp file loaded in a hidden, sandboxed window,
 `printToPDF` with `preferCSSPageSize` → a vector, selectable PDF, written
-atomically. **Tauri/web** cannot print an off-screen iframe (WebKitGTK
-ignores it), so they use the **in-app print path**: the export document
-is rendered into `#export-print-root` in the live page, `body.exporting-pdf`
-+ an `@media print` rule hide the app and show only that container, and
-`window.print()` opens the system dialog ("Print to File / Save as PDF")
-— the same mechanism Ctrl+P already uses. Options: A4/A5/A6/Letter,
+atomically. **Tauri/web** render the export document into
+`#export-print-root` in the live page (`body.exporting-pdf` + an
+`@media print` rule hide the app and show only that container). **Tauri**
+then drives WebKitGTK's `WebKitPrintOperation` NON-interactively via the
+`export_pdf_native` Rust command (`with_webview` → `webkit2gtk::PrintOperation`,
+paper/margins set, output to a dialog-chosen file) — dialog-free and
+deterministic: no GTK "Print headers & footers" frame, consistent margins
+across machines (the `window.print()` dialog's per-machine defaults caused
+a stray border). On native error it **falls back to `window.print()`** so
+a PDF is always produced. **Web** uses `window.print()` → the browser's
+"Save as PDF". The `webkit2gtk`/`gtk` deps are Linux-target-gated (the
+exact versions `wry` already uses); non-Linux returns an error → the
+fallback. Options: A4/A5/A6/Letter,
 article/book margins, font, front page (full-bleed named `cover` page,
 never numbered), per-header page breaks, clickable TOC, page numbers
 (Electron footer; Tauri via the print dialog). The print-engine TOC has clickable

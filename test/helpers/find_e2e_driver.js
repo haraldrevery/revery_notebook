@@ -570,6 +570,41 @@
   const texClear = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', titlePage: true, toc: true });
   exportSuite.latexTocClearpage = /\\maketitle\s*\n\\clearpage\s*\n\\tableofcontents\s*\n\\clearpage/.test(texClear.tex);
 
+  /* Tauri native-print branch (stub NativeAPI.exportPdfNative): on success
+     the doc is injected during the call and cleaned up after; on error it
+     falls back to window.print(). (Web harness — NativeAPI is the web impl;
+     we install the hook temporarily.) */
+  const realPrint = window.print;
+  let nativeCalledWith = null, rootDuringCall = false;
+  window.NativeAPI.exportPdfNative = async (o) => {
+    nativeCalledWith = o;
+    rootDuringCall = !!document.getElementById('export-print-root');
+    return { ok: true };
+  };
+  await window.exporterRunPdf();
+  await sleep(200);
+  exportSuite.nativeInvoked = !!nativeCalledWith && nativeCalledWith.pageSize !== undefined;
+  exportSuite.nativeRootDuringCall = rootDuringCall;
+  exportSuite.nativeCleanedAfter = !document.getElementById('export-print-root')
+    && !document.body.classList.contains('exporting-pdf');
+
+  let printFellBack = false;
+  window.print = () => { printFellBack = true; };
+  window.NativeAPI.exportPdfNative = async () => { throw new Error('boom'); };
+  await window.exporterRunPdf();
+  await sleep(400); // through the 200ms settle in the fallback printInApp
+  exportSuite.fallbackOnError = printFellBack;
+  exportSuite.fallbackCleaned = !document.body.classList.contains('exporting-pdf')
+    || !!document.getElementById('export-print-root'); // injected again by fallback, cleaned on afterprint
+  window.print = realPrint;
+  window.NativeAPI.exportPdfNative = null;
+  /* tidy any leftover fallback injection so later probes see a clean DOM */
+  const leftover = document.getElementById('export-print-root');
+  if (leftover) leftover.remove();
+  document.body.classList.remove('exporting-pdf');
+  const leftStyle = document.getElementById('export-print-css');
+  if (leftStyle) leftStyle.remove();
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
