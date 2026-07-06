@@ -352,6 +352,9 @@ writeVolatileNow(path, content) {
       return window.electronAPI.exportPdf(html, opts);
     },
 
+    /* Electron uses printToPDF (exportPdf); no native-webkit path. */
+    exportPdfNative: null,
+
     /** LaTeX project zip: main.tex + images/ (dialog in main). */
     exportLatexZip(tex, images, baseName) {
       return window.electronAPI.exportLatexZip(tex, images, baseName);
@@ -611,9 +614,14 @@ getVolatileContent(path) {
       return this._invoke('export_project_zip');
     },
 
-    /* No direct-to-PDF API in the webview: the exporter falls back to
-       its same-origin print-iframe path (system dialog → Save as PDF). */
+    /* No printToPDF in the webview; the exporter uses either the native
+       WebKit print path (exportPdfNative) or window.print(). */
     exportPdf: null,
+
+    /** Dialog-free native WebKitGTK print to PDF (Rust). */
+    exportPdfNative(opts) {
+      return this._invoke('export_pdf_native', opts);
+    },
 
     /** LaTeX project zip: main.tex + images/ (dialog in Rust). */
     exportLatexZip(tex, images, baseName) {
@@ -939,7 +947,8 @@ getVolatileContent(path) {
     watchFile: () => notSupported('watchFile'),
     unwatchFile: () => Promise.resolve(),
     exportProjectZip: () => notSupported('exportProjectZip'),
-    exportPdf: null,          // exporter uses the print-iframe path
+    exportPdf: null,          // exporter uses window.print()
+    exportPdfNative: null,    // no native webkit print in the browser
     exportLatexZip: null,     // exporter falls back to single-.tex download
 
     async getLastOpenedFile() {

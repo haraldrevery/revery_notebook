@@ -679,9 +679,13 @@ ${parts.bodyHtml}
      OS print dialog's "Print to File / Save as PDF" outputs just the
      document. Everything is torn down on afterprint (+ a timeout
      fallback in case afterprint never fires).                         */
-  function printInApp(opts) {
+  /* Render the export document into the live page (scoped under
+     #export-print-root, hidden on screen; shown only in the print view by
+     body.exporting-pdf + @media print). Returns a cleanup() fn. Shared by
+     the native-print path (Tauri) and the window.print() path (web).    */
+  function injectPrintDom(opts) {
     const parts = pdfParts(opts);
-    if (!parts) return;
+    if (!parts) return null;
 
     const styleEl = document.createElement('style');
     styleEl.id = 'export-print-css';
@@ -696,22 +700,26 @@ ${parts.bodyHtml}
     document.body.classList.add('exporting-pdf');
 
     let done = false;
-    const cleanup = () => {
+    return () => {
       if (done) return;
       done = true;
       document.body.classList.remove('exporting-pdf');
       try { styleEl.remove(); } catch (_) {}
       try { rootEl.remove(); } catch (_) {}
-      window.removeEventListener('afterprint', cleanup);
     };
-    window.addEventListener('afterprint', cleanup);
+  }
 
-    /* Let layout/fonts settle, then print. */
+  /* window.print() path (web, and Tauri fallback): inject, print, tear
+     down on afterprint (+ a timeout fallback in case it never fires). */
+  function printInApp(opts) {
+    const cleanup = injectPrintDom(opts);
+    if (!cleanup) return;
+    const onAfter = () => { cleanup(); window.removeEventListener('afterprint', onAfter); };
+    window.addEventListener('afterprint', onAfter);
     setTimeout(() => {
       try { window.print(); }
       catch (err) { console.error('[export] window.print failed:', err); }
-      /* Fallback teardown — some WebViews fire afterprint late or not at all. */
-      setTimeout(cleanup, 60000);
+      setTimeout(onAfter, 60000);
     }, 200);
   }
 
@@ -741,11 +749,39 @@ ${parts.bodyHtml}
           });
         }
       }
-    } else {
-      /* Tauri / web: render into the page + window.print() → the system
-         print dialog ("Print to File / Save as PDF"). */
-      printInApp(exportSettings.pdf);
+      return;
     }
+
+    /* Tauri: native WebKitGTK print — dialog-free, we control paper +
+       margins, no system headers (the "border" the GTK dialog adds). We
+       render the document into the page, hand the webview to Rust to
+       print, then tear the DOM down. If the native op errors, fall back
+       to the window.print() dialog so the user still gets a PDF. */
+    if (window.NativeAPI && typeof window.NativeAPI.exportPdfNative === 'function'
+        && window.NativeAPI.exportPdfNative) {
+      const cleanup = injectPrintDom(exportSettings.pdf);
+      if (!cleanup) return;
+      /* Wait a frame so layout/fonts settle before the webview prints. */
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      try {
+        const res = await window.NativeAPI.exportPdfNative({
+          pageSize: exportSettings.pdf.pageSize,
+          baseName: built.baseName,
+        });
+        cleanup();
+        if (res && res.ok && typeof showSavedIndicator === 'function') showSavedIndicator();
+        else if (res && res.canceled) { /* user backed out — silent */ }
+        else if (!res || !res.ok) throw new Error((res && res.error) || 'native print returned no result');
+      } catch (err) {
+        cleanup();
+        console.warn('[export] native PDF failed — falling back to print dialog:', err);
+        printInApp(exportSettings.pdf); // fallback, never leaves the user with nothing
+      }
+      return;
+    }
+
+    /* Web (browser): window.print() → the system "Save as PDF". */
+    printInApp(exportSettings.pdf);
   }
 
   async function runLatexExport() {
@@ -1040,4 +1076,5 @@ ${parts.bodyHtml}
   window.exporterBuildLatex = buildLatexDocument;
   window.exporterBuildPdfHtml = buildPdfDocument;
   window.exporterPrintInApp = printInApp;
+  window.exporterRunPdf = runPdfExport;
 })();
