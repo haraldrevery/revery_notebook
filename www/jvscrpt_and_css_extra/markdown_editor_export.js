@@ -786,6 +786,17 @@
     const size = PAGE_SIZE[opts.pageSize] || 'A4';
     const font = FONT_STACKS[opts.font] || FONT_STACKS.serif;
 
+    /* The Harald Revery face has no true bold and its synthesized (faux) bold
+       reads poorly, so — ONLY when a Harald font is selected — drop bold on the
+       cover title and headings, and render inline bold as underline instead
+       (mirroring the on-screen renderer). Any other font is left untouched.
+       Appended last so these win over the base weights by source order. */
+    const isHarald = /^harald/.test(opts.font || '');
+    const haraldBold = isHarald ? `
+${P}strong, ${P}b { font-weight: normal; text-decoration: underline; }
+${P}h1, ${P}h2, ${P}h3, ${P}h4, ${P}h5, ${P}h6 { font-weight: normal; }
+${P}.front-page .fp-title { font-weight: normal; }` : '';
+
     /* Book format mirrors inner/outer margins on facing pages. */
     const bookMargins = (opts.format === 'book')
       ? `@page :right { margin: ${mm}mm ${Math.max(6, mm - 6)}mm ${mm}mm ${mm + 6}mm; }
@@ -849,6 +860,7 @@ ${P}.toc li { margin-bottom: 0.35em; }
 ${P}.toc a { color: #1a1a1a; }
 ${P}.toc .toc-l2 { margin-left: 1.4em; }
 ${P}.toc .toc-l3 { margin-left: 2.8em; }
+${haraldBold}
 `;
   }
 

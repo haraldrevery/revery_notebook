@@ -565,6 +565,13 @@
     && pdfF.html.includes('@page cover { margin: 0');
   const pdfFont = window.exporterBuildPdfHtml({ font: 'harald-text' });
   exportSuite.fontApplied = pdfFont.html.includes("font-family: 'HaraldText'");
+  /* Harald has no true bold: titles/headings drop bold and inline bold becomes
+     underline; any other font keeps normal bold. */
+  exportSuite.haraldBoldUnderline =
+    pdfFont.html.includes('strong, b { font-weight: normal; text-decoration: underline;')
+    && pdfFont.html.includes('.front-page .fp-title { font-weight: normal;');
+  exportSuite.nonHaraldBoldKept =
+    !window.exporterBuildPdfHtml({ font: 'serif' }).html.includes('text-decoration: underline');
   exportSuite.assetBase = pdfF.html.includes('<base href=')
     && pdfF.html.includes('github-dark.min.css');
   const texClear = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', titlePage: true, toc: true });
