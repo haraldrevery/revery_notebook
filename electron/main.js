@@ -802,7 +802,7 @@ ipcMain.handle('export:pdf', async (_event, html, opts) => {
    Every image path is validated against the trusted root before reading
    (the renderer chooses names, never locations). Same dialog + atomic
    write + entry-zip pattern as everything else.                        */
-ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName) => {
+ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName, bundleFonts) => {
   if (typeof tex !== 'string') throw new Error('Invalid LaTeX document');
   const root = requireRoot();
 
@@ -818,6 +818,22 @@ ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName) => {
       throw new Error(`Image too large or not a file: ${img.zipName}`);
     }
     entries.push({ name: `images/${img.zipName}`, data: fs.readFileSync(safe) });
+  }
+
+  /* Bundle brand fonts a template asks for. The renderer may only name
+     fonts from this fixed allowlist — never an arbitrary path — and they
+     are read from the app's own www/fonts, not the project root. */
+  const ALLOWED_FONTS = new Set(['HaraldReveryTextFont.ttf', 'HaraldReveryMonoFont.ttf']);
+  for (const fontId of (Array.isArray(bundleFonts) ? bundleFonts : [])) {
+    if (typeof fontId !== 'string' || !ALLOWED_FONTS.has(fontId)) {
+      throw new Error(`Font not allowed for export: ${fontId}`);
+    }
+    const fontPath = path.join(__dirname, '..', 'www', 'fonts', fontId);
+    const stat = fs.statSync(fontPath);
+    if (!stat.isFile() || stat.size > 10 * 1024 * 1024) {
+      throw new Error(`Font missing or too large: ${fontId}`);
+    }
+    entries.push({ name: fontId, data: fs.readFileSync(fontPath) });
   }
 
   const stamp = new Date().toISOString().slice(0, 10);

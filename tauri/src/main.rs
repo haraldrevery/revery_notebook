@@ -1667,6 +1667,7 @@ async fn export_latex_zip(
     tex: String,
     images: Vec<LatexImage>,
     base_name: Option<String>,
+    bundle_fonts: Option<Vec<String>>,
     root_state: State<'_, RootPath>,
 ) -> Result<ZipExportResult, String> {
     use tauri_plugin_dialog::{DialogExt, FilePath};
@@ -1692,6 +1693,18 @@ async fn export_latex_zip(
                 .map_err(|e| format!("Cannot read image {}: {e}", img.zip_name))?;
             entries.push((format!("images/{}", img.zip_name), data));
         }
+    }
+
+    /* Bundle brand fonts a template requests. The frontend may only name
+       fonts from this fixed allowlist; the bytes are compiled into the
+       binary (include_bytes!), never read from an arbitrary path. */
+    for font_id in bundle_fonts.unwrap_or_default() {
+        let data: &[u8] = match font_id.as_str() {
+            "HaraldReveryTextFont.ttf" => &include_bytes!("../../www/fonts/HaraldReveryTextFont.ttf")[..],
+            "HaraldReveryMonoFont.ttf" => &include_bytes!("../../www/fonts/HaraldReveryMonoFont.ttf")[..],
+            other => return Err(format!("Font not allowed for export: {other}")),
+        };
+        entries.push((font_id, data.to_vec()));
     }
 
     let base = base_name

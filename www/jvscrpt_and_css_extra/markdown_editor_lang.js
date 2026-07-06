@@ -129,6 +129,8 @@ window.uiTranslations = {
   "Article": { "Swedish": "Artikel" },
   "Report": { "Swedish": "Rapport" },
   "Book": { "Swedish": "Bok" },
+  "Book (Revery)": { "Swedish": "Bok (Revery)" },
+  "Homework (Revery)": { "Swedish": "Inlämning (Revery)" },
   "Title page": { "Swedish": "Titelsida" },
   "Exports a zip project: main.tex + images/ folder.": { "Swedish": "Exporterar ett zip-projekt: main.tex + images/-mapp." },
   "Cover image (full page)": { "Swedish": "Omslagsbild (hel sida)" },

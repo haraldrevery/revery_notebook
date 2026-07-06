@@ -570,6 +570,24 @@
   const texClear = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', titlePage: true, toc: true });
   exportSuite.latexTocClearpage = /\\maketitle\s*\n\\clearpage\s*\n\\tableofcontents\s*\n\\clearpage/.test(texClear.tex);
 
+  /* 11c. Brand aesthetic templates: extbook/article documentclass + styled
+     preamble, FORCED xelatex (even when pdflatex is passed), correct heading
+     depth, and the book template reports its bundled fonts. */
+  const texBookR = window.exporterBuildLatex({ template: 'book-revery', engine: 'pdflatex', titlePage: true, toc: true });
+  exportSuite.bookReveryClass = texBookR.tex.includes('\\documentclass[11pt,a4paper]{extbook}')
+    && texBookR.tex.includes('\\titleformat{\\chapter}') && texBookR.tex.includes('AccentColor');
+  exportSuite.bookReveryXelatex = texBookR.tex.includes('fontspec')
+    && !texBookR.tex.includes('inputenc') && texBookR.tex.includes('\\chapter{');
+  exportSuite.bookReveryFonts = Array.isArray(texBookR.fonts)
+    && texBookR.fonts.includes('HaraldReveryTextFont.ttf')
+    && texBookR.fonts.includes('HaraldReveryMonoFont.ttf');
+  const texHwR = window.exporterBuildLatex({ template: 'homework-revery', engine: 'pdflatex', titlePage: true, toc: false });
+  exportSuite.homeworkReveryClass = texHwR.tex.includes('\\documentclass[a4paper,11pt]{article}')
+    && texHwR.tex.includes('\\begin{titlepage}')
+    && texHwR.tex.includes('\\section{Intro}') && !texHwR.tex.includes('\\chapter{');
+  exportSuite.homeworkReveryXelatex = texHwR.tex.includes('fontspec')
+    && !texHwR.tex.includes('inputenc') && (texHwR.fonts || []).length === 0;
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))

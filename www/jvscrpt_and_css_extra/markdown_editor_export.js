@@ -107,8 +107,211 @@
      never touches disk.
   ══════════════════════════════════════════════════════════════════ */
 
+  /* ── LaTeX template registry ──────────────────────────────────────
+     Each template supplies its own documentclass/preamble/title-page and
+     heading depth; the shared markdown→LaTeX body (steps 1-9) is injected
+     into every one, so each preamble must be a SUPERSET of what the body
+     converter emits: verbatim, \includegraphics (graphicx), \sout (ulem),
+     \texttt, \href (hyperref), quote, itemize, longtable/booktabs.
+       engine: null → the user's pdflatex/xelatex choice is honored; a fixed
+       value (the brand templates need fontspec) overrides it.
+       preamble(meta, esc) / titlePage(meta, esc) receive
+       meta = { title, author, date } and esc = latexEsc (pure).
+     The classic article/report/book entries reproduce the original
+     single-preamble output; the *-revery entries add the requested looks. */
+  function classicPreamble(meta, esc) {
+    return [
+      `\\usepackage{amsmath}`,
+      `\\usepackage{amssymb}`,
+      `\\usepackage{graphicx}`,
+      `\\usepackage{hyperref}`,
+      `\\usepackage{longtable}`,
+      `\\usepackage[normalem]{ulem}`,
+      `\\usepackage[a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,marginparwidth=15mm,headheight=14pt]{geometry}`,
+      `\\usepackage[font=small,labelfont=bf]{subcaption}`,
+      `\\renewcommand\\thesubfigure{(\\alph{subfigure})}`,
+      `\\usepackage{multirow}`,
+      `\\usepackage{booktabs}`,
+      `\\usepackage{xcolor}`,
+      `\\usepackage[font=small,labelfont=bf,position=above]{caption}`,
+      `\\setlength{\\parindent}{0pt}`,
+      `\\setlength{\\parskip}{0.5em}`,
+      ``,
+      `\\usepackage{microtype}`,
+      `\\usepackage{setspace}`,
+      `\\setstretch{1.15}`,
+      `\\hypersetup{`,
+      `  colorlinks=true,`,
+      `  linkcolor=blue!60!black,`,
+      `  urlcolor=blue!60!black,`,
+      `  citecolor=blue!60!black`,
+      `}`,
+      `\\title{${esc(meta.title)}}`,
+      `\\author{${esc(meta.author)}}`,
+      `\\date{${meta.date}}`,
+    ];
+  }
+
+  const LATEX_TEMPLATES = {
+    article: {
+      label: 'Article', documentclass: 'article', classOptions: '',
+      engine: null, headings: 'section', bundleFonts: [],
+      preamble: classicPreamble,
+      titlePage: () => `\\maketitle`,
+    },
+    report: {
+      label: 'Report', documentclass: 'report', classOptions: '',
+      engine: null, headings: 'chapter', bundleFonts: [],
+      preamble: classicPreamble,
+      titlePage: () => `\\maketitle`,
+    },
+    book: {
+      label: 'Book', documentclass: 'book', classOptions: '',
+      engine: null, headings: 'chapter', bundleFonts: [],
+      preamble: classicPreamble,
+      titlePage: () => `\\maketitle`,
+    },
+
+    /* Brand book layout (adapted from book.tex): extbook + titlesec chapter
+       styling + fancyhdr, using the Revery fonts bundled into the zip.
+       Requires XeLaTeX (fontspec). Multi-file/bibliography/index machinery
+       from the original template is dropped — the body is injected here. */
+    'book-revery': {
+      label: 'Book (Revery)', documentclass: 'extbook', classOptions: '11pt,a4paper',
+      engine: 'xelatex', headings: 'chapter',
+      bundleFonts: ['HaraldReveryTextFont.ttf', 'HaraldReveryMonoFont.ttf'],
+      preamble: (meta, esc) => [
+        `\\usepackage{amsmath}`,
+        `% ── Revery brand fonts (bundled alongside this main.tex) ──`,
+        `\\setmainfont{HaraldReveryTextFont}[`,
+        `  Path=./, Extension=.ttf,`,
+        `  BoldFont=HaraldReveryTextFont, ItalicFont=HaraldReveryTextFont,`,
+        `  BoldItalicFont=HaraldReveryTextFont, SmallCapsFont=HaraldReveryTextFont]`,
+        `\\setmonofont{HaraldReveryMonoFont}[`,
+        `  Path=./, Extension=.ttf,`,
+        `  BoldFont=HaraldReveryMonoFont, ItalicFont=HaraldReveryMonoFont,`,
+        `  BoldItalicFont=HaraldReveryMonoFont]`,
+        `\\newcommand{\\headingfont}{\\ttfamily}`,
+        ``,
+        `\\usepackage{graphicx}`,
+        `\\usepackage{longtable}`,
+        `\\usepackage{booktabs}`,
+        `\\usepackage{multirow}`,
+        `\\usepackage[normalem]{ulem}`,
+        `\\usepackage[font=small,labelfont=bf,position=above]{caption}`,
+        `\\usepackage[font=small,labelfont=bf]{subcaption}`,
+        `\\renewcommand\\thesubfigure{(\\alph{subfigure})}`,
+        ``,
+        `\\usepackage[a4paper,top=25mm,bottom=30mm,inner=25mm,outer=20mm,headheight=14pt,headsep=8mm,footskip=12mm]{geometry}`,
+        ``,
+        `\\usepackage[dvipsnames,svgnames,x11names]{xcolor}`,
+        `\\definecolor{AccentColor}{HTML}{2C3E50}`,
+        `\\definecolor{RuleColor}{HTML}{AAAAAA}`,
+        ``,
+        `\\usepackage{titlesec}`,
+        `\\titleformat{\\chapter}[display]`,
+        `  {\\headingfont\\huge\\bfseries\\color{AccentColor}\\raggedright}`,
+        `  {\\chaptertitlename\\ \\thechapter}{10pt}{\\Huge\\raggedright}`,
+        `  [\\vspace{4pt}\\textcolor{RuleColor}{\\titlerule[0.6pt]}]`,
+        `\\titleformat{\\section}`,
+        `  {\\headingfont\\Large\\bfseries\\color{AccentColor}\\raggedright}{\\thesection}{1em}{}`,
+        `\\titleformat{\\subsection}`,
+        `  {\\headingfont\\large\\bfseries\\raggedright}{\\thesubsection}{1em}{}`,
+        ``,
+        `\\usepackage{fancyhdr}`,
+        `\\pagestyle{fancy}`,
+        `\\fancyhf{}`,
+        `\\fancyhead[L]{\\small\\nouppercase{\\rightmark}}`,
+        `\\fancyhead[R]{\\small\\thepage}`,
+        `\\renewcommand{\\headrulewidth}{0.4pt}`,
+        `\\fancypagestyle{plain}{\\fancyhf{}\\fancyfoot[C]{\\small\\thepage}\\renewcommand{\\headrulewidth}{0pt}}`,
+        ``,
+        `\\usepackage{microtype}`,
+        `\\usepackage{setspace}`,
+        `\\setstretch{1.1}`,
+        `\\setlength{\\parindent}{0pt}`,
+        `\\setlength{\\parskip}{0.5em}`,
+        ``,
+        `\\usepackage{hyperref}`,
+        `\\hypersetup{hidelinks}`,
+      ],
+      titlePage: (meta, esc) => [
+        `\\begin{titlepage}`,
+        `\\thispagestyle{empty}`,
+        `\\vspace*{\\fill}`,
+        `\\begin{center}`,
+        `  {\\headingfont\\Huge\\bfseries\\color{AccentColor} ${esc(meta.title)}}\\\\[1cm]`,
+        meta.author ? `  {\\Large ${esc(meta.author)}}\\\\[0.5cm]` : ``,
+        `  {\\large ${meta.date}}`,
+        `\\end{center}`,
+        `\\vspace*{\\fill}`,
+        `\\end{titlepage}`,
+      ].filter(Boolean).join('\n'),
+    },
+
+    /* Academic homework layout (adapted from template_1.tex): article +
+       fancyhdr, system serif fonts (with open-font fallbacks commented).
+       Requires XeLaTeX (fontspec). unicode-math/listings from the original
+       are dropped — the body converter emits amsmath math and verbatim. */
+    'homework-revery': {
+      label: 'Homework (Revery)', documentclass: 'article', classOptions: 'a4paper,11pt',
+      engine: 'xelatex', headings: 'section', bundleFonts: [],
+      preamble: (meta, esc) => [
+        `\\usepackage{amsmath}`,
+        `\\usepackage{nicefrac}`,
+        `% ── Fonts: system serif; swap to the open fonts below if unavailable ──`,
+        `\\setmainfont{Times New Roman}`,
+        `\\setsansfont{Arial}`,
+        `\\setmonofont{Courier New}`,
+        `% \\setmainfont{Latin Modern Roman}   % open-source fallback`,
+        `% \\setsansfont{Latin Modern Sans}`,
+        `% \\setmonofont{Latin Modern Mono}`,
+        ``,
+        `\\usepackage{graphicx}`,
+        `\\usepackage{longtable}`,
+        `\\usepackage{booktabs}`,
+        `\\usepackage{multirow}`,
+        `\\usepackage[normalem]{ulem}`,
+        `\\usepackage[font=small,labelfont=bf,position=above]{caption}`,
+        `\\usepackage[font=small,labelfont=bf]{subcaption}`,
+        `\\renewcommand\\thesubfigure{(\\alph{subfigure})}`,
+        `\\usepackage{xcolor}`,
+        ``,
+        `\\usepackage[a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,headheight=14pt]{geometry}`,
+        `\\usepackage{microtype}`,
+        `\\usepackage{setspace}`,
+        `\\setstretch{1.15}`,
+        `\\setlength{\\parindent}{0pt}`,
+        `\\setlength{\\parskip}{0.5em}`,
+        ``,
+        `\\usepackage{fancyhdr}`,
+        `\\pagestyle{fancy}`,
+        `\\fancyhf{}`,
+        `\\lhead{\\bfseries\\small ${esc(meta.title)}}`,
+        meta.author ? `\\rhead{\\small ${esc(meta.author)}}` : ``,
+        `\\fancyfoot[C]{\\thepage}`,
+        `\\renewcommand{\\headrulewidth}{0.4pt}`,
+        ``,
+        `\\usepackage{hyperref}`,
+        `\\hypersetup{hidelinks}`,
+      ].filter(Boolean),
+      titlePage: (meta, esc) => [
+        `\\begin{titlepage}`,
+        `\\begin{center}`,
+        `  \\vspace*{1.5cm}`,
+        `  {\\huge\\bfseries ${esc(meta.title)}}\\\\[0.4cm]`,
+        meta.author ? `  {\\large\\bfseries ${esc(meta.author)}}\\\\[0.2cm]` : ``,
+        `  {\\normalsize ${meta.date}}\\\\[2cm]`,
+        `\\end{center}`,
+        `\\vspace*{\\fill}`,
+        `\\end{titlepage}`,
+      ].filter(Boolean).join('\n'),
+    },
+  };
+
   function buildLatexDocument(opts) {
     opts = Object.assign({}, DEFAULTS.latex, opts || {});
+    const desc = LATEX_TEMPLATES[opts.template] || LATEX_TEMPLATES.article;
     let raw = editor.value;
 
     /* ── 1. Extract YAML frontmatter metadata ── */
@@ -327,11 +530,11 @@
     /* ── 8. Block-level parsing ─────────────────────────────────────
        Heading map follows the template: report/book promote H1 to
        \chapter and shift the rest one level down.                   */
-    const cmds = (opts.template === 'article')
-      ? ['\\section', '\\subsection', '\\subsubsection',
-         '\\paragraph', '\\subparagraph', '\\subparagraph']
-      : ['\\chapter', '\\section', '\\subsection',
-         '\\subsubsection', '\\paragraph', '\\subparagraph'];
+    const cmds = (desc.headings === 'chapter')
+      ? ['\\chapter', '\\section', '\\subsection',
+         '\\subsubsection', '\\paragraph', '\\subparagraph']
+      : ['\\section', '\\subsection', '\\subsubsection',
+         '\\paragraph', '\\subparagraph', '\\subparagraph'];
 
     const lines  = raw.split('\n');
     const output = [];
@@ -414,49 +617,30 @@
     /* ── 9. Restore protected blocks ── */
     const body = restoreProtected(output.join('\n'));
 
-    /* ── 10. Assemble the .tex document per options ── */
-    const engineLines = (opts.engine === 'xelatex')
+    /* ── 10. Assemble the .tex document from the template descriptor ──
+       A descriptor may FORCE its engine (the brand templates need
+       fontspec); otherwise the user's engine choice is honored. */
+    const meta = { title: metaTitle, author: metaAuthor, date: metaDate };
+    const engine = desc.engine || opts.engine;
+    const engineLines = (engine === 'xelatex')
       ? [`% Compile with xelatex`, `\\usepackage{fontspec}`]
       : [`% Compile with pdflatex`, `\\usepackage[utf8]{inputenc}`, `\\usepackage[T1]{fontenc}`];
 
+    /* Title page, then the TOC on its own fresh page (clearpage before it
+       when both are on, and after it so body content starts clean). */
+    const front = [];
+    if (opts.titlePage) front.push(desc.titlePage(meta, latexEsc));
+    if (opts.titlePage && opts.toc) front.push(`\\clearpage`);
+    if (opts.toc) front.push(`\\tableofcontents\n\\clearpage`);
+
+    const clsOpt = desc.classOptions ? `[${desc.classOptions}]` : '';
     const docParts = [
-      `\\documentclass{${opts.template}}`,
+      `\\documentclass${clsOpt}{${desc.documentclass}}`,
       ...engineLines,
-      `\\usepackage{amsmath}`,
-      `\\usepackage{amssymb}`,
-      `\\usepackage{graphicx}`,
-      `\\usepackage{hyperref}`,
-      `\\usepackage{longtable}`,
-      `\\usepackage[normalem]{ulem}`,
-      `\\usepackage[a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,marginparwidth=15mm,headheight=14pt]{geometry}`,
-      `\\usepackage[font=small,labelfont=bf]{subcaption}`,
-      `\\renewcommand\\thesubfigure{(\\alph{subfigure})}`,
-      `\\usepackage{multirow}`,
-      `\\usepackage{booktabs}`,
-      `\\usepackage{xcolor}`,
-      `\\usepackage[font=small,labelfont=bf,position=above]{caption}`,
-      `\\setlength{\\parindent}{0pt}`,
-      `\\setlength{\\parskip}{0.5em}`,
-      ``,
-      `\\usepackage{microtype}`,
-      `\\usepackage{setspace}`,
-      `\\setstretch{1.15}`,
-      `\\hypersetup{`,
-      `  colorlinks=true,`,
-      `  linkcolor=blue!60!black,`,
-      `  urlcolor=blue!60!black,`,
-      `  citecolor=blue!60!black`,
-      `}`,
-      `\\title{${latexEsc(metaTitle)}}`,
-      `\\author{${latexEsc(metaAuthor)}}`,
-      `\\date{${metaDate}}`,
+      ...desc.preamble(meta, latexEsc),
       ``,
       `\\begin{document}`,
-      /* Title page, then the TOC on its own fresh page (clearpage before
-         it when both are on, and after it so body content starts clean). */
-      opts.titlePage ? `\\maketitle` : ``,
-      (opts.titlePage && opts.toc) ? `\\clearpage` : ``,
-      opts.toc ? `\\tableofcontents\n\\clearpage` : ``,
+      ...front,
       body.trim(),
       ``,
       `\\end{document}`,
@@ -464,7 +648,7 @@
     ];
     const tex = docParts.join('\n').replace(/\n{3,}/g, '\n\n');
 
-    return { tex, images: collectedImages, baseName: exportBaseName() };
+    return { tex, images: collectedImages, baseName: exportBaseName(), fonts: desc.bundleFonts || [] };
   }
 
   /* ══════════════════════════════════════════════════════════════════
@@ -764,7 +948,7 @@ ${parts.bodyHtml}
       && window.NativeAPI.exportLatexZip;
     if (canZip) {
       try {
-        const res = await window.NativeAPI.exportLatexZip(built.tex, built.images, built.baseName);
+        const res = await window.NativeAPI.exportLatexZip(built.tex, built.images, built.baseName, built.fonts);
         if (res && res.ok && typeof showSavedIndicator === 'function') showSavedIndicator();
       } catch (err) {
         console.error('[export] LaTeX zip failed:', err);
@@ -981,8 +1165,18 @@ ${parts.bodyHtml}
       [['pdflatex', 'pdflatex'], ['xelatex', 'xelatex']],
       () => l.engine, (v) => { l.engine = v; })));
     wrap.appendChild(row('Template', dropdown(
-      [['article', 'Article'], ['report', 'Report'], ['book', 'Book']],
-      () => l.template, (v) => { l.template = v; })));
+      [['article', 'Article'], ['report', 'Report'], ['book', 'Book'],
+       ['book-revery', 'Book (Revery)'], ['homework-revery', 'Homework (Revery)']],
+      () => l.template,
+      (v) => {
+        l.template = v;
+        /* The brand templates require fontspec — force the engine and
+           re-render so the Engine row reflects it (the builder forces it
+           too, as a backstop). */
+        const desc = LATEX_TEMPLATES[v];
+        if (desc && desc.engine) l.engine = desc.engine;
+        setTimeout(() => { const fresh = buildLatexSection(); wrap.replaceWith(fresh); }, 0);
+      })));
     wrap.appendChild(toggleRow('Title page', () => l.titlePage, (v) => { l.titlePage = v; }));
     wrap.appendChild(toggleRow('Table of contents', () => l.toc, (v) => { l.toc = v; }));
 

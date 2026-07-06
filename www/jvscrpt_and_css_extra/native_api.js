@@ -352,9 +352,9 @@ writeVolatileNow(path, content) {
       return window.electronAPI.exportPdf(html, opts);
     },
 
-    /** LaTeX project zip: main.tex + images/ (dialog in main). */
-    exportLatexZip(tex, images, baseName) {
-      return window.electronAPI.exportLatexZip(tex, images, baseName);
+    /** LaTeX project zip: main.tex + images/ + bundled brand fonts (dialog in main). */
+    exportLatexZip(tex, images, baseName, bundleFonts) {
+      return window.electronAPI.exportLatexZip(tex, images, baseName, bundleFonts);
     },
 /* Triggers the existing close-request flow → quit modal appears. */
     closeWindow() {
@@ -650,9 +650,9 @@ getVolatileContent(path) {
       });
     },
 
-    /** LaTeX project zip: main.tex + images/ (dialog in Rust). */
-    exportLatexZip(tex, images, baseName) {
-      return this._invoke('export_latex_zip', { tex, images, baseName });
+    /** LaTeX project zip: main.tex + images/ + bundled brand fonts (dialog in Rust). */
+    exportLatexZip(tex, images, baseName, bundleFonts) {
+      return this._invoke('export_latex_zip', { tex, images, baseName, bundleFonts: bundleFonts || [] });
     },
 
 /* Triggers the existing CloseRequested flow → quit modal appears. */
