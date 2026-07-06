@@ -797,6 +797,16 @@ ${P}strong, ${P}b { font-weight: normal; text-decoration: underline; }
 ${P}h1, ${P}h2, ${P}h3, ${P}h4, ${P}h5, ${P}h6 { font-weight: normal; }
 ${P}.front-page .fp-title { font-weight: normal; }` : '';
 
+    /* Harald renders ~0.7× the visual size of a normal font at the same
+       nominal size — the app compensates for this with its manually-tuned
+       --katex-font-size (0.7em for Harald vs 1em for others). Mirror that here
+       so a Harald PDF at N pt reads the same size as any other font at N pt.
+       Everything else (headings, code, cover title) is em-relative, so it
+       scales along. Non-Harald output is left byte-identical. */
+    const HARALD_SIZE_RATIO = 0.7;
+    const basePt = Number(opts.fontPt) || 11;
+    const bodyPt = isHarald ? (basePt / HARALD_SIZE_RATIO).toFixed(2) : String(basePt);
+
     /* Book format mirrors inner/outer margins on facing pages. */
     const bookMargins = (opts.format === 'book')
       ? `@page :right { margin: ${mm}mm ${Math.max(6, mm - 6)}mm ${mm}mm ${mm + 6}mm; }
@@ -821,7 +831,7 @@ ${bookMargins}
 ${P}*, ${P}*::before, ${P}*::after { box-sizing: border-box; margin: 0; padding: 0; }
 ${B} {
   font-family: ${font};
-  font-size: ${Number(opts.fontPt) || 11}pt; line-height: 1.6;
+  font-size: ${bodyPt}pt; line-height: 1.6;
   color: #1a1a1a; background: #fff;
 }
 ${P}h1, ${P}h2, ${P}h3, ${P}h4, ${P}h5, ${P}h6 {
