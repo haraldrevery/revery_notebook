@@ -2386,7 +2386,7 @@ body.live-preview-active #editor .cm-content {
   align-items: center;
   justify-content: center;
   line-height: 1;
-  padding: 7px 14px 5px;
+  padding: 6px 14px 3px; /* 2:1 top:bottom — same FONTFIX ratio as .tb-btn */
   transition: background 0.12s, border-color 0.12s;
 }
 .modal-btn:hover { background: var(--bg-hover); }
@@ -2413,7 +2413,7 @@ body.live-preview-active #editor .cm-content {
   align-items: center;
   line-height: 1;
   text-align: left;
-  padding: 6px 9px 4px;
+  padding: 6px 9px 3px; /* 2:1 top:bottom — same FONTFIX ratio as .tb-btn */
 }
 .export-dd-btn:hover { border-color: var(--accent, #7a8ee0); }
 .export-dd-menu {
@@ -2445,7 +2445,7 @@ body.live-preview-active #editor .cm-content {
   font-family: var(--font-mono);
   font-size: 0.75rem;
   text-align: left;
-  padding: 0.5rem 1rem 0.35rem;
+  padding: 8px 1rem 4px; /* 2:1 top:bottom — same FONTFIX ratio as .tb-btn */
   transition: background 0.1s;
 }
 .export-dd-item:hover { background: var(--bg-hover); }
@@ -2462,7 +2462,7 @@ body.live-preview-active #editor .cm-content {
   font-family: var(--font-mono);
   font-size: 0.8rem;
   text-align: left;
-  padding: 8px 4px 6px;
+  padding: 8px 4px 4px; /* 2:1 top:bottom — same FONTFIX ratio as .tb-btn */
   transition: background 0.1s;
 }
 .export-toggle:hover { background: var(--bg-hover); }
