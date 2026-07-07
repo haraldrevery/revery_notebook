@@ -132,7 +132,8 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     bookReveryClass: true, bookReveryXelatex: true, bookReveryFonts: true,
     homeworkReveryClass: true, homeworkReveryXelatex: true, latexEngineGating: true,
     haraldBoldUnderline: true, nonHaraldBoldKept: true, haraldMathScaled: true,
-  }, 'export builders must honor LaTeX templates/engines/title/TOC/clearpage and PDF front-page/TOC/@page/A5-A6/per-header-break/font/asset-base options; both menu entries present; brand extbook/article templates force xelatex + report bundled fonts + are gated out under pdflatex; Harald PDF drops title bold + underlines inline bold + shrinks math to match');
+    latexNewPageHeaders: true,
+  }, 'export builders must honor LaTeX templates/engines/title/TOC/clearpage/newpage-headers and PDF front-page/TOC/@page/A5-A6/per-header-break/font/asset-base options; both menu entries present; brand extbook/article templates force xelatex + report bundled fonts + are gated out under pdflatex; Harald PDF drops title bold + underlines inline bold + shrinks math to match');
 
   // 14. outline +/- buttons scale only the outline font, persisted
   assert.equal(r.outlineFontButtons, true, 'outline font buttons must step and persist the existing setting');

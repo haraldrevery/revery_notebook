@@ -583,6 +583,12 @@
     && pdfF.html.includes('github-dark.min.css');
   const texClear = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', titlePage: true, toc: true });
   exportSuite.latexTocClearpage = /\\maketitle\s*\n\\clearpage\s*\n\\tableofcontents\s*\n\\clearpage/.test(texClear.tex);
+  /* Optional \newpage before # / ## headings — but never before the first
+     content block (# Intro here), so the body doesn't open with a blank page. */
+  exportSuite.latexNewPageHeaders =
+    /\\newpage\s*\n\\subsection\{Sub\}/.test(window.exporterBuildLatex({ newPageH2: true }).tex)
+    && !/\\newpage/.test(window.exporterBuildLatex({}).tex)
+    && !/\\newpage\s*\n\\section\{Intro\}/.test(window.exporterBuildLatex({ newPageH1: true }).tex);
 
   /* 11c. Brand aesthetic templates: extbook/article documentclass + styled
      preamble, FORCED xelatex (even when pdflatex is passed), correct heading

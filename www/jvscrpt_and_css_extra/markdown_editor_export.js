@@ -55,6 +55,8 @@
       template: 'article',       // 'article' | 'report' | 'book'
       titlePage: true,
       toc: false,
+      newPageH1: false,          // \newpage before every # / H1
+      newPageH2: false,          // \newpage before every ## / H2
     },
   };
 
@@ -573,8 +575,15 @@
 
       const hm = trimmed.match(/^(#{1,6})(?:\s+(.*?)(?:\s+#+)?)?$/);
       if (hm) {
+        const level = hm[1].length;
         const title = hm[2] || '';
-        output.push(`${cmds[hm[1].length - 1]}{${processInline(title)}}`);
+        /* Optional page break before # / ## headings. Never before the first
+           content block, so the body doesn't open with a blank page. */
+        const wantBreak = (level === 1 && opts.newPageH1) || (level === 2 && opts.newPageH2);
+        if (wantBreak && output.some((l) => l && l.trim() !== '')) {
+          output.push('\\newpage');
+        }
+        output.push(`${cmds[level - 1]}{${processInline(title)}}`);
         i++; continue;
       }
 
@@ -1258,6 +1267,8 @@ ${parts.bodyHtml}
 
     wrap.appendChild(toggleRow('Title page', () => l.titlePage, (v) => { l.titlePage = v; }));
     wrap.appendChild(toggleRow('Table of contents', () => l.toc, (v) => { l.toc = v; }));
+    wrap.appendChild(toggleRow('New page before each H1', () => l.newPageH1, (v) => { l.newPageH1 = v; }));
+    wrap.appendChild(toggleRow('New page before each H2', () => l.newPageH2, (v) => { l.newPageH2 = v; }));
 
     const note = document.createElement('div');
     note.className = 'export-note';
