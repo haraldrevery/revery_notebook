@@ -2380,7 +2380,13 @@ body.live-preview-active #editor .cm-content {
   font-size: 0.72rem;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  padding: 6px 14px;
+  /* Vertically center the mono text like .tb-btn (flex + line-height 1 +
+     top-heavy padding to compensate the Harald mono metrics). */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 7px 14px 5px;
   transition: background 0.12s, border-color 0.12s;
 }
 .modal-btn:hover { background: var(--bg-hover); }
@@ -2402,8 +2408,12 @@ body.live-preview-active #editor .cm-content {
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  /* Vertically center the mono text like .tb-btn; stay left-aligned. */
+  display: flex;
+  align-items: center;
+  line-height: 1;
   text-align: left;
-  padding: 5px 9px;
+  padding: 6px 9px 4px;
 }
 .export-dd-btn:hover { border-color: var(--accent, #7a8ee0); }
 .export-dd-menu {
@@ -2424,7 +2434,9 @@ body.live-preview-active #editor .cm-content {
 }
 .export-dd-menu.open { display: block; }
 .export-dd-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  line-height: 1;
   width: 100%;
   background: none;
   border: none;
@@ -2438,7 +2450,9 @@ body.live-preview-active #editor .cm-content {
 }
 .export-dd-item:hover { background: var(--bg-hover); }
 .export-toggle {
-  display: block;
+  display: flex;
+  align-items: center;
+  line-height: 1;
   width: 100%;
   background: none;
   border: none;
@@ -2448,7 +2462,7 @@ body.live-preview-active #editor .cm-content {
   font-family: var(--font-mono);
   font-size: 0.8rem;
   text-align: left;
-  padding: 7px 4px;
+  padding: 8px 4px 6px;
   transition: background 0.1s;
 }
 .export-toggle:hover { background: var(--bg-hover); }
