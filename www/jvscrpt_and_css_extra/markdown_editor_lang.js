@@ -392,10 +392,6 @@ window.uiTemplates = {
             <p class="mod-p-0-082">Copyright © 2018–2024 Marijn Haverbeke and contributors. Used packages: @codemirror/view, @codemirror/state, @codemirror/commands, @codemirror/lang-markdown, @codemirror/language. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, subject to the following condition: the above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. Source: codemirror.net.</p>
           </div>
           <div class="mod-lib-card">
-            <p class="mod-p-4"><strong>Feather Icons</strong> (icon shapes) &nbsp;·&nbsp; <span class="mod-mono-08">MIT Licence</span></p>
-            <p class="mod-p-0-082">Copyright © 2013–2023 Cole Bemis. The interface icons in the project sidebar are inline SVGs whose shapes are based on Feather Icons. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, subject to the following condition: the above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. Source: feathericons.com.</p>
-          </div>
-          <div class="mod-lib-card">
             <p class="mod-p-4"><strong>DOMPurify</strong> &nbsp;·&nbsp; <span class="mod-mono-08">Apache Licence 2.0</span></p>
             <p class="mod-p-0-082">Copyright © 2025 Dr.-Ing. Mario Heiderich, Cure53. Source: github.com/cure53/DOMPurify.</p>
             <details class="mod-license-details">
@@ -666,10 +662,6 @@ END OF TERMS AND CONDITIONS</pre>
           <div class="mod-lib-card">
             <p class="mod-p-4"><strong>CodeMirror</strong> v6 &nbsp;·&nbsp; <span class="mod-mono-08">MIT-licens</span></p>
             <p class="mod-p-0-082">Copyright © 2018–2024 Marijn Haverbeke och bidragsgivare. Använda paket: @codemirror/view, @codemirror/state, @codemirror/commands, @codemirror/lang-markdown, @codemirror/language. Samma MIT-licensvillkor som ovan gäller. Källa: codemirror.net.</p>
-          </div>
-          <div class="mod-lib-card">
-            <p class="mod-p-4"><strong>Feather Icons</strong> (ikonformer) &nbsp;·&nbsp; <span class="mod-mono-08">MIT-licens</span></p>
-            <p class="mod-p-0-082">Copyright © 2013–2023 Cole Bemis. Gränssnittsikonerna i projektsidofältet är inbäddade SVG:er vars former bygger på Feather Icons. Samma MIT-licensvillkor som ovan gäller. Källa: feathericons.com.</p>
           </div>
           <div class="mod-lib-card">
             <p class="mod-p-4"><strong>DOMPurify</strong> &nbsp;·&nbsp; <span class="mod-mono-08">Apache-licens 2.0</span></p>
