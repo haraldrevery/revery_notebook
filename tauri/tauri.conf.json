@@ -45,6 +45,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": []
+    "resources": [],
+    "windows": {
+      "nsis": {
+        "headerImage": "../images_for_installer/headerImage.bmp",
+        "sidebarImage": "../images_for_installer/sidebarImage.bmp"
+      },
+      "wix": {
+        "bannerPath": "../images_for_installer/bannerPath.bmp",
+        "dialogImagePath": "../images_for_installer/dialogImagePath.bmp"
+      }
+    }
   }
 }

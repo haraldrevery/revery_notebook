@@ -54,6 +54,13 @@
       ],
       "icon": "tauri/icons/icon.ico"
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerSidebar": "images_for_installer/sidebarImage.bmp",
+      "uninstallerSidebar": "images_for_installer/sidebarImage.bmp",
+      "installerHeader": "images_for_installer/headerImage.bmp"
+    },
     "linux": {
       "target": [
         "AppImage",
