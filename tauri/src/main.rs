@@ -1540,6 +1540,14 @@ fn today_stamp_utc() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// Second-resolution LOCAL wall-clock stamp (YYYY_MM_DD_HH_MM_SS) for the
+/// project-zip backup filename: users who zip-export as a backup can read
+/// exactly when each one was made, and every export gets a unique default
+/// name so backups never overwrite each other. Mirrors the Electron side.
+fn now_stamp_local() -> String {
+    chrono::Local::now().format("%Y_%m_%d_%H_%M_%S").to_string()
+}
+
 /// Export the whole project as a .zip. Async like save_file: the dialog is
 /// awaited, and the walk+deflate runs on a blocking thread so the UI stays
 /// responsive. Written atomically — a crash can never leave a truncated
@@ -1568,7 +1576,7 @@ async fn export_project_zip(
         .file()
         .set_title("Zip Project Export")
         .add_filter("Zip Archive", &["zip"])
-        .set_file_name(&format!("{}_{}.zip", folder_name, today_stamp_utc()))
+        .set_file_name(&format!("{}_{}.zip", folder_name, now_stamp_local()))
         .save_file(move |p| {
             let _ = tx.send(p);
         });

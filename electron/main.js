@@ -723,7 +723,14 @@ ipcMain.handle('dialog:save-file', async (_event, defaultFilename, content, opti
 ipcMain.handle('project:export-zip', async () => {
   const root = requireRoot();
   const folderName = path.basename(root) || 'project';
-  const stamp = new Date().toISOString().slice(0, 10);
+  /* Second-resolution LOCAL timestamp: users who zip-export as a backup can
+     read exactly when each one was made, and every export gets a unique
+     default name so backups never overwrite each other. Only the dialog's
+     default filename — the archive itself still goes through atomicWriteFile. */
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}_${p(d.getMonth() + 1)}_${p(d.getDate())}` +
+                `_${p(d.getHours())}_${p(d.getMinutes())}_${p(d.getSeconds())}`;
 
   const result = await dialog.showSaveDialog(mainWindow, {
     defaultPath: `${folderName}_${stamp}.zip`,

@@ -21,6 +21,9 @@ notify              = "6"
 trash               = "5"
 libc = "0.2"
 base64              = "0.22"
+# Local wall-clock time for the project-zip backup filename (clock feature
+# only, no defaults — formatting only, nowhere near any write path).
+chrono              = { version = "0.4", default-features = false, features = ["clock"] }
 # Zip project export. deflate only — no encryption features on purpose:
 # classic zip crypto is broken and we refuse to ship fake security.
 zip                 = { version = "2", default-features = false, features = ["deflate"] }
