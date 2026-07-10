@@ -36,6 +36,7 @@ let livePreviewMode = false;     // Obsidian-style in-editor rendering — see s
 const CUSTOM_BG_KEY = 'revery_custom_bg'; // data: URL of an imported background (outside the settings JSON)
 window.slowHardwareMode = false; // Mirror read by core/sync/native_api/sidebar at call time
 let editorBgGradient = false;     // true = gradient fade, false = solid colour
+let logoPosition = 'center';      // top bar logo: 'center' | 'left' (Advanced Options)
 
 /* ── Background image options ─────────────────────────────────────────────
    To add a new background: append a new entry to this array.
@@ -70,7 +71,8 @@ window.saveEditorSettings = function() {
     editorBgGradient,
     slowHardwareMode,
     backgroundOpacity,
-    livePreviewMode
+    livePreviewMode,
+    logoPosition
   };
 
   try {
@@ -143,6 +145,7 @@ function loadEditorSettings() {
     if (s.livePreviewMode !== undefined) livePreviewMode = !!s.livePreviewMode;
     if (s.themeMode !== undefined) themeMode = s.themeMode;
     if (s.editorBgGradient !== undefined) editorBgGradient = s.editorBgGradient;
+    if (s.logoPosition === 'left' || s.logoPosition === 'center') logoPosition = s.logoPosition;
     }
   } catch (e) {}
 }
@@ -693,6 +696,105 @@ function applyFontTypes() {
   }
 }
 
+/* ── Advanced Options ────────────────────────────────────────────────────
+   Small, generic settings registry + popup (logo dropdown → Advanced
+   Options). Each entry renders as a label row with ■/□ choice buttons —
+   adding a future option is ONE object here, no new UI code:
+     { label, choices: [[value, label], …], get(), set(value) }        */
+
+/* The logo (button + its dropdown, wrapped in one positioned div) lives in
+   #topbar-center by default; 'left' moves that wrapper to the front of
+   #topbar-left — left of the project-folder and File buttons. The wrapper
+   is position:relative, so the dropdown anchor travels with it; a body
+   class lets CSS re-anchor the dropdown at the screen edge. */
+function applyLogoPosition() {
+  const logoBtn = document.getElementById('btn-logo');
+  const center = document.getElementById('topbar-center');
+  const left = document.getElementById('topbar-left');
+  if (!logoBtn || !center || !left) return;
+  const wrap = logoBtn.parentElement;
+  if (logoPosition === 'left') {
+    if (wrap.parentElement !== left) left.insertBefore(wrap, left.firstChild);
+    document.body.classList.add('logo-left');
+  } else {
+    if (wrap.parentElement !== center) center.appendChild(wrap);
+    document.body.classList.remove('logo-left');
+  }
+}
+
+window.setLogoPosition = function (pos) {
+  logoPosition = pos === 'left' ? 'left' : 'center';
+  applyLogoPosition();
+  window.saveEditorSettings();
+};
+
+const advancedOptions = [
+  {
+    label: 'Top bar logo position',
+    choices: [['center', 'Centered'], ['left', 'Left corner']],
+    get: () => logoPosition,
+    set: (v) => window.setLogoPosition(v),
+  },
+  /* Future advanced settings: append entries here. */
+];
+
+function openAdvancedOptions() {
+  const existing = document.getElementById('advanced-options-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'advanced-options-modal';
+  overlay.className = 'modal-overlay show';
+
+  const content = document.createElement('div');
+  content.className = 'modal-content';
+
+  const heading = document.createElement('h3');
+  heading.textContent = window.t('Advanced Options');
+  content.appendChild(heading);
+
+  advancedOptions.forEach((opt) => {
+    const row = document.createElement('div');
+    row.className = 'export-row';
+    const label = document.createElement('label');
+    label.textContent = window.t(opt.label);
+    row.appendChild(label);
+
+    const group = document.createElement('div');
+    group.className = 'adv-choices';
+    const paint = () => {
+      group.querySelectorAll('button').forEach((b) => {
+        b.textContent = (b.dataset.value === String(opt.get()) ? '■ ' : '□ ') + window.t(b.dataset.label);
+      });
+    };
+    opt.choices.forEach(([value, choiceLabel]) => {
+      const b = document.createElement('button');
+      b.className = 'modal-btn';
+      b.dataset.value = String(value);
+      b.dataset.label = choiceLabel;
+      b.addEventListener('click', () => { opt.set(value); paint(); });
+      group.appendChild(b);
+    });
+    paint();
+    row.appendChild(group);
+    content.appendChild(row);
+  });
+
+  const buttons = document.createElement('div');
+  buttons.className = 'modal-buttons';
+  const close = document.createElement('button');
+  close.className = 'modal-btn';
+  close.textContent = window.t('Close');
+  close.onclick = () => overlay.remove();
+  buttons.appendChild(close);
+  content.appendChild(buttons);
+
+  overlay.appendChild(content);
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+window.openAdvancedOptions = openAdvancedOptions;
+
 /* Apply editor background: gradient (default) or solid (uses --editor-bg-start) */
 function applyEditorBgStyle() {
   if (editorBgGradient) {
@@ -718,6 +820,7 @@ applyTextSize();
 applyOutlineFontSize();
 applyUiSizeProseCompensation();
 applyFontTypes(); // Execute font assignment on boot
+applyLogoPosition(); // Restore the saved logo position on boot
 applyCenterHeaders(); // <-- ADD THIS LINE to apply the saved setting on page load
 applyBackground();
 applyEditorBgStyle();
@@ -2126,6 +2229,16 @@ function buildLogoMenu() {
     document.getElementById('user-guide-modal').classList.add('show');
   };
   logoDropdown.appendChild(guideBtn);
+
+  const advBtn = document.createElement('button');
+  advBtn.className = 'menu-item';
+  advBtn.textContent = window.t('Advanced Options');
+  advBtn.onclick = (e) => {
+    e.stopPropagation();
+    logoDropdown.classList.remove('show');
+    openAdvancedOptions();
+  };
+  logoDropdown.appendChild(advBtn);
 
   const div = document.createElement('div');
   div.className = 'menu-divider';

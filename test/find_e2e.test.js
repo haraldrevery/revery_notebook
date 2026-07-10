@@ -151,4 +151,10 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   // 16. link-path autocomplete: feed exposed; inert (null) in web mode
   assert.deepEqual(r.linkComplete, { hookExists: true, webQuiet: true },
     'link-path completion feed must exist and stay quiet without a filesystem');
+
+  // 17. Advanced Options: menu entry under User Guide; modal renders choice
+  //     buttons; logo position moves/persists/restores
+  assert.deepEqual(r.advanced, {
+    menuEntry: true, modalOpens: true, movedLeft: true, restoredCenter: true,
+  }, 'Advanced Options must open from the logo menu and the logo-position setting must move the logo and persist');
 });

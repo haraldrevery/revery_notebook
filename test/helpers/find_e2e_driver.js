@@ -697,6 +697,33 @@
     webQuiet: (await window.sidebarListLinkCompletions('')) === null,
   };
 
+  /* 11h. Advanced Options: logo-menu entry under User Guide, modal opens,
+     and the logo-position setting moves the logo wrapper between
+     #topbar-center and #topbar-left (persisted, restorable). */
+  const advanced = {};
+  {
+    const logoItems = Array.from(document.querySelectorAll('#logo-dropdown .menu-item'))
+      .map((b) => b.textContent);
+    advanced.menuEntry = logoItems.indexOf('Advanced Options') === logoItems.indexOf('User Guide') + 1;
+
+    window.openAdvancedOptions();
+    const modal = document.getElementById('advanced-options-modal');
+    advanced.modalOpens = !!modal && modal.querySelectorAll('.adv-choices button').length >= 2;
+    if (modal) modal.remove();
+
+    const wrap = document.getElementById('btn-logo').parentElement;
+    const settingsNow2 = () => JSON.parse(localStorage.getItem('revery_md_settings') || '{}');
+    window.setLogoPosition('left');
+    advanced.movedLeft = wrap.parentElement.id === 'topbar-left'
+      && wrap.parentElement.firstChild === wrap
+      && document.body.classList.contains('logo-left')
+      && settingsNow2().logoPosition === 'left';
+    window.setLogoPosition('center');
+    advanced.restoredCenter = wrap.parentElement.id === 'topbar-center'
+      && !document.body.classList.contains('logo-left')
+      && settingsNow2().logoPosition === 'center';
+  }
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
@@ -805,5 +832,5 @@
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
            lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
-           outlineFontButtons, exportSuite, customTemplates, linkComplete };
+           outlineFontButtons, exportSuite, customTemplates, linkComplete, advanced };
 })()
