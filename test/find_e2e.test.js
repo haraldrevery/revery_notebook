@@ -165,4 +165,12 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     grafted: true, placeholderGone: true, titleAdopted: true,
     payloadCleared: true, emptyShowsError: true,
   }, 'pdf_print.html must graft the staged document wholesale and fail visibly, never print the placeholder');
+
+  // 19. custom fonts: create/apply/persist/reject/delete + importer modal
+  assert.deepEqual(r.customFonts, {
+    created: true, rowsInBothMenus: true, customEntry: true, applied: true,
+    persisted: true, duplicateRejected: true, emptyRejected: true,
+    faceInjected: true, deletedReverts: true,
+    importerOpens: true, importerCloses: true,
+  }, 'custom fonts must appear in both font menus with ✕, apply via the CSS var, persist, and revert to Harald on delete');
 });

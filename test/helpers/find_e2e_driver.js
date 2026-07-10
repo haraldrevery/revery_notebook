@@ -775,6 +775,58 @@
     };
   })();
 
+  /* 11j. Custom fonts: create (system + file kinds), rows with ✕ in BOTH
+     font submenus, selection applies the CSS var and drops the harald bold
+     class, @font-face injected for file-kind, deletion of the ACTIVE font
+     reverts to harald and cleans storage. */
+  const customFonts = await (async () => {
+    const out = {};
+    const rowsWithDel = () => Array.from(
+      document.querySelectorAll('#settings-dropdown .submenu .menu-item'))
+      .filter((b) => b.querySelector('.tmpl-del'))
+      .map((b) => b.textContent.replace('✕', '').trim());
+
+    const made = window.createCustomFont({ kind: 'system', label: 'E2E Font', family: 'Georgia' });
+    out.created = made.ok === true;
+    const menuRows = rowsWithDel().filter((t) => t.includes('E2E Font'));
+    out.rowsInBothMenus = menuRows.length === 2; // editor + preview submenus
+    out.customEntry = Array.from(
+      document.querySelectorAll('#settings-dropdown .submenu .menu-item'))
+      .filter((b) => b.textContent.includes('Custom font')).length >= 2;
+
+    previewFontType = 'custom:' + made.id; applyFontTypes();
+    const varVal = document.documentElement.style.getPropertyValue('--preview-font');
+    out.applied = varVal.includes('Georgia')
+      && !document.documentElement.classList.contains('preview-font-harald');
+    out.persisted = JSON.parse(localStorage.getItem('revery_custom_fonts') || '{}')
+      .fonts.some((f) => f.label === 'E2E Font');
+
+    out.duplicateRejected = window.createCustomFont({ kind: 'system', label: 'E2E Font', family: 'X' }).ok === false;
+    out.emptyRejected = window.createCustomFont({ kind: 'system', label: '  ', family: 'X' }).ok === false;
+
+    const fileFont = window.createCustomFont({
+      kind: 'file', label: 'E2E FileFont',
+      data: 'data:font/woff2;base64,AAAA',
+    });
+    out.faceInjected = fileFont.ok === true
+      && (document.getElementById('custom-fonts-css') || {}).textContent.includes('RvCustom-');
+    window.deleteCustomFont(fileFont.id);
+
+    window.deleteCustomFont(made.id); // the ACTIVE preview font
+    out.deletedReverts = previewFontType === 'harald'
+      && document.documentElement.style.getPropertyValue('--preview-font') === ''
+      && !rowsWithDel().some((t) => t.includes('E2E Font'))
+      && !JSON.parse(localStorage.getItem('revery_custom_fonts') || '{}')
+        .fonts.some((f) => f.label === 'E2E Font');
+
+    window.openFontImporter();
+    const fmodal = document.getElementById('font-importer-modal');
+    out.importerOpens = !!fmodal && !!fmodal.querySelector('.font-imp-sample');
+    if (fmodal) fmodal.querySelector('.modal-buttons .modal-btn').click(); // Cancel
+    out.importerCloses = !document.getElementById('font-importer-modal');
+    return out;
+  })();
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
@@ -884,5 +936,5 @@
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
            lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
            outlineFontButtons, exportSuite, customTemplates, linkComplete, advanced,
-           pdfPrintWindow };
+           pdfPrintWindow, customFonts };
 })()

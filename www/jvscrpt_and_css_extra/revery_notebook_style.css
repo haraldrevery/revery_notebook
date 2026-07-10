@@ -468,6 +468,19 @@ body:has(.menu-container.show) #outline-divider::after {
 .tmpl-textarea:focus { outline: none; border-color: var(--accent, #7a8ee0); }
 .tmpl-error { color: #f87171; font-size: 0.72rem; min-height: 1.2em; margin-top: 8px; }
 
+/* ── Custom font importer ──────────────────────────────────────────────── */
+.font-imp-row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.font-imp-note { font-size: 0.72rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.font-imp-sample {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-md);
+  border-radius: 3px;
+  font-size: 1.05rem;
+  color: var(--text);
+  overflow: hidden;
+}
+
 /* Advanced Options: the popup reuses the export modal's .export-row /
    .export-dd classes. The logo dropdown's anchoring is inline-styled in
    index.html, so applyLogoPosition() (menus.js) overrides it inline —

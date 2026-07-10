@@ -138,6 +138,20 @@ window.uiTranslations = {
   "Cover image (full page)": { "Swedish": "Omslagsbild (hel sida)" },
   "Custom…": { "Swedish": "Anpassad…" },
   "New template…": { "Swedish": "Ny mall…" },
+  "Custom font…": { "Swedish": "Eget typsnitt…" },
+  "Font name": { "Swedish": "Typsnittsnamn" },
+  "Choose font file…": { "Swedish": "Välj typsnittsfil…" },
+  "Installed font name": { "Swedish": "Namn på installerat typsnitt" },
+  "Add": { "Swedish": "Lägg till" },
+  "Delete font": { "Swedish": "Radera typsnitt" },
+  "Font name is required.": { "Swedish": "Typsnittsnamn krävs." },
+  "Font name is too long.": { "Swedish": "Typsnittsnamnet är för långt." },
+  "Too many custom fonts.": { "Swedish": "För många egna typsnitt." },
+  "A font with this name already exists.": { "Swedish": "Ett typsnitt med det här namnet finns redan." },
+  "Unsupported font file type.": { "Swedish": "Typsnittsfilens format stöds inte." },
+  "The font file is too large.": { "Swedish": "Typsnittsfilen är för stor." },
+  "Could not save font (storage full?).": { "Swedish": "Kunde inte spara typsnittet (lagringen full?)." },
+  "Choose a font file or type an installed font name.": { "Swedish": "Välj en typsnittsfil eller skriv namnet på ett installerat typsnitt." },
   "Advanced Options": { "Swedish": "Avancerade alternativ" },
   "The PDF print window could not be opened. Close any open print window and try again.": { "Swedish": "PDF-utskriftsfönstret kunde inte öppnas. Stäng eventuella öppna utskriftsfönster och försök igen." },
 
@@ -1039,6 +1053,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Path suggestions in links</strong> (desktop) — typing inside a link destination like <code>![image](here)</code> opens a dropdown of the folders, images and notes at that spot in your project. Arrow keys + Enter accept; picking a folder inserts it and shows the next level.</li>
           <li><strong>Links follow renames</strong> (desktop) — renaming or moving a file or folder offers to update every markdown link that points at it (you are shown exactly which files change before anything is written). Undo (Ctrl+Z with the editor unfocused) restores the links too.</li>
           <li><strong>Advanced Options</strong> — click the top bar logo → Advanced Options: currently the logo position (centered, or in the left corner next to the File button). More advanced settings will live here over time.</li>
+          <li><strong>Custom fonts</strong> — the Editor/Preview font menus end with <em>Custom font…</em>: import a font file (.ttf/.otf/.woff/.woff2) or type the name of a font installed on your computer, check the sample line, press Add. It appears in both font menus; hover it and click ✕ to remove (the app then falls back to the Harald font).</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
@@ -1115,6 +1130,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Sökvägsförslag i länkar</strong> (skrivbord) — när du skriver i en länkdestination som <code>![bild](här)</code> öppnas en meny med mappar, bilder och anteckningar på den platsen i ditt projekt. Piltangenter + Enter väljer; väljer du en mapp infogas den och nästa nivå visas.</li>
           <li><strong>Länkar följer namnbyten</strong> (skrivbord) — när du byter namn på eller flyttar en fil eller mapp erbjuds du att uppdatera alla markdown-länkar som pekar på den (du ser exakt vilka filer som ändras innan något skrivs). Ångra (Ctrl+Z när redigeraren inte har fokus) återställer även länkarna.</li>
           <li><strong>Avancerade alternativ</strong> — klicka på logotypen i topplisten → Avancerade alternativ: för närvarande logotypens position (centrerad, eller i vänstra hörnet bredvid Arkiv-knappen). Fler avancerade inställningar hamnar här med tiden.</li>
+          <li><strong>Egna typsnitt</strong> — typsnittsmenyerna för redigeraren/förhandsgranskningen slutar med <em>Eget typsnitt…</em>: importera en typsnittsfil (.ttf/.otf/.woff/.woff2) eller skriv namnet på ett typsnitt som är installerat på datorn, kontrollera exempelraden och tryck Lägg till. Det dyker upp i båda typsnittsmenyerna; håll muspekaren över det och klicka på ✕ för att ta bort (appen återgår då till Harald-typsnittet).</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">

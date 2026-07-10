@@ -655,7 +655,135 @@ window.setLivePreviewMode = function (on) {
   if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
 };
 
-/* Apply Custom Font Types via CSS Variables */
+/* ── Custom fonts ─────────────────────────────────────────────────────────
+   User-added fonts for the Editor/Preview font menus. Two kinds:
+   - 'file'   → an imported .ttf/.otf/.woff/.woff2 stored as a data URL
+                (CSP already allows font-src data: in every shell) and
+                registered through ONE regenerated <style id="custom-fonts-css">
+                under a generated family name (RvCustom-<id>, so it can
+                never collide with a system font).
+   - 'system' → just an OS font family NAME — CSS resolves installed
+                fonts by name on every platform, no API needed.
+   Same store conventions as custom templates: versioned single key,
+   validated on load, caps, errors returned not thrown.                  */
+const CUSTOM_FONT_KEY = 'revery_custom_fonts';
+const CUSTOM_FONT_MAX = 8;
+const CUSTOM_FONT_MAX_BYTES = 4 * 1024 * 1024;      // raw file size
+const CUSTOM_FONT_EXT_RE = /\.(ttf|otf|woff2?)$/i;
+
+function _validCustomFont(f) {
+  return f && typeof f.id === 'string' && /^[a-z0-9-]{1,40}$/.test(f.id)
+    && typeof f.label === 'string' && f.label.trim() && f.label.length <= 40
+    && (f.kind === 'file' || f.kind === 'system')
+    && typeof f.family === 'string' && f.family.trim() && f.family.length <= 80
+    && (f.kind === 'system' || (typeof f.data === 'string' && f.data.startsWith('data:')));
+}
+
+function _loadCustomFonts() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CUSTOM_FONT_KEY) || '{}');
+    return (Array.isArray(raw.fonts) ? raw.fonts : []).filter(_validCustomFont);
+  } catch (e) {
+    console.warn('[fonts] custom-font storage unreadable, starting empty:', e);
+    return [];
+  }
+}
+
+function _saveCustomFonts(fonts) {
+  try {
+    localStorage.setItem(CUSTOM_FONT_KEY, JSON.stringify({ v: 1, fonts }));
+    return null;
+  } catch (e) {
+    return window.t('Could not save font (storage full?).');
+  }
+}
+
+/* One <style> holds every file-kind @font-face; regenerated wholesale so
+   create/delete can never leave stale faces behind. */
+function _applyCustomFontFaces() {
+  let styleEl = document.getElementById('custom-fonts-css');
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = 'custom-fonts-css';
+    document.head.appendChild(styleEl);
+  }
+  styleEl.textContent = _loadCustomFonts()
+    .filter((f) => f.kind === 'file')
+    .map((f) => `@font-face { font-family: '${f.family}'; src: url('${f.data}'); font-display: swap; }`)
+    .join('\n');
+}
+
+/* Menu value 'custom:<id>' → CSS font-family stack, for applyFontTypes. */
+function _customFontMapEntries() {
+  const entries = {};
+  _loadCustomFonts().forEach((f) => {
+    entries['custom:' + f.id] = `"${f.family.replace(/"/g, '')}", sans-serif`;
+  });
+  return entries;
+}
+
+/** Add a custom font. { kind:'file'|'system', label, family?, data? }.
+    file-kind gets a generated collision-proof family; system-kind uses the
+    given family name. Returns {ok, id} or {ok:false, error}. */
+window.createCustomFont = function ({ kind, label, family, data } = {}) {
+  label = String(label || '').trim();
+  if (!label) return { ok: false, error: window.t('Font name is required.') };
+  if (label.length > 40) return { ok: false, error: window.t('Font name is too long.') };
+
+  const fonts = _loadCustomFonts();
+  if (fonts.length >= CUSTOM_FONT_MAX) return { ok: false, error: window.t('Too many custom fonts.') };
+  if (fonts.some((f) => f.label === label)) {
+    return { ok: false, error: window.t('A font with this name already exists.') };
+  }
+
+  const id = (label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'font')
+    .slice(0, 24) + '-' + Date.now().toString(36).slice(-4);
+  let entry;
+  if (kind === 'file') {
+    if (typeof data !== 'string' || !data.startsWith('data:')) {
+      return { ok: false, error: window.t('Unsupported font file type.') };
+    }
+    /* base64 ≈ 4/3 of raw bytes */
+    if (data.length > CUSTOM_FONT_MAX_BYTES * 1.4) {
+      return { ok: false, error: window.t('The font file is too large.') };
+    }
+    entry = { id, label, kind: 'file', family: 'RvCustom-' + id, data };
+  } else if (kind === 'system') {
+    family = String(family || '').trim();
+    if (!family) return { ok: false, error: window.t('Font name is required.') };
+    entry = { id, label, kind: 'system', family: family.slice(0, 80) };
+  } else {
+    return { ok: false, error: 'unknown kind' };
+  }
+
+  fonts.push(entry);
+  const err = _saveCustomFonts(fonts);
+  if (err) return { ok: false, error: err };
+
+  _applyCustomFontFaces();
+  applyFontTypes();
+  if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
+  return { ok: true, id };
+};
+
+/** Remove a custom font; any slot using it reverts to the Harald default. */
+window.deleteCustomFont = function (id) {
+  const fonts = _loadCustomFonts();
+  const idx = fonts.findIndex((f) => f.id === id);
+  if (idx === -1) return { ok: false, error: 'not found' };
+  fonts.splice(idx, 1);
+  const err = _saveCustomFonts(fonts);
+  if (err) return { ok: false, error: err };
+
+  const val = 'custom:' + id;
+  if (editorFontType === val) editorFontType = 'harald';
+  if (previewFontType === val) previewFontType = 'harald';
+  _applyCustomFontFaces();
+  applyFontTypes();
+  window.saveEditorSettings();
+  if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
+  return { ok: true };
+};
 
 /* Apply Custom Font Types via CSS Variables */
 function applyFontTypes() {
@@ -666,7 +794,8 @@ function applyFontTypes() {
     'mono': 'ui-monospace, "Courier New", monospace',
     'arial': 'Arial, Helvetica, sans-serif',
     'times': '"Times New Roman", Times, serif',
-    'courier': '"Courier New", Courier, monospace'
+    'courier': '"Courier New", Courier, monospace',
+    ..._customFontMapEntries()
   };
 
   if (editorFontType !== 'harald' && fontMap[editorFontType]) {
@@ -868,6 +997,7 @@ document.documentElement.style.fontSize = uiSize + '%';
 applyTextSize();
 applyOutlineFontSize();
 applyUiSizeProseCompensation();
+_applyCustomFontFaces(); // Register imported @font-face fonts before first paint
 applyFontTypes(); // Execute font assignment on boot
 applyLogoPosition(); // Restore the saved logo position on boot
 applyCenterHeaders(); // <-- ADD THIS LINE to apply the saved setting on page load
@@ -1203,6 +1333,145 @@ function openTemplateCreator(kind) {
   nameInput.focus();
 }
 window.openTemplateCreator = openTemplateCreator;
+
+/* ── Custom font importer ────────────────────────────────────────────────
+   Popup for the font menus' "Custom font…" entry. Two sources:
+   - a font FILE (.ttf/.otf/.woff/.woff2 → data URL, works in every shell:
+     CSP already allows font-src data:), or
+   - an INSTALLED font, by name — CSS resolves installed families by name
+     on every platform; where the Chromium-only queryLocalFonts() API
+     exists (Electron) the input gains a datalist of real font names.
+   A sample line previews the pending font before adding. */
+function openFontImporter() {
+  const existing = document.getElementById('font-importer-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'font-importer-modal';
+  overlay.className = 'modal-overlay show';
+  const content = document.createElement('div');
+  content.className = 'modal-content';
+
+  const heading = document.createElement('h3');
+  heading.textContent = window.t('Custom font…').replace(/…$/, '');
+  content.appendChild(heading);
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'export-text tmpl-name';
+  nameInput.placeholder = window.t('Font name');
+  content.appendChild(nameInput);
+
+  /* pending = what Add will submit. */
+  let pending = { kind: null, family: '', data: null };
+
+  /* Source A: font file. */
+  const fileBtn = document.createElement('button');
+  fileBtn.className = 'modal-btn';
+  fileBtn.textContent = window.t('Choose font file…');
+  const fileNote = document.createElement('span');
+  fileNote.className = 'font-imp-note';
+  fileBtn.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.ttf,.otf,.woff,.woff2';
+    input.onchange = () => {
+      const f = input.files && input.files[0];
+      if (!f) return;
+      if (!/\.(ttf|otf|woff2?)$/i.test(f.name)) { errNote.textContent = window.t('Unsupported font file type.'); return; }
+      if (f.size > 4 * 1024 * 1024) { errNote.textContent = window.t('The font file is too large.'); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        pending = { kind: 'file', family: null, data: reader.result };
+        fileNote.textContent = f.name;
+        sysInput.value = '';
+        errNote.textContent = '';
+        if (!nameInput.value.trim()) nameInput.value = f.name.replace(/\.[^.]+$/, '');
+        /* Preview via a temporary face under a reserved family name. */
+        previewStyle.textContent =
+          `@font-face { font-family: 'RvCustomPreview'; src: url('${reader.result}'); font-display: swap; }`;
+        sample.style.fontFamily = "'RvCustomPreview', sans-serif";
+      };
+      reader.readAsDataURL(f);
+    };
+    input.click();
+  });
+  const fileRow = document.createElement('div');
+  fileRow.className = 'font-imp-row';
+  fileRow.appendChild(fileBtn);
+  fileRow.appendChild(fileNote);
+  content.appendChild(fileRow);
+
+  /* Source B: installed font by name (datalist where the API exists). */
+  const sysInput = document.createElement('input');
+  sysInput.type = 'text';
+  sysInput.className = 'export-text tmpl-name';
+  sysInput.placeholder = window.t('Installed font name');
+  const dl = document.createElement('datalist');
+  dl.id = 'font-importer-syslist';
+  sysInput.setAttribute('list', dl.id);
+  if (typeof window.queryLocalFonts === 'function') {
+    window.queryLocalFonts().then((fonts) => {
+      const seen = new Set();
+      fonts.forEach((f) => {
+        if (seen.has(f.family)) return;
+        seen.add(f.family);
+        const o = document.createElement('option');
+        o.value = f.family;
+        dl.appendChild(o);
+      });
+    }).catch(() => { /* permission denied / unavailable — typed name still works */ });
+  }
+  sysInput.addEventListener('input', () => {
+    const fam = sysInput.value.trim();
+    if (!fam) return;
+    pending = { kind: 'system', family: fam, data: null };
+    fileNote.textContent = '';
+    errNote.textContent = '';
+    if (!nameInput.value.trim()) nameInput.value = fam;
+    sample.style.fontFamily = `"${fam.replace(/"/g, '')}", sans-serif`;
+  });
+  content.appendChild(sysInput);
+  content.appendChild(dl);
+
+  const previewStyle = document.createElement('style');
+  content.appendChild(previewStyle);
+  const sample = document.createElement('div');
+  sample.className = 'font-imp-sample';
+  sample.textContent = 'AaBb ÅäÖ 0123 — The quick brown fox';
+  content.appendChild(sample);
+
+  const errNote = document.createElement('div');
+  errNote.className = 'tmpl-error';
+  content.appendChild(errNote);
+
+  const buttons = document.createElement('div');
+  buttons.className = 'modal-buttons';
+  const cancel = document.createElement('button');
+  cancel.className = 'modal-btn';
+  cancel.textContent = window.t('Cancel');
+  cancel.onclick = () => overlay.remove();
+  const add = document.createElement('button');
+  add.className = 'modal-btn modal-btn-primary';
+  add.textContent = window.t('Add');
+  add.onclick = () => {
+    if (!pending.kind) { errNote.textContent = window.t('Choose a font file or type an installed font name.'); return; }
+    const res = window.createCustomFont({
+      kind: pending.kind, label: nameInput.value, family: pending.family, data: pending.data,
+    });
+    if (res.ok) { overlay.remove(); return; }
+    errNote.textContent = res.error || '';
+  };
+  buttons.appendChild(cancel);
+  buttons.appendChild(add);
+  content.appendChild(buttons);
+
+  overlay.appendChild(content);
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  nameInput.focus();
+}
+window.openFontImporter = openFontImporter;
 
 // ── File Menu Definition ───────────────────────────────────────────────────
 const fileActions = [
@@ -1601,14 +1870,61 @@ const editorPaddingOptions = [
 
   // ── Editor Font Type Submenu
   const fontTypeOptions = [
-    { label: 'Harald Revery Font', val: 'harald' }, 
+    { label: 'Harald Revery Font', val: 'harald' },
     { label: 'System Sans-Serif',  val: 'sans' },
     { label: 'System Serif',       val: 'serif' },
     { label: 'System Monospace',   val: 'mono' },
     { label: 'Arial',              val: 'arial' },
     { label: 'Times New Roman',    val: 'times' },
-    { label: 'Courier New',        val: 'courier' }
+    { label: 'Courier New',        val: 'courier' },
+    /* User-imported fonts (labels shown verbatim, never translated). */
+    ..._loadCustomFonts().map((f) => ({ label: f.label, val: 'custom:' + f.id, customId: f.id }))
   ];
+
+  /* Shared row builder for both font submenus: standard select rows, a ✕
+     on custom rows (same idiom as custom templates), and a trailing
+     "Custom font…" row that opens the importer. */
+  const buildFontRows = (sub, getVal, setVal) => {
+    fontTypeOptions.forEach(opt => {
+      const btn = document.createElement('button');
+      btn.className = 'menu-item';
+      btn.textContent = (getVal() === opt.val ? '■ ' : '  ')
+        + (opt.customId ? opt.label : window.t(opt.label));
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        setVal(opt.val);
+        applyFontTypes();
+        window.saveEditorSettings();
+        settingsDropdown.classList.remove('show');
+        buildSettingsMenu();
+      };
+      if (opt.customId) {
+        const del = document.createElement('span');
+        del.className = 'tmpl-del';
+        del.textContent = '✕';
+        del.title = window.t('Delete font');
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!confirm(window.t('Delete font') + ` "${opt.label}"?`)) return;
+          window.deleteCustomFont(opt.customId);
+        });
+        btn.appendChild(del);
+      }
+      sub.appendChild(btn);
+    });
+    const divi = document.createElement('div');
+    divi.className = 'menu-divider';
+    sub.appendChild(divi);
+    const addBtn = document.createElement('button');
+    addBtn.className = 'menu-item';
+    addBtn.textContent = '  ' + window.t('Custom font…');
+    addBtn.onclick = (e) => {
+      e.stopPropagation();
+      settingsDropdown.classList.remove('show');
+      openFontImporter();
+    };
+    sub.appendChild(addBtn);
+  };
 
   const editorFontWrapper = document.createElement('div');
   editorFontWrapper.className = 'menu-item has-submenu';
@@ -1621,19 +1937,7 @@ const editorPaddingOptions = [
   editorFontSub.className = 'submenu';
   editorFontSub.style.display = 'none';
 
- fontTypeOptions.forEach(opt => {
-    const btn = document.createElement('button');
-    btn.className = 'menu-item';
-    btn.textContent = (editorFontType === opt.val ? '■ ' : '\u00a0\u00a0') + window.t(opt.label);
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      editorFontType = opt.val;
-      applyFontTypes(); 
-      settingsDropdown.classList.remove('show');
-      buildSettingsMenu();
-    };
-    editorFontSub.appendChild(btn);
-  });
+ buildFontRows(editorFontSub, () => editorFontType, (v) => { editorFontType = v; });
 
   editorFontWrapper.appendChild(editorFontSub);
   attachSubmenuHandlers(editorFontWrapper, editorFontSub);
@@ -1681,19 +1985,7 @@ const editorPaddingOptions = [
   previewFontSub.className = 'submenu';
   previewFontSub.style.display = 'none';
 
-  fontTypeOptions.forEach(opt => {
-    const btn = document.createElement('button');
-    btn.className = 'menu-item';
-    btn.textContent = (previewFontType === opt.val ? '■ ' : '\u00a0\u00a0') + window.t(opt.label);
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      previewFontType = opt.val;
-      applyFontTypes();
-      settingsDropdown.classList.remove('show');
-      buildSettingsMenu();
-    };
-    previewFontSub.appendChild(btn);
-  });
+  buildFontRows(previewFontSub, () => previewFontType, (v) => { previewFontType = v; });
 
   previewFontWrapper.appendChild(previewFontSub);
   attachSubmenuHandlers(previewFontWrapper, previewFontSub);
