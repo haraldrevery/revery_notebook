@@ -468,12 +468,10 @@ body:has(.menu-container.show) #outline-divider::after {
 .tmpl-textarea:focus { outline: none; border-color: var(--accent, #7a8ee0); }
 .tmpl-error { color: #f87171; font-size: 0.72rem; min-height: 1.2em; margin-top: 8px; }
 
-/* ── Advanced Options ────────────────────────────────────────────────────
-   When the logo sits in the left corner its dropdown can no longer center
-   under the button (it would clip off the screen edge) — anchor it to the
-   left edge of the wrapper instead. */
-body.logo-left #logo-dropdown { left: 0; transform: none; }
-.adv-choices { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+/* Advanced Options: the popup reuses the export modal's .export-row /
+   .export-dd classes. The logo dropdown's anchoring is inline-styled in
+   index.html, so applyLogoPosition() (menus.js) overrides it inline —
+   a stylesheet rule here would always lose to the inline style. */
 
 /* ── Editor pane (Defaults to 33.33%) ── */
 #editor-pane {

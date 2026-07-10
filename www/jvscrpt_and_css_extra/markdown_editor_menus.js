@@ -711,14 +711,23 @@ function applyLogoPosition() {
   const logoBtn = document.getElementById('btn-logo');
   const center = document.getElementById('topbar-center');
   const left = document.getElementById('topbar-left');
-  if (!logoBtn || !center || !left) return;
+  const dropdown = document.getElementById('logo-dropdown');
+  if (!logoBtn || !center || !left || !dropdown) return;
   const wrap = logoBtn.parentElement;
   if (logoPosition === 'left') {
     if (wrap.parentElement !== left) left.insertBefore(wrap, left.firstChild);
     document.body.classList.add('logo-left');
+    /* The dropdown's centering (left:50% + translateX) is an INLINE style
+       in index.html, so it must be overridden inline too (a stylesheet
+       rule always loses) — anchor to the wrapper's left edge so the menu
+       stays inside the viewport at the screen corner. */
+    dropdown.style.left = '0';
+    dropdown.style.transform = 'none';
   } else {
     if (wrap.parentElement !== center) center.appendChild(wrap);
     document.body.classList.remove('logo-left');
+    dropdown.style.left = '50%';
+    dropdown.style.transform = 'translateX(-50%)';
   }
 }
 
@@ -753,6 +762,11 @@ function openAdvancedOptions() {
   heading.textContent = window.t('Advanced Options');
   content.appendChild(heading);
 
+  /* Each option renders as an app-style dropdown (same .export-dd classes
+     and ■/□ idiom the export modal uses), not stacked buttons. */
+  const closeMenus = () =>
+    content.querySelectorAll('.export-dd-menu.open').forEach((m) => m.classList.remove('open'));
+
   advancedOptions.forEach((opt) => {
     const row = document.createElement('div');
     row.className = 'export-row';
@@ -760,24 +774,52 @@ function openAdvancedOptions() {
     label.textContent = window.t(opt.label);
     row.appendChild(label);
 
-    const group = document.createElement('div');
-    group.className = 'adv-choices';
-    const paint = () => {
-      group.querySelectorAll('button').forEach((b) => {
-        b.textContent = (b.dataset.value === String(opt.get()) ? '■ ' : '□ ') + window.t(b.dataset.label);
-      });
+    const dd = document.createElement('div');
+    dd.className = 'export-dd';
+    const btn = document.createElement('button');
+    btn.className = 'export-dd-btn';
+    const menu = document.createElement('div');
+    menu.className = 'export-dd-menu';
+
+    const labelFor = () => {
+      const cur = opt.choices.find((c) => String(c[0]) === String(opt.get()));
+      return cur ? window.t(cur[1]) : String(opt.get());
     };
-    opt.choices.forEach(([value, choiceLabel]) => {
-      const b = document.createElement('button');
-      b.className = 'modal-btn';
-      b.dataset.value = String(value);
-      b.dataset.label = choiceLabel;
-      b.addEventListener('click', () => { opt.set(value); paint(); });
-      group.appendChild(b);
+    const items = opt.choices.map(([value, choiceLabel]) => {
+      const item = document.createElement('button');
+      item.className = 'export-dd-item';
+      const paint = () => {
+        item.textContent = (String(value) === String(opt.get()) ? '■  ' : '□  ') + window.t(choiceLabel);
+      };
+      paint();
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        opt.set(value);
+        btn.textContent = labelFor() + '  ▾';
+        items.forEach((it) => it.paint());
+        menu.classList.remove('open');
+      });
+      item.paint = paint;
+      menu.appendChild(item);
+      return item;
     });
-    paint();
-    row.appendChild(group);
+    btn.textContent = labelFor() + '  ▾';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasOpen = menu.classList.contains('open');
+      closeMenus();
+      if (!wasOpen) menu.classList.add('open');
+    });
+    dd.appendChild(btn);
+    dd.appendChild(menu);
+    row.appendChild(dd);
     content.appendChild(row);
+  });
+
+  /* Clicking anywhere in the modal that isn't a dropdown closes any open
+     dropdown (same behavior as the export modal). */
+  content.addEventListener('click', (e) => {
+    if (!e.target.closest('.export-dd')) closeMenus();
   });
 
   const buttons = document.createElement('div');

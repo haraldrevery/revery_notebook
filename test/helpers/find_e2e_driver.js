@@ -708,20 +708,29 @@
 
     window.openAdvancedOptions();
     const modal = document.getElementById('advanced-options-modal');
-    advanced.modalOpens = !!modal && modal.querySelectorAll('.adv-choices button').length >= 2;
+    /* Options render as an app-style DROPDOWN (export-dd), not stacked
+       buttons: a trigger with the current value + ▾, and ■/□ items. */
+    advanced.modalOpens = !!modal
+      && modal.querySelectorAll('.export-dd-btn').length >= 1
+      && modal.querySelectorAll('.export-dd-item').length >= 2;
     if (modal) modal.remove();
 
     const wrap = document.getElementById('btn-logo').parentElement;
+    const logoDd = document.getElementById('logo-dropdown');
     const settingsNow2 = () => JSON.parse(localStorage.getItem('revery_md_settings') || '{}');
     window.setLogoPosition('left');
     advanced.movedLeft = wrap.parentElement.id === 'topbar-left'
       && wrap.parentElement.firstChild === wrap
       && document.body.classList.contains('logo-left')
-      && settingsNow2().logoPosition === 'left';
+      && settingsNow2().logoPosition === 'left'
+      /* the dropdown's INLINE centering must be overridden inline, or the
+         menu clips off the left screen edge */
+      && logoDd.style.transform === 'none' && logoDd.style.left === '0px';
     window.setLogoPosition('center');
     advanced.restoredCenter = wrap.parentElement.id === 'topbar-center'
       && !document.body.classList.contains('logo-left')
-      && settingsNow2().logoPosition === 'center';
+      && settingsNow2().logoPosition === 'center'
+      && logoDd.style.left === '50%';
   }
 
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
