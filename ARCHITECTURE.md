@@ -22,15 +22,22 @@ revery_notebook/
 │
 ├── www/                              ← Everything the app ships (web + both wrappers)
 │   ├── index.html                    ← The ONLY app shell (web, Electron and Tauri)
+│   ├── pdf_print.html                ← Dedicated PDF print page (Tauri export path)
 │   ├── revery_notebook.html          ← Legacy redirect stub for old web bookmarks
-│   ├── main.css / prose.css          ← Generated Tailwind outputs (sources in css_aesthetics/)
+│   ├── main.css / prose.css          ← Shipped styles. Historically Tailwind output;
+│   │                                    the Tailwind pipeline is dead — these are
+│   │                                    HAND-MAINTAINED now (css_aesthetics/ is archival)
+│   ├── fonts/ image_assets/          ← Brand fonts (woff2/ttf/otf), background images
 │   └── jvscrpt_and_css_extra/
 │       ├── native_api.js             ← Unified NativeAPI abstraction (Electron/Tauri/web)
 │       ├── project_sidebar.js        ← GENERATED bundle — edit src/sidebar/, npm run build:sidebar
+│       ├── pdf_print.js              ← Print-page logic (payload graft + print + self-close)
 │       ├── find_worker.js            ← Regex search Web Worker (loaded at runtime, not a <script>)
-│       └── markdown_editor_*.js      ← Editor core, menus, actions, sync, find, theme, lang
+│       └── markdown_editor_*.js      ← Editor core, menus, actions, export, sync, find, theme, lang
 │
-├── src/sidebar/                      ← Sidebar source modules (state, save, tree, cards, …)
+├── src/sidebar/                      ← Sidebar source modules (state, save, tree, cards,
+│                                        fileops, dnd, search, yaml_index, project_scan,
+│                                        link_rewrite [pure, unit-tested], link_complete, …)
 ├── electron/
 │   ├── main.js                       ← Main process wiring: window, IPC, policy
 │   ├── fs_core.js                    ← Pure FS logic (atomic writes, settings store) — unit tested
@@ -38,10 +45,13 @@ revery_notebook/
 │   └── preload.js                    ← contextBridge (exposes window.electronAPI)
 ├── tauri/
 │   ├── Cargo.toml / tauri.conf.json  ← Rust deps, window config, CSP
+│   ├── capabilities/                 ← Window permission sets (main + minimal pdf-print-*)
 │   └── src/main.rs                   ← #[tauri::command] implementations + tests
-├── build_tools/                      ← esbuild scripts + local Tailwind binaries (not shipped)
-├── test/                             ← node:test suites incl. crash-consistency and E2E
-└── package.json                      ← npm scripts + electron-builder config
+├── build_tools/                      ← esbuild scripts (CM bundle + sidebar bundle)
+├── test/                             ← node:test suites incl. crash-consistency, links and E2E
+├── svg_icons_to_use/                 ← The ONLY approved icon source (Harald Revery glyphs)
+├── images_for_installer/             ← Windows installer branding bitmaps (NSIS/WiX specs)
+└── package.json                      ← npm scripts + electron-builder config (incl. NSIS wizard)
 ```
 
 > Historical note: this document originally described a porting kit
@@ -110,28 +120,22 @@ const isElectron = typeof window.electronAPI !== 'undefined';  // preload.js inj
 const ENV        = isTauri ? 'tauri' : isElectron ? 'electron' : 'web';
 ```
 
-### Full API Surface
+### Full API Surface (grouped)
 
-| Method | Description | Return Type |
-|---|---|---|
-| `openFolderDialog()` | OS folder picker dialog | `Promise<string \| null>` |
-| `readDirectory(path)` | List immediate children | `Promise<DirEntry[]>` |
-| `readFile(path)` | Read file as UTF-8 string | `Promise<string>` |
-| `writeFile(path, content)` | Atomic write (tmp → rename) | `Promise<void>` |
-| `createFile(path)` | Create empty file (error if exists) | `Promise<void>` |
-| `createDirectory(path)` | Create dir + parents | `Promise<void>` |
-| `renameNode(oldPath, newPath)` | Rename/move file or folder | `Promise<void>` |
-| `deleteNode(path)` | Delete file or folder recursively | `Promise<void>` |
-| `setVolatileContent(path, content)` | Debounced crash backup | `void` (fire-and-forget) |
-| `showMessageBox(options)` | Native OS dialog | `Promise<{ response: number }>` |
-| `onWindowClose(callback)` | Intercept OS close button | `void` |
-| `confirmClose()` | Tell native: proceed with close | `void` |
-| `watchFile(path, callback)` | Notify on external modification | `Promise<void>` |
-| `unwatchFile(path)` | Stop watching | `Promise<void>` |
-| `getLastOpenedFile()` | Retrieve persisted file pointer | `Promise<string \| null>` |
-| `setLastOpenedFile(path)` | Persist file pointer | `Promise<void>` |
-| `clearLastOpenedFile()` | Clear the persisted pointer | `Promise<void>` |
-| `getAppDataPath()` | Return OS app data path | `Promise<string \| null>` |
+| Group | Methods |
+|---|---|
+| Filesystem | `openFolderDialog`, `setRootPath`, `readDirectory`, `readFile`, `writeFile` (atomic), `createFile`, `createDirectory`, `renameNode`, `deleteNode`, `copyFileIntoFolder`/`copyIntoFolder`, `copyPathIntoFolder` |
+| Crash backup | `setVolatileContent`, `getVolatileContent`, `deleteVolatileContent`, `getVolatileStatus`, `listVolatileBackups`, `checkVolatileStartup` |
+| Watching | `watchFile`, `unwatchFile` (per-path serialized so watch/unwatch can never race) |
+| Dialogs / window | `showMessageBox` (multi-button routed through an in-page HTML dialog on Tauri), `onWindowClose`, `confirmClose`, `minimizeWindow`, `toggleMaximizeWindow`, `closeWindow`, `setFullscreen`, `showInExplorer` |
+| Settings / pointers | `getLastOpenedFile`/`setLastOpenedFile`/`clearLastOpenedFile`, `getLastRootPath`/`setLastRootPath`, `getPendingRename`/`setPendingRename`, `getProjectHistory`/`setProjectHistory`, `getAppDataPath`, `getDefaultNotesFolder`, `clearAllSettings` |
+| Export | `exportProjectZip` (no args — backend owns source root and destination), `exportLatexZip(tex, images, baseName, bundleFonts)`, `exportPdf(html, opts)` (Electron only — `null` elsewhere), `exportPdfWindow(html)` (Tauri only — dedicated print window) |
+| Media | `toMediaUrl(absPath)` (file:// on Electron, asset protocol on Tauri), `onNativeFileDrop` |
+
+Feature detection is by METHOD PRESENCE, not by environment name: e.g. the
+exporter checks `typeof NativeAPI.exportPdf === 'function'` (Electron direct
+PDF) and falls to `exportPdfWindow` (Tauri) and finally the in-page print
+path (web). New platform-specific features must follow this pattern.
 
 ### DirEntry Type
 ```ts
@@ -157,12 +161,10 @@ interface DirEntry {
 
 ## Boot Priority Logic
 
-**File to modify**: `markdown_editor_core_cm.js`
+**Implemented in**: `markdown_editor_core_cm.js` (boot IIFE) +
+`src/sidebar/lifecycle.js` (project restore, pending-rename reconciliation).
 
-Replace the existing synchronous `localStorage` boot block (lines ~524–553)
-with the async IIFE from `core_boot_patch.js`.
-
-### New Priority Order
+### Priority Order
 ```
 1. window.NativeAPI.isDesktop === true
        └─► getLastOpenedFile() returns a path
@@ -175,17 +177,22 @@ with the async IIFE from `core_boot_patch.js`.
 3. Neither                                      →  SHOW WELCOME TEXT  ✓
 ```
 
-### Critical: Avoiding Double-Render
-
-The patched boot IIFE calls `render()` and `countWords()` itself. Remove
-the standalone `render(); countWords();` line that sat immediately after
-the old `if/else` block in the original file. The `editor.addEventListener('input', ...)` listener further down the file remains unchanged.
+On desktop the sidebar boot additionally restores the last project root
+(`getLastRootPath()` → `setRootPath()`, backend-verified against
+`trustedRoots`), seeds the project quick-switch history, reconciles any
+pending rename that was interrupted by a crash, and offers recovery when
+volatile crash-backups from an interrupted save are found. The boot IIFE
+calls `render()`/`countWords()` itself — there is deliberately no second
+standalone render call.
 
 ---
 
 ## Project File Sidebar
 
-**File**: `project_sidebar.js` + `project_sidebar.css`
+**Files**: `src/sidebar/*` (source modules) → bundled to
+`www/jvscrpt_and_css_extra/project_sidebar.js` by `npm run build:sidebar`.
+Styles live in the main stylesheet + styles injected by
+`src/sidebar/dialogs.js`.
 
 ### UI Placement
 ```
@@ -206,19 +213,35 @@ the old `if/else` block in the original file. The `editor.addEventListener('inpu
 The `●` marker indicates the currently active file (`.active` CSS class).
 
 ### File Tree Rules
-- Entries are sorted: directories first, then alphabetical
+- Entries are sorted by the user's chosen sort (name/modified/created, asc/desc);
+  directories first
 - Hidden files/folders (`.dotfile`) are filtered out
-- Only `.md` and `.txt` files are shown (folders always shown)
-- Depth indentation: `(depth * 14 + 10)px` left padding
+- ALL file types are shown, categorized by extension (`getFileCategory`):
+  `text` (.md/.txt — openable), `media` (images — previewable), `other`
+  (shown dimmed/orange, not openable)
+- A card view (with text/image previews) can replace the tree; drag-and-drop
+  moves files/folders; multi-select supports bulk rename/delete/move
 
-### Context Menu Actions
+### Context Menu Actions (translated EN/SV)
 
 | Target | Actions |
 |---|---|
-| File | Open, Rename, Delete |
-| Folder | New File Here, New Folder Here, Rename, Delete |
+| Text file | Open, Rename, Show in Explorer, Delete |
+| Media file | Preview, Rename, Show in Explorer, Delete |
+| Other file | Rename, Show in Explorer, Delete |
+| Folder | New File Here, New Folder Here, Rename, Show in Explorer, Delete |
+| Multi-selection | Rename N items…, Delete N items |
+| Empty space | New File, New Folder |
 
-The existing `#context-menu` element from the main app is reused (no new DOM element needed).
+### Links Follow Renames
+
+Every rename/move path (single rename, multi-rename, drag-move, undo) runs
+the link updater: `src/sidebar/link_rewrite.js` — a PURE, unit-tested module
+(`test/link_rewrite.test.js`) — resolves every markdown link with the same
+semantics as the renderer and rewrites only links that resolved to a moved
+path. The user confirms first (dialog lists the exact files); the active
+document is edited in the editor buffer (undoable), other files through the
+atomic write path; undo re-runs the rewriter with the inverse mapping.
 
 ### Unsaved Changes Guard
 
@@ -236,21 +259,10 @@ file is open. Before opening a different file, the guard shows a native dialog:
 ### Ctrl+S Behaviour (Desktop Override)
 
 When `activeFilePath` is set, `Ctrl+S` calls `NativeAPI.writeFile()` with an
-atomic tmp-rename write. The existing `localStorage`-based export shortcut in
-`markdown_editor_actions_cm.js` is **not removed** — it activates only when no
-desktop file is open (`activeFilePath === null`), giving seamless fallback.
-
-You may want to add this check to the existing Ctrl+S handler in
-`markdown_editor_actions_cm.js`:
-
-```js
-// In the existing Ctrl+S handler, add this guard at the TOP:
-if (window.sidebarGetActiveFilePath && window.sidebarGetActiveFilePath()) {
-  // Let project_sidebar.js handle the save (it's already listening)
-  return;
-}
-// ...existing export-to-download logic below...
-```
+atomic tmp-rename write (`src/sidebar/save.js`). The `localStorage`-based
+export shortcut in `markdown_editor_actions_cm.js` activates only when no
+desktop file is open — it defers via `window.sidebarGetActiveFilePath()`.
+Both handlers are wired; this is a description, not a to-do.
 
 ### External File Watch
 
@@ -278,29 +290,18 @@ unwatched automatically when a new file opens).
 }
 ```
 
-### IPC Channel Map
+### IPC Channel Map (grouped; every channel type-validates its payload)
 
-| contextBridge method | ipcMain channel | main.js handler |
-|---|---|---|
-| `openFolderDialog()` | `dialog:open-folder` | `dialog.showOpenDialog` |
-| `readDirectory(path)` | `fs:read-directory` | `fs.readdirSync` |
-| `readFile(path)` | `fs:read-file` | `fs.readFileSync` (max 20 MB) |
-| `writeFile(path, c)` | `fs:write-file` | atomic tmp → rename |
-| `createFile(path)` | `fs:create-file` | `fs.writeFileSync('')` |
-| `createDirectory(path)` | `fs:create-directory` | `fs.mkdirSync` |
-| `renameNode(o, n)` | `fs:rename-node` | `fs.renameSync` |
-| `deleteNode(path)` | `fs:delete-node` | `fs.rmSync` |
-| `setVolatileContent(p,c)` | `fs:set-volatile-content` | write to `os.tmpdir()` |
-| `showMessageBox(opts)` | `dialog:show-message-box` | `dialog.showMessageBox` |
-| `confirmClose()` | `window:confirm-close` | sets `allowClose=true`, calls `win.close()` |
-| `watchFile(path, cb)` | `fs:watch-file` | `fs.watch` with debounce |
-| `unwatchFile(path)` | `fs:unwatch-file` | `.close()` stored watcher |
-| `getLastOpenedFile()` | `settings:get-last-opened-file` | reads `userData/revery_settings.json` |
-| `setLastOpenedFile(p)` | `settings:set-last-opened-file` | writes `userData/revery_settings.json` |
-| `getAppDataPath()` | `app:get-data-path` | `app.getPath('userData')` |
-| `exportProjectZip()` | `project:export-zip` | save dialog + `zip_core.buildZip` + atomic write |
-| `exportPdf(html, opts)` | `export:pdf` | temp file → hidden window → `printToPDF` → save dialog → atomic write |
-| `exportLatexZip(tex, images, base)` | `export:latex-zip` | validate image paths + `zip_core.buildZipFromEntries` + atomic write |
+| Group | Channels |
+|---|---|
+| FS | `fs:read-directory`, `fs:read-file` (20 MB cap), `fs:write-file` (atomic via `fs_core.atomicWriteFile`), `fs:create-file`, `fs:create-directory`, `fs:rename-node`, `fs:delete-node` (→ trash), `fs:copy-into-folder`, `fs:set-root-path` (trustedRoots-verified) |
+| Crash backup | `fs:set/get/delete-volatile-content`, `fs:get-volatile-status`, `fs:list-volatile-backups` |
+| Watch | `fs:watch-file`, `fs:unwatch-file` |
+| Dialogs | `dialog:open-folder`, `dialog:save-file`, `dialog:show-message-box` |
+| Export | `project:export-zip` (no renderer args), `export:pdf` (temp file → hidden sandboxed window → `printToPDF` → atomic write), `export:latex-zip` (image paths root-validated; `bundleFonts` allowlisted) |
+| Window | `window:confirm-close`, `window:close`, `window:minimize`, `window:toggle-maximize`, `window:set-fullscreen` |
+| Settings | `settings:get/set-last-opened-file`, `settings:get/set-last-root-path`, `settings:get/set-pending-rename`, `settings:get/set-project-history`, `settings:clear-all` |
+| Misc | `app:get-data-path`, `app:get-default-notes-folder`, `shell:show-in-folder` |
 
 ### Window Close Flow
 
@@ -354,26 +355,16 @@ collision.
 
 **Files**: `tauri/src/main.rs`, `tauri/Cargo.toml`, `tauri/tauri.conf.json`
 
-### Rust Command Map
+### Rust Command Map (registered in `generate_handler![]`)
 
-| `invoke()` name | Rust function | Notes |
-|---|---|---|
-| `open_folder_dialog` | `open_folder_dialog` | `tauri-plugin-dialog` |
-| `read_directory` | `read_directory` | `fs::read_dir` |
-| `read_file` | `read_file` | max 20 MB guard |
-| `write_file` | `write_file` | atomic tmp → rename |
-| `create_file` | `create_file` | errors if already exists |
-| `create_directory` | `create_directory` | `fs::create_dir_all` |
-| `rename_node` | `rename_node` | validates both paths |
-| `delete_node` | `delete_node` | `fs::remove_dir_all` for dirs |
-| `set_volatile_content` | `set_volatile_content` | writes to `env::temp_dir()` |
-| `show_message_box` | `show_message_box` | `tauri-plugin-dialog` |
-| `confirm_close` | `confirm_close` | sets `CloseAllowed` state → `window.close()` |
-| `watch_file` | `watch_file` | `notify` crate, emits `file-changed` event |
-| `unwatch_file` | `unwatch_file` | removes from `WatcherState` registry |
-| `get_last_opened_file` | `get_last_opened_file` | reads `app_config_dir/revery_settings.json` |
-| `set_last_opened_file` | `set_last_opened_file` | writes same JSON |
-| `get_app_data_path` | `get_app_data_path` | `app.path().app_data_dir()` |
+| Group | Commands |
+|---|---|
+| FS | `open_folder_dialog`, `set_root_path`, `read_directory`, `read_file` (20 MB guard), `write_file` (atomic), `create_file`, `create_directory`, `rename_node`, `delete_node` (→ system trash via `trash` crate), `copy_into_folder`, `copy_path_into_folder`, `save_file` |
+| Crash backup | `set_volatile_content`, `get_volatile_content`, `delete_volatile_content`, `get_volatile_status`, `list_volatile_backups` |
+| Watch | `watch_file` / `unwatch_file` (`notify` crate → `file-changed` events) |
+| Export | `export_project_zip` (no renderer args; `zip` crate, atomic write), `export_latex_zip` (per-image root validation + allowlisted `bundle_fonts` via `include_bytes!`) |
+| Dialog / window | `show_message_box`, `confirm_close`, `minimize_window`, `toggle_maximize_window`, `close_window`, `set_fullscreen`, `show_in_folder` |
+| Settings | `get/set_last_opened_file`, `get/set_last_root_path`, `get/set_pending_rename`, `get/set_project_history`, `get_app_data_path`, `get_default_notes_folder`, `clear_all_settings` |
 
 ### Managed State
 
@@ -415,22 +406,23 @@ on_window_event: CloseRequested fires
                                window.close() in Rust
 ```
 
-### Tauri FS Scope
+### Tauri Scopes & Capabilities (actual model)
 
-`tauri.conf.json` restricts which paths the FS plugin can access:
+There is NO fs-plugin scope — all filesystem access goes through the custom
+commands above, each of which validates paths itself (`safe_path` /
+`safe_path_inside` against the managed project root).
 
-```json
-"fs": {
-  "scope": {
-    "allow": ["$HOME/**", "$DOCUMENT/**", "$DESKTOP/**"],
-    "deny":  ["$HOME/.ssh/**", "$HOME/.gnupg/**"]
-  }
-}
-```
-
-Adjust `allow` to match your users' expected working directories. The custom
-Rust commands use their own path validation (the `safe_path` function)
-independently of this plugin scope.
+- **Asset protocol**: enabled with an EMPTY static scope. When a project
+  root is opened, Rust grants it dynamically
+  (`app.asset_protocol_scope().allow_directory(...)`) — but ONLY for roots
+  present in the backend-owned `trustedRoots` list, which the renderer
+  cannot modify. This is how project images render (`toMediaUrl` →
+  `convertFileSrc`).
+- **Capabilities** (`tauri/capabilities/`): the `main` window gets
+  `core:default` + window-drag + create-webview-window; the transient PDF
+  print windows (`pdf-print-*` glob) get a minimal close-only capability —
+  they render user document content and deliberately have no broad command
+  surface.
 
 ---
 
@@ -570,8 +562,16 @@ npm install
 
 | Command | macOS | Windows | Linux |
 |---|---|---|---|
-| `build:electron` | `.dmg` | `.exe` (NSIS) | `.AppImage`, `.deb` |
-| `build:tauri` | `.dmg`, `.app` | `.msi`, `.exe` | `.AppImage`, `.deb` |
+| `build:electron` | `.dmg` | `.exe` (NSIS assisted wizard, branded) + portable `.exe` | `.AppImage`, `.deb` |
+| `build:tauri` | `.dmg`, `.app` | `.msi` (WiX, branded), `.exe` (NSIS, branded) | `.AppImage`, `.deb` |
+
+Windows installer branding comes from `images_for_installer/` (spec-exact
+BMPs for NSIS header/sidebar and WiX banner/dialog). **Version numbers**
+live in three places that must be bumped together for a release:
+`package.json` (Electron), `tauri/tauri.conf.json` (Tauri bundles),
+`tauri/Cargo.toml` (crate) — plus the human-facing strings in
+`www/index.html` (JSON-LD `softwareVersion`) and the About text in
+`markdown_editor_lang.js`.
 
 ---
 
@@ -621,6 +621,8 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata |
 | `test/crash_consistency.test.js` | A child process is SIGKILLed mid-write 12 times; the target file must always contain exactly one complete payload |
 | `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output; `buildZipFromEntries` (LaTeX-project assembler) auto parent-dirs + unsafe-name rejection |
+| `test/link_rewrite.test.js` | The pure link rewriter behind rename/move link-updating: encoding round-trips (%20/%25/parens/unicode), `../` traversal, folder-prefix moves, self-moved files, fenced/inline code opacity, scheme/anchor immunity, undo (inverse-mapping) round-trip |
+| `test/find_e2e.test.js` | Boots the REAL app in Electron and asserts ~19 feature suites: regex worker + ReDoS, slow-hardware mode, backgrounds pipeline, live-preview parity, YAML autocomplete, export builders (PDF/LaTeX incl. Revery templates + engine gating), custom templates, custom fonts, link-path completion gating, Advanced Options, divider/menu interaction, the PDF print page graft |
 | `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side
@@ -654,33 +656,50 @@ key `revery_export_settings`).
 
 **PDF** uses the PRINT pipeline, not a JS PDF library: the document is
 built from the preview's own rendered HTML (KaTeX→MathML, hljs colors),
-with the options (front page, clickable TOC, article/book `@page`
-margins, font/page size, page numbers) applied as print CSS. Electron
-sends the HTML (with a `<base href>` at the app's `www/` so the code-
-color theme + brand fonts resolve, and KaTeX pre-converted to MathML) to
-`export:pdf` — a temp file loaded in a hidden, sandboxed window,
-`printToPDF` with `preferCSSPageSize` → a vector, selectable PDF, written
-atomically. **Tauri/web** cannot print an off-screen iframe (WebKitGTK
-ignores it), so they use the **in-app print path**: the export document
-is rendered into `#export-print-root` in the live page, `body.exporting-pdf`
-+ an `@media print` rule hide the app and show only that container, and
-`window.print()` opens the system dialog ("Print to File / Save as PDF")
-— the same mechanism Ctrl+P already uses. Options: A4/A5/A6/Letter,
-article/book margins, font, front page (full-bleed named `cover` page,
-never numbered), per-header page breaks, clickable TOC, page numbers
-(Electron footer; Tauri via the print dialog). The print-engine TOC has clickable
-links but no page numbers (a browser-print limitation — the LaTeX export
-is the page-numbered path).
+with the options applied as print CSS. Options: front page (title/author,
+optional cover image — a built-in background texture or an imported one —
+centered/corner layout, never numbered), clickable TOC, article/book
+margins, font (Harald fonts get their brand treatment: bold renders
+underlined, math scaled 0.7×), 8–18 pt, A4/A5/A6/Letter, page numbers,
+optional page breaks before every H1/H2.
 
-**LaTeX project (.zip)** replaces the old single-`.tex` export: the
-markdown→LaTeX converter (moved out of `actions_cm.js`) plus every
+Three delivery paths, feature-detected in `runPdfExport`:
+- **Electron** (`exportPdf` → `export:pdf`): HTML with a `<base href>` at
+  the app's `www/` (code-color theme + brand fonts resolve) is written to
+  a unique temp file, loaded in a hidden sandboxed window, `printToPDF`
+  with `preferCSSPageSize` (+ minimal page-number footer template) → a
+  vector, selectable PDF, written atomically. Pixel-exact reference path.
+- **Tauri** (`exportPdfWindow`): the SAME standalone document is staged in
+  localStorage and opened in a dedicated `pdf-print-<ts>` WebviewWindow
+  (`pdf_print.html`/`pdf_print.js` grafts it wholesale via DOMParser —
+  never document.write, which is a parser no-op — then `window.print()` →
+  GTK dialog "Print to File"). This is the ONLY approach that renders
+  correctly on WebKitGTK (iframe printing, in-app `@media print`, and
+  native WebKitPrintOperation all failed); on failure the user gets a
+  clear error dialog — there is deliberately NO fallback to a worse
+  renderer. Unique labels prevent close/create races; the window runs
+  under a minimal close-only capability. Page margins/paper are governed
+  by the GTK dialog (WebKitGTK limitation — documented in the User Guide).
+- **Web** (`printInApp`): the export document is injected into the live
+  page under `#export-print-root` + `body.exporting-pdf` print rules and
+  `window.print()` opens the browser dialog. Browsers are Chromium/Gecko,
+  so the WebKitGTK cascade problem does not apply.
+
+The E2E suite pins the print page's graft behavior (payload replaces the
+page wholesale, title adopted, visible error without a payload).
+
+**LaTeX project (.zip)**: the markdown→LaTeX converter plus every
 referenced project image, rewritten to `images/<name>` (deduped,
-LaTeX-safe names) so the archive is a compile-ready project. Options:
-pdflatex/xelatex, article/report/book template (report/book promote
-`#`→`\chapter`), title page, table of contents. The renderer sends the
-`.tex` and the image paths (project-relative); the backend re-validates
-every path against the trusted root before reading, then
-`buildZipFromEntries`. Web mode falls back to a single-`.tex` download.
+LaTeX-safe names) so the archive is compile-ready. Templates come from a
+registry (`LATEX_TEMPLATES`): Article/Report/Book (classic) plus
+**Book (Revery)** (extbook, titlesec styling, the brand fonts BUNDLED
+into the zip via an allowlist + `include_bytes!` on the Rust side) and
+**Homework (Revery)**. Each template declares its supported engines —
+the modal's Engine dropdown filters the Template list, so a fontspec
+template can never be exported for pdflatex. Options: title page, TOC on
+its own page, page breaks before H1/H2. The backend re-validates every
+image path against the trusted root before reading; fonts can only come
+from the fixed allowlist. Web mode falls back to a single-`.tex` download.
 
 ### YAML Frontmatter Autocomplete
 
@@ -717,6 +736,37 @@ inherit `ELECTRON_RUN_AS_NODE=1` from the editor, which makes
 `require('electron')` return a path string and the app crash at
 `app.whenReady`. Run `ELECTRON_RUN_AS_NODE= npm run start:electron` if you
 hit that.
+
+---
+
+## User-Extensible Content (templates, fonts) & Editor Assists
+
+- **Custom templates** (`markdown_editor_tmplt_list.js`): user-created
+  YAML/markdown templates stored under `revery_custom_templates`
+  ({v:1, yaml:[], md:[]}, validated on load, caps, duplicate-name
+  rejection). Menus offer "New template…" (creation modal) and a hover ✕
+  on custom rows; built-ins are untouchable.
+- **Custom fonts** (`markdown_editor_menus.js`): the Editor/Preview font
+  menus end with "Custom font…". Two kinds — imported font FILES (data-URL
+  `@font-face` in one regenerated `<style id="custom-fonts-css">`, family
+  `RvCustom-<id>`) and INSTALLED fonts by name (CSS resolves any installed
+  family; Electron enhances the input with `queryLocalFonts()`). Stored
+  under `revery_custom_fonts`; all application flows through
+  `applyFontTypes()`, so live-preview parity, outline, KaTeX sizing and
+  the Harald bold-underline rule handle customs automatically.
+- **Link-path autocomplete** (`src/sidebar/link_complete.js` + a second
+  CodeMirror completion source in `markdown_editor_cm_setup.js`): typing
+  inside `![...](here)` suggests folders/media/notes, resolved with the
+  SAME `resolveRel` semantics as the renderer and root-contained;
+  accepting a folder descends. Returns null in web mode (source inert).
+- **i18n conventions**: every user-visible string goes through
+  `window.t()`; interpolations use `{n}`/`{name}` placeholder keys +
+  `.replace()` so Swedish word order stays natural. Brand names and the
+  crash-recovery technical detail text are deliberately untranslated.
+- **Icons policy**: interface icons come ONLY from `svg_icons_to_use/`
+  (Harald Revery font glyph extracts). `src/sidebar/icons.js` is generated
+  from them; no third-party icon sets (the licence page carries no icon
+  attribution).
 
 ---
 

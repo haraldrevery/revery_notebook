@@ -1,6 +1,16 @@
 # Revery Notebook
 
-A self-hosted, browser-based Markdown editor with live preview, KaTeX math rendering, syntax highlighting, and a distraction-free reader mode. Runs entirely client-side — no backend, no database, no account required.
+A Markdown notebook for students, researchers, and anyone who just wants to write.
+Live preview, KaTeX math, syntax-highlighted code, project folders, and careful,
+crash-safe saving. Runs three ways from one codebase:
+
+- **Desktop app** (Electron or Tauri) — full project folders, real files on your disk.
+- **Web version** — a single-document live demo that runs entirely in your browser.
+  No backend, no database, no account, no telemetry.
+
+> **Just want to use it?** Jump to [Getting Started (no coding needed)](#getting-started-no-coding-needed).
+> Once the app is open, click the logo in the top bar → **User Guide** for how everything works.
+> For how the code works internally, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
@@ -8,266 +18,243 @@ A self-hosted, browser-based Markdown editor with live preview, KaTeX math rende
 
 - [What It Does](#what-it-does)
 - [Feature Overview](#feature-overview)
+- [Getting Started (no coding needed)](#getting-started-no-coding-needed)
+- [Getting Started (Developers)](#getting-started-developers)
 - [Project Structure](#project-structure)
 - [Third-Party Libraries](#third-party-libraries)
-- [Getting Started (Beginners)](#getting-started-beginners)
-- [Getting Started (Developers)](#getting-started-developers)
-- [Building the CodeMirror Bundle](#building-the-codemirror-bundle)
 - [Adding Templates](#adding-templates)
 - [Adding a Language](#adding-a-language)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Settings & Persistence](#settings--persistence)
 - [Security Notes](#security-notes)
 - [Known Limitations](#known-limitations)
-- [Deployment Checklist](#deployment-checklist)
+- [Deployment Checklist (web version)](#deployment-checklist-web-version)
 
 ---
 
 ## What It Does
 
-Revery Notebook is a single-page Markdown editor. You open the HTML file in a browser, write in the left pane, and see a formatted preview on the right — live, as you type. Everything is saved automatically to the browser's `localStorage`, so your work survives a page refresh. When you are done you export your document as a `.md` or `.txt` file.
-
-There is no login, no cloud sync, and no telemetry. It is intentionally simple.
+Write Markdown in the left pane, see the formatted result on the right — live, as
+you type. On desktop you open a **project folder**: a file panel lists your notes,
+everything is saved to real `.md` files on your disk with crash-safe atomic writes,
+and you can export the whole project as a zip, a PDF, or a compile-ready LaTeX
+project. The web version is the same editor with a single document autosaved to
+the browser (a live demo of the software before you install it).
 
 ---
 
 ## Feature Overview
 
 ### Editing
-- **CodeMirror 6** powers the editor: syntax highlighting, undo/redo history, keyboard shortcuts, and find highlights are all handled natively by CM.
-- **Bold**, **Italic**, **Headings**, **Strikethrough**, **Code Blocks**, **Inline Code**, **Links**, **Images**, **Task Lists**, **Tables**, **Horizontal Rules**, and **Footnotes** are all available from the Toolbar dropdown.
-- A **right-click context menu** adds Cut / Copy / Paste (on selected text), Insert Date, convert selection to ordered or unordered list, and Clear Format.
+- **CodeMirror 6** editor: syntax highlighting, undo/redo, find highlights.
+- **Live Preview mode** (toggle in Settings): the document renders *inside* the
+  editor, Obsidian-style — the block you are editing shows its raw markdown.
+- Bold, italic, headings, strikethrough, code blocks, links, images, task
+  lists, tables, horizontal rules, and footnotes from the **Toolbar** menu.
+- **Path autocomplete** in link destinations (desktop): typing inside
+  `![image](…)` suggests your project's folders, images, and notes.
+- **YAML frontmatter autocomplete**: keys and values already used across the
+  project are suggested while you edit the `---` block.
 
 ### Preview
-- **Live side-by-side preview** rendered by [markdown-it](https://github.com/markdown-it/markdown-it) with `linkify`, `typographer`, and footnote support.
-- **KaTeX math**: use `$inline$` or `$$display$$` as well as `\( \)` and `\[ \]` bracket notation.
-- **Syntax-highlighted code blocks** via Highlight.js with the GitHub Dark theme and one-click copy buttons on every block (and inline snippet).
-- **YAML Frontmatter** is rendered as a card of clickable "property pills" at the top of the preview, rather than raw text. Clicking a pill jumps to its line in the editor.
+- Rendered by **markdown-it** (footnotes, typographer) and sanitised by
+  **DOMPurify**.
+- **KaTeX math**: `$inline$` and `$$display$$` (multi-line supported).
+- **Highlight.js** code colors with one-click copy buttons.
+- YAML frontmatter renders as clickable "property pills".
+- Bidirectional **scroll sync**; click any preview block to jump the editor there.
+- **Reader Mode**, **Outline pane** (heading navigator), **Mobile view**.
 
-### Scroll Sync
-The editor and preview stay in sync while you scroll. Two strategies run in parallel:
-- **Standard sync** — proportional line-mapping using markdown-it's `data-sl` source-map attributes.
-- **Forced Preview Sync** — cursor-driven sync that can be toggled on in Settings for documents where the standard sync drifts (long documents with complex nesting). Enable it when the default feels sluggish or imprecise.
+### Projects & files (desktop)
+- Project folder sidebar with file tree **and card view**, drag-and-drop move,
+  multi-select, project quick-switcher, project-wide search (**Ctrl+Shift+F**).
+- **Links follow renames**: renaming or moving files/folders offers to update
+  every markdown link that points at them (you see the exact files first;
+  Ctrl+Z reverses it, links included).
+- Images: drop or paste (screenshots included) straight into a note — the file
+  is copied into your project and a link is inserted.
+- **Crash safety**: atomic writes (a crash can never leave a half-written
+  file), plus a rolling volatile backup of unsaved keystrokes.
 
-Clicking any element in the preview pane selects and highlights the corresponding source block in the editor.
+### Export
+- **Zip Project Export** — the whole project folder as a timestamped
+  `.zip` backup (`project_YYYY_MM_DD_HH_MM_SS.zip`), written atomically.
+- **PDF export** — options window with front page (optional cover image),
+  clickable table of contents, fonts (including your own custom fonts’ menu
+  cousins in the app UI), page sizes A4/A5/A6/Letter, margins, page numbers,
+  page breaks before H1/H2. Electron saves the PDF directly; Tauri and the
+  browser open the system print dialog ("Save as PDF").
+- **LaTeX project export** — a compile-ready folder (main.tex + images/) with
+  five templates, including two styled "Revery" templates (the book one
+  bundles its fonts into the zip).
+- Plain `.md`, `.txt`, and `.html` export everywhere.
 
-### Navigation & Modes
-- **Outline pane** — a living table of contents built from all `#`–`######` headings. Toggle it on via Settings. Clicking a heading scrolls both panes to it instantly.
-- **Reader Mode** — hides the editor and focuses the preview in a clean reading layout. Exit with the top-bar button.
-- **Mobile view** — on narrow screens the layout switches to a single-pane view with a toggle button to flip between editor and preview.
+### Customization
+- **Custom templates**: create your own YAML/markdown templates from the
+  menus ("New template…"), remove them with a hover ✕.
+- **Custom fonts**: import a font file or use any font installed on your
+  computer (Settings → font menus → "Custom font…").
+- Backgrounds (built-in or imported image) with adjustable opacity, dark/light
+  theme, per-pane text sizes, **Slow Hardware Mode** for older machines.
+- Interface languages: **English** and **Swedish**.
 
-### File Operations
-All file operations live under the **File** menu.
+---
 
-| Action | Notes |
-|---|---|
-| New File | Warns if there are unsaved changes |
-| Import File | Opens a local `.md` or `.txt` file |
-| Import Template | Choose from built-in YAML or Markdown templates |
-| Save as… | Prompts for a filename, saves to `localStorage` |
-| Export as .md | Downloads a `.md` file |
-| Export as .txt | Downloads a plain-text file |
+## Getting Started (no coding needed)
 
-The export filename is built from the document title and a configurable suffix / prefix format (date, datetime, time, compact date, or none). Set it under **Settings → Filename format**.
+### Option 1 — The desktop app (recommended)
 
-### Find & Replace
-Press **Ctrl+F** to open the find bar. Features include:
-- Case-sensitive toggle (`Aa` button)
-- Regular expression toggle (`.*` button) with a ReDoS safety guard
-- Match counter (e.g. `3 / 14`)
-- Navigate with **Enter** / **Shift+Enter** or the ↑ ↓ buttons
-- Replace current match or replace all
-- CM decorations highlight all matches inline in the editor
+If you received an installer (`.exe`, `.msi`, `.AppImage`, `.deb`, `.dmg`):
+run it like any other program, open the app, click **the folder button** in the
+top-left, and pick (or create) a folder for your notes. That's it — your notes
+are ordinary `.md` files in that folder.
 
-### Settings (all persisted to `localStorage`)
-| Category | Options |
-|---|---|
-| Layout | Show/hide Preview, Show/hide Outline, Mobile View |
-| Reader Mode | Padding: Default / 80% / 60% / 50% |
-| Text sizes | Editor, Preview, Outline, and UI menu — each independently scalable |
-| Font types | `Harald` (default), Serif, Sans-serif, Monospace (editor and preview independently) |
-| Preview | Center Headers on/off |
-| Scroll sync | Forced Preview Sync on/off |
-| Performance | CPU render delay (50 ms – 2000 ms) |
-| File export | Filename format, Calendar date format |
-| Misc | Disable right-click context menu |
-| Language | English, Swedish |
+### Option 2 — The web version (zero install)
+
+1. Open the project folder you downloaded/unzipped.
+2. Go into the **`www`** folder.
+3. Double-click **`index.html`**. It opens in your browser and works immediately.
+4. Write in the left pane. Your text autosaves to the browser — refreshing the
+   page restores it. Press **Ctrl+S** to download your document as a `.md` file.
+
+The web version holds **one document at a time** and lives only in that browser.
+For folders of notes and real files, use the desktop app.
+
+### Option 3 — Build the desktop app yourself (step by step)
+
+You only need to do this if you weren't given an installer. It looks technical
+but is just typing three commands.
+
+1. **Install Node.js** — go to <https://nodejs.org>, download the **LTS**
+   version, and install it (click next until done).
+2. **Open a terminal in the project folder**:
+   - *Windows*: open the folder in Explorer, click the address bar, type `cmd`, press Enter.
+   - *macOS*: right-click the folder → Services → "New Terminal at Folder".
+   - *Linux*: right-click inside the folder → "Open Terminal Here".
+3. Type these commands, pressing Enter after each (the first one takes a few minutes):
+
+   ```bash
+   npm install
+   npm run start:electron
+   ```
+
+   The app opens. To instead create a real installer for your system:
+
+   ```bash
+   npm run build:electron
+   ```
+
+   The installer appears in the `dist-electron/` folder.
+
+**If something fails** (common after unzipping the project): delete the
+`node_modules` folder and run `npm install` again.
+
+**If the app crashes instantly when started from VS Code's terminal**: run
+`ELECTRON_RUN_AS_NODE= npm run start:electron` instead (VS Code leaks a
+variable that confuses Electron).
+
+*(The Tauri build is smaller but needs the Rust toolchain too — see
+[ARCHITECTURE.md → Build Instructions](ARCHITECTURE.md#build-instructions).)*
+
+---
+
+## Getting Started (Developers)
+
+- The shipped app is `www/` — plain classic `<script>` files, no framework, no
+  build step for day-to-day work. Serve it from any static host or open it via
+  `file://`.
+- Two files in `www/jvscrpt_and_css_extra/` are **generated bundles** — never
+  edit them directly:
+  - `codemirror-bundle.js` ← built from `build_tools/cm_entry_slim.js`
+    (`cd build_tools && npm install && node build_cm.js`, then copy the output over).
+  - `project_sidebar.js` ← built from the ES modules in `src/sidebar/` with
+    `npm run build:sidebar` (run from the repo root).
+- Script loading order in `index.html` matters — the classic scripts
+  communicate through globals. See the `<script>` tags in `index.html`
+  (theme → native_api → templates → renderer libs → lang → CodeMirror →
+  editor core → actions → export → menus → sync → layout → find → sidebar).
+- Run everything with `npm test` (Node's built-in `node:test`; the E2E suite
+  boots the real app in Electron) and `npm run test:rust` for the Tauri side.
+- Desktop internals (NativeAPI, IPC maps, data-safety design, build docs):
+  **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 ---
 
 ## Project Structure
 
 ```
-/
-├── index.html              ← The app. Open this in a browser.
+revery_notebook/
+├── www/                          ← Everything the app ships (web + both wrappers)
+│   ├── index.html                ← THE app. The web version opens this directly.
+│   ├── pdf_print.html            ← Dedicated PDF print page (Tauri export)
+│   ├── main.css / prose.css      ← Shipped styles (hand-maintained)
+│   ├── fonts/ image_assets/      ← Brand fonts, background images
+│   └── jvscrpt_and_css_extra/
+│       ├── revery_notebook_style.css     ← App UI styles
+│       ├── native_api.js                 ← Electron/Tauri/web abstraction layer
+│       ├── markdown_editor_*.js          ← Editor core, menus, actions, export, sync, find…
+│       ├── project_sidebar.js            ← GENERATED (source: src/sidebar/)
+│       ├── codemirror-bundle.js          ← GENERATED (source: build_tools/)
+│       ├── find_worker.js                ← Regex search Web Worker
+│       └── markdown-it / katex / highlight.js / purify …  ← self-hosted libraries
 │
-└── jvscrpt_and_css_extra/            ← All assets live here
-    ├── revery_notebook_style.css     ← All styles for the editor UI
-    ├── markdown_editor_theme.js      ← Runs before paint; sets dark/light via system pref
-    ├── markdown_editor_lang.js       ← Translation engine + string table
-    ├── markdown_editor_tmplt_list.js ← YAML and Markdown template definitions
-    ├── codemirror-bundle.js          ← Built CM6 bundle (do not edit directly)
-    ├── markdown_editor_cm_setup.js   ← Initialises the CodeMirror instance + shim
-    ├── markdown_editor_core_cm.js    ← Render loop, autosave, outline, word count
-    ├── markdown_editor_actions_cm.js ← Toolbar actions, export, filename builder
-    ├── markdown_editor_menus.js      ← Settings menu, dropdowns, state persistence
-    ├── markdown_editor_sync.js       ← Bidirectional scroll sync (editor ↔ preview)
-    ├── markdown_editor_layout.js     ← Draggable dividers, mobile view toggle
-    ├── markdown_editor_find_cm.js    ← Find / Replace bar logic
-    │
-    ├── markdown-it.min.js            ← Markdown renderer
-    ├── markdown-it-footnote.min.js   ← Footnote plugin for markdown-it
-    ├── katex.min.js / .css           ← Math rendering
-    ├── texmath.min.js / .css         ← markdown-it ↔ KaTeX bridge
-    ├── highlight.min.js              ← Code syntax highlighting
-    ├── github-dark.min.css           ← Highlight.js theme
-    └── purify.min.js                 ← DOMPurify HTML sanitiser
-
-Build tooling (not deployed):
-├── package.json
-├── package-lock.json
-├── build_cm.js                       ← esbuild script
-└── cm_entry_slim.js                  ← CodeMirror 6 entry point
+├── src/sidebar/                  ← Sidebar source modules (tree, save, cards,
+│                                    link_rewrite, link_complete, search, …)
+├── electron/                     ← Desktop wrapper #1 (main.js, preload, fs_core, zip_core)
+├── tauri/                        ← Desktop wrapper #2 (Rust; src/main.rs, capabilities)
+├── build_tools/                  ← esbuild scripts for the two generated bundles
+├── test/                         ← node:test suites (fs safety, zip, links, E2E)
+├── svg_icons_to_use/             ← The ONLY approved icon set (Harald Revery glyphs)
+├── images_for_installer/         ← Windows installer branding bitmaps
+└── package.json                  ← npm scripts + electron-builder config
 ```
-
-> **Beginner tip:** The only file you ever need to open in a browser is `index.html`. Everything else is a resource it loads automatically. You do not need Node.js or a build step unless you want to update one of the two generated bundles: the CodeMirror bundle (`build_tools/build_cm.js`) or the project sidebar bundle (`npm run build:sidebar`, source in `src/sidebar/`).
 
 ---
 
 ## Third-Party Libraries
 
-All libraries are self-hosted (no CDN calls at runtime) to satisfy the Content Security Policy.
+All libraries are self-hosted (no CDN calls at runtime) to satisfy the Content
+Security Policy. The full license texts are in the app: logo menu → **Legal**.
 
 | Library | Purpose | License |
 |---|---|---|
-| [CodeMirror 6](https://codemirror.net/) | Editor engine | MIT |
+| [CodeMirror 6](https://codemirror.net/) | Editor engine (+ autocomplete) | MIT |
 | [markdown-it](https://github.com/markdown-it/markdown-it) | Markdown → HTML renderer | MIT |
-| [markdown-it-footnote](https://github.com/markdown-it/markdown-it-footnote) | `[^1]` footnote syntax | MIT |
+| [markdown-it-footnote](https://github.com/markdown-it/markdown-it-footnote) | `[^1]` footnotes | MIT |
 | [KaTeX](https://katex.org/) | LaTeX math rendering | MIT |
 | [markdown-it-texmath](https://github.com/goessner/markdown-it-texmath) | markdown-it ↔ KaTeX bridge | MIT |
 | [Highlight.js](https://highlightjs.org/) | Code block syntax highlighting | BSD-3-Clause |
 | [DOMPurify](https://github.com/cure53/DOMPurify) | HTML sanitisation (XSS protection) | Apache-2.0 / MPL-2.0 |
 
----
-
-## Getting Started (Beginners)
-
-You do not need to install anything.
-
-1. Copy the entire project folder to your web server (or open `index.html` directly in a browser for local use).
-2. Open `index.html`. The editor loads with a short welcome note.
-3. Start typing in the left pane. The right pane updates as you type.
-4. Press **Ctrl+S** to download your work as a `.md` file. The filename comes from the title field in the top-left corner.
-5. Your text is automatically saved to the browser each time you type, so refreshing the page will restore your last session.
-
-**To start a new document**, use **File → New File**. You will be asked if you want to export first.
-
-**To open an existing `.md` file**, use **File → Import File**.
-
----
-
-## Getting Started (Developers)
-
-### Prerequisites
-- A static web server (Nginx, Apache, GitHub Pages, Caddy, or even Python's `http.server`)
-- Node.js 18+ only if you need to rebuild the CodeMirror bundle
-
-### Local development
-Because the HTML uses `<script src="...">` tags with relative paths, it works fine when served from any static host. To run locally without a server you can use:
-
-```bash
-npx serve .
-# or
-python3 -m http.server 8080
-```
-
-Then open `http://localhost:8080/index.html`.
-
-### Script loading order
-The scripts in `index.html` must be loaded in this exact order. Each file depends on globals defined by those before it:
-
-```
-markdown_editor_theme.js       (inline, before <body> — prevents theme flash)
-markdown_editor_tmplt_list.js  (defines yamlTemplates / mdTemplates globals)
-markdown-it + plugins          (defines window.markdownit, etc.)
-katex + texmath
-highlight.js
-purify.min.js
-markdown_editor_lang.js        (defines window.t(), window.uiLanguage)
-codemirror-bundle.js           (defines window.CM.*)
-markdown_editor_cm_setup.js    (creates the CM instance; exposes window.editor shim)
-markdown_editor_core_cm.js     (render loop, autosave — requires editor shim)
-markdown_editor_actions_cm.js  (toolbar actions — requires render())
-…
-project_sidebar.js            (GENERATED from src/sidebar/ — npm run build:sidebar)
-
-find_worker.js is not a <script> tag: the find bar loads it as a Web
-Worker at runtime, so it must ship in jvscrpt_and_css_extra/ alongside
-the scripts.
-markdown_editor_menus.js       (settings menus — requires all actions)
-markdown_editor_sync.js        (scroll sync — requires editor, preview)
-markdown_editor_layout.js      (drag dividers — requires edPane, divider)
-markdown_editor_find_cm.js     (find/replace — requires CM decorations API)
-```
-
-### `window.editor` shim
-`markdown_editor_cm_setup.js` creates the CodeMirror view and exposes `window.editor` — an object with `.value` (getter/setter), `.selectionStart`, `.selectionEnd`, `.setSelectionRange()`, `.scrollTop`, `.scrollHeight`, `.clientHeight`, `.focus()`, and event listener proxies. This shim means most of the other files can talk to the editor exactly as if it were a plain `<textarea>`, making the CodeMirror integration transparent to the rest of the codebase.
-
----
-
-## How to rebuild `codemirror-bundle.js`
-
-The CodeMirror 6 bundle is checked in as `codemirror-bundle.js`. You only need to rebuild it if you add or remove CM packages.
-
-
-```bash
-cd build_tools/ # you have to be in the build_tools/ folder
-npm install
-node build_cm.js
-# copy over codemirror-bundle.js tp /jvscrpt_and_css_extra/
-```
-
-
-Copy the resulting `codemirror-bundle.js` to `jvscrpt_and_css_extra/`.
-
-To add a CM package, install it with `npm install @codemirror/your-package`, then export what you need from `cm_entry_slim.js` before rebuilding. Keep the entry file minimal — the current bundle is intentionally slim (language-data for fenced code block per-language colours is excluded to save size; fenced blocks still render, just without token-level colours).
+Interface icons are **first-party**: glyphs extracted from the Harald Revery
+fonts (`svg_icons_to_use/`). No third-party icon sets.
 
 ---
 
 ## Adding Templates
 
-Open `markdown_editor_tmplt_list.js`. There are two arrays:
+**Easiest way (no code):** in the app, open Toolbar → *Insert YAML ▸* → **New
+template…** (or File → *Import Template ▸* → New template…), write it, press
+Create. Remove custom templates with the hover ✕.
 
-**`yamlTemplates`** — appear under Toolbar → Insert YAML. Each entry becomes a submenu item that inserts a full YAML frontmatter block.
-
-```js
-{
-  label: 'My Template',
-  content: `---\ntitle: Untitled\ndate: ${getTodayStr()}\n---\n\n`
-}
-```
-
-**`mdTemplates`** — appear under File → Import Template. Each entry inserts a Markdown skeleton into the editor.
-
-```js
-{
-  label: 'Meeting Notes',
-  content: `# Meeting Notes\n\n**Date:** \n**Attendees:**\n\n## Agenda\n- \n\n## Action Items\n- [ ] \n`
-}
-```
-
-Add your entry to either array and reload the page. No rebuild required.
+**Built-in defaults** live in
+`www/jvscrpt_and_css_extra/markdown_editor_tmplt_list.js` — two arrays
+(`yamlTemplates`, `mdTemplates`) of `{ label, content }`. Edit and reload; no
+build step.
 
 ---
 
 ## Adding a Language
 
-Open `markdown_editor_lang.js`. The `window.uiTranslations` object maps English strings to translations keyed by language name.
+Open `www/jvscrpt_and_css_extra/markdown_editor_lang.js`:
 
-1. Pick a language name string (e.g. `"French"`).
-2. For every key in `uiTranslations`, add a `"French": "..."` entry. You can skip any string you do not want to translate — untranslated strings fall back to the English key.
-3. Add `"French"` to the `"Language ▸"` submenu in `markdown_editor_menus.js` (search for `"English"` and `"Swedish"` to find the right spot — it is a small array of `{ label, action }` objects).
-4. Reload. The new language will appear in Settings → Language.
+1. Every UI string has an entry like `"Save": { "Swedish": "Spara" }`. Add your
+   language key (e.g. `"French": "…"`) to each entry — untranslated strings
+   fall back to English.
+2. The `uiTemplates` object at the bottom holds the long About/Legal/User Guide
+   texts per language.
+3. Add the language to the *Language ▸* submenu in `markdown_editor_menus.js`
+   (search for `"Swedish"`).
 
 ---
 
@@ -275,67 +262,77 @@ Open `markdown_editor_lang.js`. The `window.uiTranslations` object maps English 
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+S` | Export as .md |
-| `Ctrl+B` | Bold |
-| `Ctrl+I` | Italic |
-| `Ctrl+F` | Open Find bar |
-| `Enter` (in Find) | Next match |
-| `Shift+Enter` (in Find) | Previous match |
-| `Escape` | Close Find bar |
-| `Ctrl+Z` | Undo (CM native) |
-| `Ctrl+Shift+Z` / `Ctrl+Y` | Redo (CM native) |
+| `Ctrl+S` | Save the open file (desktop) / download `.md` (web) |
+| `Ctrl+B` / `Ctrl+I` | Bold / Italic |
+| `Ctrl+F` | Find / Replace (regex supported, ReDoS-guarded) |
+| `Ctrl+Shift+F` | Project-wide search (desktop) |
+| `Enter` / `Shift+Enter` (in Find) | Next / previous match |
+| `Ctrl+Z` | Undo — outside the editor it undoes the last file move/rename |
+| `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
+| `Tab` (in editor) | Insert 4 spaces |
+| `Escape` | Close find bar / dialogs |
 
 ---
 
 ## Settings & Persistence
 
-Two `localStorage` keys are used:
+Settings and app state persist in the browser profile's `localStorage`
+(the desktop apps have their own private profile, plus a small
+`revery_settings.json` in the OS app-data folder for the file pointers).
 
-| Key | Contents |
-|---|---|
-| `revery_md_autosave` | The raw Markdown text of the current document |
-| `revery_md_settings` | A JSON object containing all Settings menu state |
+Main keys: `revery_md_settings` (all Settings-menu state), `revery_md_autosave`
+(web-mode document), `revery_export_settings`, `revery_custom_templates`,
+`revery_custom_fonts`, `revery_custom_bg`, `revery_projects`,
+`revery_root_path`, `revery_sidebar_sort`, `revery_sidebar_view`,
+`revery_card_size_idx`, `revery_last_file`.
 
-Settings include: `forcedSyncEnabled`, `previewVisible`, `outlineVisible`, `uiSize`, `editorTextSize`, `previewTextSize`, `outlineFontSize`, `readerPadding`, `editorFontType`, `previewFontType`, `uiLanguage`, `currentDateFormat`, `filenameFormat`, `renderDelay`, `savedEditorWidth`, `centerHeaders`, and `rightClickDisabled`.
-
-**To reset everything**, open the browser console and run:
-```js
-localStorage.removeItem('revery_md_autosave');
-localStorage.removeItem('revery_md_settings');
-location.reload();
-```
-Or use **File → Quit → Total Reset** from inside the app.
+**To reset everything** use the in-app option (logo menu → Quit → Total Reset),
+or clear the keys above from the browser console.
 
 ---
 
 ## Security Notes
 
-- **Content Security Policy** — the HTML sets a strict `<meta>` CSP: no inline scripts (except one allowlisted SHA-256 hash for the theme script), no external script sources, no `eval`.
-- **DOMPurify** sanitises all markdown-it output before it touches the DOM. The `data-sl` and `data-sl-end` scroll-sync attributes are explicitly allow-listed.
-- **URL sanitisation** — the markdown-it link renderer rejects `javascript:`, `data:`, and `vbscript:` schemes.
-- **YAML XSS** — YAML frontmatter keys and values are HTML-escaped before being injected as pill content.
-- **ReDoS guard** — the Find bar validates user-supplied regexes against a heuristic before constructing a `RegExp` object. Patterns with nested quantifiers, quantified alternation groups, or length over 100 characters are rejected with a non-blocking warning.
-- **Multi-tab collision** — a `storage` event listener detects when another tab overwrites the autosave key and shows a warning banner.
+- **Strict CSP** in all three shells — no external sources, no eval; fonts and
+  images only from the app itself, `data:` URLs, and (Tauri) the asset protocol.
+- **DOMPurify** sanitises all rendered markdown; URL schemes like
+  `javascript:` are rejected by the link renderer.
+- **The app never opens links or acts as a browser** (navigation is blocked in
+  both wrappers by policy — important for the borderless UI).
+- **Sandboxed renderers**: no Node in the renderer (Electron), allowlisted
+  IPC/commands only, every path validated against the trusted project root on
+  the backend (both wrappers).
+- **ReDoS guard**: project search is substring-only; the in-document regex
+  find runs in a Web Worker with a hard timeout.
+- **Atomic writes everywhere** a file is written (documents, settings, zips,
+  PDFs): temp file + rename, so a crash cannot corrupt existing data.
+
+Details: [ARCHITECTURE.md → Security Model](ARCHITECTURE.md#security-model).
 
 ---
 
 ## Known Limitations
 
-- **5 MB storage cap** — `localStorage` is typically limited to 5 MB per origin. The editor warns at 90% capacity. For very large documents, export frequently.
-- **No cloud sync** — documents only live in the browser that created them. Export your `.md` file if you need to move it or back it up.
-- **Single document at a time** — the autosave key holds one document. Opening the app in a second tab with different content will produce a multi-tab warning.
-- **Image display** — images in the preview use the `src` attribute as written. Relative paths will only resolve when the file is served from the correct base URL. Absolute URLs (`https://...`) always work.
-- **Bundled CodeMirror** — the `codemirror-bundle.js` file is a pre-built artifact. If you upgrade a CM package, you must rebuild it with `npm run build` and re-deploy the file.
+- **Web version**: one document at a time, ~5 MB localStorage budget, no
+  project folders — it is the demo, the desktop app is the product.
+- **Tauri PDF export**: page margins/paper size are governed by the system
+  print dialog (a WebKitGTK limitation). Electron produces the pixel-exact PDF.
+- **Relative images (web)** only resolve against the page URL; the desktop
+  app resolves them against your project files.
+- Generated bundles (`codemirror-bundle.js`, `project_sidebar.js`) must be
+  rebuilt when their sources change — never edited directly.
 
 ---
 
-## Deployment Checklist
+## Deployment Checklist (web version)
 
-- [ ] Copy `index.html` and the entire `jvscrpt_and_css_extra/` folder to the server.
-- [ ] Ensure the server serves `.js` and `.css` files with correct MIME types.
-- [ ] If using HTTPS (recommended), the Clipboard API (`navigator.clipboard`) will be available. On `http://` origins the copy-button falls back to the `execCommand` approach automatically.
-- [ ] The CSP `<meta>` tag allows `img-src 'self' data:`. If your users embed external images (`![](https://...)`) you will need to add `img-src * data:` or an appropriate domain allowlist.
-- [ ] If you rename the `jvscrpt_and_css_extra/` directory, update all `<script src="...">` and `<link href="...">` paths in `index.html` accordingly.
+- [ ] Copy the **entire `www/` folder** to the server (`index.html` must stay
+      next to `jvscrpt_and_css_extra/`, `fonts/`, `image_assets/`).
+- [ ] Serve `.js`/`.css` with correct MIME types; HTTPS recommended
+      (Clipboard API needs a secure context; a fallback exists for `http://`).
+- [ ] The CSP allows `img-src 'self' data:` — add domains if your users embed
+      external images.
+- [ ] Do not rename `jvscrpt_and_css_extra/` (script paths in `index.html`).
 
 ---
 
