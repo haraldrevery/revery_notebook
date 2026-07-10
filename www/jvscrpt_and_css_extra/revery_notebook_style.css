@@ -429,6 +429,17 @@ body {
 #divider:hover, #divider.dragging { background-color: var(--theme-divider-hover); }
 #divider::after { content: ''; position: absolute; inset: 0 -12px; z-index: 10; }
 
+/* The dividers' invisible grab zones z-order-win against the topbar
+   (menus are capped at #topbar's z-index 10; the zones are also 10 but
+   later in the DOM), so wherever an open dropdown overlaps a divider the
+   zone steals hover/clicks — submenus snap shut and items go dead. While
+   any menu is open, the zones go inert; drag behavior is otherwise
+   unchanged. */
+body:has(.menu-container.show) #divider::after,
+body:has(.menu-container.show) #outline-divider::after {
+  pointer-events: none;
+}
+
 /* ── Editor pane (Defaults to 33.33%) ── */
 #editor-pane {
   display: flex;

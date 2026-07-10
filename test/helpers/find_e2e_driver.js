@@ -640,6 +640,22 @@
     exportSuite.boldHaraldRestored = s3.deco.includes('underline') && s3.weight === 400;
   }
 
+  /* 11e. Open menus must not lose hover/clicks to the pane dividers'
+     invisible grab zones (::after strips z-order-win against the topbar-
+     capped dropdowns): while any .menu-container is shown, the zones must
+     be pointer-inert; and revert when the menu closes. */
+  {
+    const dividerEl = document.getElementById('divider');
+    const sd = document.getElementById('settings-dropdown');
+    const zonePE = () => getComputedStyle(dividerEl, '::after').pointerEvents;
+    const before = zonePE();
+    sd.classList.add('show');
+    const during = zonePE();
+    sd.classList.remove('show');
+    exportSuite.dividerYieldsToMenus =
+      before !== 'none' && during === 'none' && zonePE() !== 'none';
+  }
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
