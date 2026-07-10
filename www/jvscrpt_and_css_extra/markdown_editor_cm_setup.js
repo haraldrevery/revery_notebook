@@ -445,6 +445,59 @@ const lineNumbersCompartment = new Compartment();
     setTimeout(() => { try { startCompletion(update.view); } catch (_) {} }, 0);
   });
 
+  // ── 5e. Link-path autocomplete ─────────────────────────────────────────
+  // VS-Code-style path IntelliSense inside markdown link destinations:
+  // typing in `![...](here)` / `[...](here)` suggests the folders, media
+  // files and notes reachable from the active file's directory; accepting
+  // a folder inserts "folder/" and immediately re-opens the menu for the
+  // next level. Listing/filtering/containment lives in the sidebar bundle
+  // (window.sidebarListLinkCompletions — resolves with the renderer's own
+  // path semantics, read-only, null in web mode so this source is inert).
+
+  /* Minimal CommonMark-safe encoding — same set mediaMarkdown uses, so
+     accepted paths render everywhere (% first!). */
+  function _encodeLinkSeg(s) {
+    return s.replace(/%/g, '%25').replace(/ /g, '%20')
+            .replace(/\(/g, '%28').replace(/\)/g, '%29');
+  }
+
+  async function linkPathCompletionSource(context) {
+    if (typeof window.sidebarListLinkCompletions !== 'function') return null;
+    const line = context.state.doc.lineAt(context.pos);
+    const before = line.text.slice(0, context.pos - line.from);
+    /* Cursor inside a link destination: `![alt](partial` or `[txt](partial`
+       with no closing paren / whitespace between the '(' and the cursor. */
+    const m = before.match(/!?\[[^\]]*\]\(([^()\s]*)$/);
+    if (!m) return null;
+
+    let res = null;
+    try { res = await window.sidebarListLinkCompletions(m[1]); } catch (_) { return null; }
+    if (!res || !res.entries.length) return null;
+
+    const from = context.pos - res.rawSegLength;
+    const options = res.entries.map((e) => ({
+      label: e.name + (e.isDir ? '/' : ''),
+      type: e.isDir ? 'folder' : 'file',
+      apply: (view, _completion, applyFrom, applyTo) => {
+        const insert = _encodeLinkSeg(e.name) + (e.isDir ? '/' : '');
+        view.dispatch({
+          changes: { from: applyFrom, to: applyTo, insert },
+          selection: { anchor: applyFrom + insert.length },
+          userEvent: 'input.complete',
+        });
+        /* Folder accepted → descend: reopen the menu for the next level. */
+        if (e.isDir) setTimeout(() => { try { startCompletion(view); } catch (_) {} }, 0);
+      },
+    }));
+    return {
+      from,
+      options,
+      /* Keep filtering while the user types within the current segment;
+         a '/' ends the segment and re-queries the source (descends). */
+      validFor: /^[^()\s/]*$/,
+    };
+  }
+
   // ═════════════════════════════════════════════════════════════════════════
   // 6.  BUILD INITIAL EDITOR STATE
   // ═════════════════════════════════════════════════════════════════════════
@@ -470,13 +523,14 @@ const lineNumbersCompartment = new Compartment();
       placeholderCompartment.of(placeholder('Start writing\u2026')),
       lineNumbersCompartment.of([]), // Initialize empty, Settings will toggle this
       livePreviewCompartment.of([]), // Initialize empty, Settings will toggle this
-      /* YAML frontmatter autocomplete (5d). override: this is the ONLY
-         completion source; it returns null outside frontmatter, so the
-         engine stays inert everywhere else. selectOnOpen:false keeps
-         Enter inserting newlines until the user arrows onto an option
-         (the menu auto-opens on click — never steal the Enter key).
+      /* Completion sources (5d YAML frontmatter + 5e link paths). Each
+         source gates itself to its own region (frontmatter / inside link
+         parens) and returns null everywhere else, so they can never
+         conflict and the engine stays inert outside both. selectOnOpen:
+         false keeps Enter inserting newlines until the user arrows onto
+         an option (menus auto-open on click/typing — never steal Enter).
          icons:false matches the app's clean menu aesthetic.           */
-      autocompletion({ override: [yamlCompletionSource], selectOnOpen: false, icons: false }),
+      autocompletion({ override: [yamlCompletionSource, linkPathCompletionSource], selectOnOpen: false, icons: false }),
       yamlClickToComplete,
       Prec.highest(keymap.of(tabKeymap)),
       Prec.high(keymap.of([...escapeKeymap, ...autoWrapKeymap])),

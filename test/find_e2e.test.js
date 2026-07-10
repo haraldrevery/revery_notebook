@@ -147,4 +147,8 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     newRows: true, created: true, duplicateRejected: true, emptyNameRejected: true,
     creatorPrefilled: true, creatorCloses: true, deleted: true,
   }, 'custom templates must be creatable, persisted, deduplicated, deletable, with the creator modal prefilled');
+
+  // 16. link-path autocomplete: feed exposed; inert (null) in web mode
+  assert.deepEqual(r.linkComplete, { hookExists: true, webQuiet: true },
+    'link-path completion feed must exist and stay quiet without a filesystem');
 });

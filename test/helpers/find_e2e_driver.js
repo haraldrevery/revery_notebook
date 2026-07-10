@@ -688,6 +688,15 @@
       && !(stored().yaml || []).some((t) => t.label === 'E2E Tmpl');
   }
 
+  /* 11g. Link-path autocomplete: the data feed must exist, and in WEB mode
+     (no filesystem) it must return null so the editor's completion source
+     stays inert — the YAML completion suite above already proves the shared
+     autocomplete engine still works alongside the new source. */
+  const linkComplete = {
+    hookExists: typeof window.sidebarListLinkCompletions === 'function',
+    webQuiet: (await window.sidebarListLinkCompletions('')) === null,
+  };
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
@@ -796,5 +805,5 @@
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
            lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
-           outlineFontButtons, exportSuite, customTemplates };
+           outlineFontButtons, exportSuite, customTemplates, linkComplete };
 })()

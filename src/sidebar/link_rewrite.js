@@ -31,8 +31,10 @@ function isAbsoluteDest(p) {
   return p.startsWith('/') || ABS_WIN_RE.test(p);
 }
 
-/** Mirror of the renderer's resolveRelPath: resolve rel against baseDir. */
-function resolveRel(baseDir, rel) {
+/** Mirror of the renderer's resolveRelPath: resolve rel against baseDir.
+    Exported: the link-path autocomplete resolves typed folder prefixes with
+    the same semantics, so its suggestions match what will actually render. */
+export function resolveRel(baseDir, rel) {
   baseDir = norm(baseDir);
   rel = norm(rel);
   if (isAbsoluteDest(rel)) return rel;

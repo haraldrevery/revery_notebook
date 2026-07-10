@@ -4314,8 +4314,56 @@ Restore these changes, or discard and keep the saved version.`,
     openSearch();
   }
 
+  // src/sidebar/link_complete.js
+  var SCHEME_RE2 = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+  var dirOf = (p) => p.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+  async function listLinkCompletions(rawDest) {
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return null;
+    if (typeof rawDest !== "string") return null;
+    const lastSlash = rawDest.lastIndexOf("/");
+    const rawDir = lastSlash >= 0 ? rawDest.slice(0, lastSlash + 1) : "";
+    const rawSeg = rawDest.slice(lastSlash + 1);
+    let decDir = rawDir;
+    let decSeg = rawSeg;
+    try {
+      decDir = decodeURIComponent(rawDir);
+    } catch (_) {
+    }
+    try {
+      decSeg = decodeURIComponent(rawSeg);
+    } catch (_) {
+    }
+    if (SCHEME_RE2.test(decDir || decSeg)) return null;
+    const baseDir = S.activeFilePath ? dirOf(S.activeFilePath) : S.rootPath.replace(/\\/g, "/");
+    const absDir = resolveRel(baseDir, decDir);
+    const root = S.rootPath.replace(/\\/g, "/").replace(/\/$/, "");
+    if (absDir !== root && !absDir.startsWith(root + "/")) return null;
+    let entries;
+    try {
+      entries = await window.NativeAPI.readDirectory(absDir);
+    } catch (_) {
+      return null;
+    }
+    if (!Array.isArray(entries)) return null;
+    const segLower = decSeg.toLowerCase();
+    const out = [];
+    for (const e of entries) {
+      if (!e || !e.name || e.name.startsWith(".")) continue;
+      const isDir = e.type === "dir";
+      if (!isDir) {
+        const cat = getFileCategory(e.name);
+        if (cat !== "media" && cat !== "text") continue;
+      }
+      if (segLower && !e.name.toLowerCase().startsWith(segLower)) continue;
+      out.push({ name: e.name, isDir });
+    }
+    out.sort((a, b) => b.isDir - a.isDir || a.name.localeCompare(b.name));
+    return { rawSegLength: rawSeg.length, entries: out.slice(0, 60) };
+  }
+
   // src/sidebar/index.js
   window.sidebarYamlIndex = getYamlIndex;
+  window.sidebarListLinkCompletions = listLinkCompletions;
   if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
     const btn = document.getElementById("btn-sidebar");
     if (btn) btn.style.display = "none";

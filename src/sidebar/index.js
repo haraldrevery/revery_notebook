@@ -13,11 +13,17 @@ import { initEditorMedia } from './editor_media.js';
 import { initCloseHandler, runBoot } from './lifecycle.js';
 import { getYamlIndex } from './yaml_index.js';
 import { initSearch } from './search.js';
+import { listLinkCompletions } from './link_complete.js';
 
 /* YAML autocomplete data feed for the editor (cm_setup.js). Exposed in
    BOTH modes: on desktop it indexes the whole project; in web mode it
    degrades to the current document's frontmatter (passed by the caller). */
 window.sidebarYamlIndex = getYamlIndex;
+
+/* Link-path autocomplete data feed for the editor (cm_setup.js): folder/
+   media/note listings for `![...](path)` destinations. Returns null in web
+   mode (no filesystem), which keeps the completion source inert there. */
+window.sidebarListLinkCompletions = listLinkCompletions;
 
 /* ── Guard: desktop only ─────────────────────────────────────────── */
 if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
