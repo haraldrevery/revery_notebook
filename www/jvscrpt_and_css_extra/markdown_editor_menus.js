@@ -988,11 +988,75 @@ function attachSubmenuHandlers(wrapper, sub) {
 
 
 
+/* ── Custom template creator ────────────────────────────────────────────
+   Small modal (same pattern/classes as the export modal): template name +
+   content textarea, Cancel / Create. Create goes through
+   window.createCustomTemplate (validation + persistence + menu rebuild);
+   on error the modal stays open and shows the message. */
+function openTemplateCreator(kind) {
+  const existing = document.getElementById('template-creator-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'template-creator-modal';
+  overlay.className = 'modal-overlay show';
+
+  const content = document.createElement('div');
+  content.className = 'modal-content';
+
+  const heading = document.createElement('h3');
+  heading.textContent = window.t('New template…').replace(/…$/, '');
+  content.appendChild(heading);
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'export-text tmpl-name';
+  nameInput.placeholder = window.t('Template name');
+  content.appendChild(nameInput);
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'tmpl-textarea';
+  textarea.value = kind === 'yaml'
+    ? '---\ntitle: Title of document\nauthor: Mr. Revery\n---\n\n'
+    : '# Title\n\n';
+  content.appendChild(textarea);
+
+  const errNote = document.createElement('div');
+  errNote.className = 'tmpl-error';
+  content.appendChild(errNote);
+
+  const buttons = document.createElement('div');
+  buttons.className = 'modal-buttons';
+  const cancel = document.createElement('button');
+  cancel.className = 'modal-btn';
+  cancel.textContent = window.t('Cancel');
+  cancel.onclick = () => overlay.remove();
+  const create = document.createElement('button');
+  create.className = 'modal-btn modal-btn-primary';
+  create.textContent = window.t('Create');
+  create.onclick = () => {
+    const res = (typeof window.createCustomTemplate === 'function')
+      ? window.createCustomTemplate(kind, nameInput.value, textarea.value)
+      : { ok: false, error: 'unavailable' };
+    if (res.ok) { overlay.remove(); return; }
+    errNote.textContent = res.error || '';
+  };
+  buttons.appendChild(cancel);
+  buttons.appendChild(create);
+  content.appendChild(buttons);
+
+  overlay.appendChild(content);
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  nameInput.focus();
+}
+window.openTemplateCreator = openTemplateCreator;
+
 // ── File Menu Definition ───────────────────────────────────────────────────
 const fileActions = [
   { label: 'New File', action: 'file_new' },
   { label: 'Import File', action: 'file_import' },
-  { type: 'submenu', label: 'Import Template ▸', items: typeof mdTemplates !== 'undefined' ? mdTemplates : [] },
+  { type: 'submenu', label: 'Import Template ▸', items: typeof mdTemplates !== 'undefined' ? mdTemplates : [], customKind: 'md' },
   { type: 'divider' },
   { label: 'Save as...', action: 'file_save_as' },
   { label: 'Export as .md', action: 'file_export_md' },
@@ -1029,15 +1093,46 @@ function buildMenu(container, actions) {
       item.items.forEach(subItem => {
         const subBtn = document.createElement('button');
         subBtn.className = 'menu-item';
-        subBtn.textContent = window.t(subItem.label);
+        /* User-authored template names are shown verbatim (not translated). */
+        subBtn.textContent = subItem.custom ? subItem.label : window.t(subItem.label);
         subBtn.onclick = (e) => {
           e.stopPropagation();
           insertWithUndo(0, 0, subItem.content);
           render();
           container.classList.remove('show');
         };
+        if (subItem.custom && item.customKind) {
+          const del = document.createElement('span');
+          del.className = 'tmpl-del';
+          del.textContent = '✕';
+          del.title = window.t('Delete template');
+          del.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!confirm(window.t('Delete template') + ` "${subItem.label}"?`)) return;
+            if (typeof window.deleteCustomTemplate === 'function') {
+              window.deleteCustomTemplate(item.customKind, subItem.label);
+            }
+          });
+          subBtn.appendChild(del);
+        }
         sub.appendChild(subBtn);
       });
+
+      /* Menus with a customKind offer creating a user template. */
+      if (item.customKind) {
+        const divi = document.createElement('div');
+        divi.className = 'menu-divider';
+        sub.appendChild(divi);
+        const newBtn = document.createElement('button');
+        newBtn.className = 'menu-item';
+        newBtn.textContent = window.t('New template…');
+        newBtn.onclick = (e) => {
+          e.stopPropagation();
+          container.classList.remove('show');
+          openTemplateCreator(item.customKind);
+        };
+        sub.appendChild(newBtn);
+      }
 
       wrapper.appendChild(sub);
       attachSubmenuHandlers(wrapper, sub);

@@ -656,6 +656,38 @@
       before !== 'none' && during === 'none' && zonePE() !== 'none';
   }
 
+  /* 11f. Custom templates: create/persist/duplicate-reject/delete via the
+     public API, "New template…" rows present in both submenus, and the
+     creator modal opens prefilled with the YAML starter. */
+  const customTemplates = {};
+  {
+    const subLabels = (container) => Array.from(
+      document.querySelectorAll(`${container} .submenu .menu-item`)).map((b) => b.textContent);
+    customTemplates.newRows =
+      subLabels('#toolbar-dropdown').some((t) => t.includes('New template'))
+      && subLabels('#file-dropdown').some((t) => t.includes('New template'));
+
+    const made = window.createCustomTemplate('yaml', 'E2E Tmpl', '---\ntitle: probe\n---\n');
+    const stored = () => JSON.parse(localStorage.getItem('revery_custom_templates') || '{}');
+    customTemplates.created = made.ok === true
+      && subLabels('#toolbar-dropdown').some((t) => t.includes('E2E Tmpl'))
+      && (stored().yaml || []).some((t) => t.label === 'E2E Tmpl');
+    customTemplates.duplicateRejected = window.createCustomTemplate('yaml', 'E2E Tmpl', 'x').ok === false;
+    customTemplates.emptyNameRejected = window.createCustomTemplate('md', '   ', 'x').ok === false;
+
+    window.openTemplateCreator('yaml');
+    const modal = document.getElementById('template-creator-modal');
+    customTemplates.creatorPrefilled = !!modal
+      && modal.querySelector('.tmpl-textarea').value.startsWith('---\ntitle: Title of document\nauthor: Mr. Revery\n---');
+    modal.querySelector('.modal-btn').click(); // Cancel
+    customTemplates.creatorCloses = !document.getElementById('template-creator-modal');
+
+    const gone = window.deleteCustomTemplate('yaml', 'E2E Tmpl');
+    customTemplates.deleted = gone.ok === true
+      && !subLabels('#toolbar-dropdown').some((t) => t.includes('E2E Tmpl'))
+      && !(stored().yaml || []).some((t) => t.label === 'E2E Tmpl');
+  }
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
@@ -764,5 +796,5 @@
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
            lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
-           outlineFontButtons, exportSuite };
+           outlineFontButtons, exportSuite, customTemplates };
 })()

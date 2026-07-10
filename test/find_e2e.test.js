@@ -139,4 +139,12 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
 
   // 14. outline +/- buttons scale only the outline font, persisted
   assert.equal(r.outlineFontButtons, true, 'outline font buttons must step and persist the existing setting');
+
+  // 15. custom templates: create/persist/duplicate-reject/delete via the
+  //     public API; "New template…" rows in both submenus; creator modal
+  //     prefilled with the YAML starter and closable
+  assert.deepEqual(r.customTemplates, {
+    newRows: true, created: true, duplicateRejected: true, emptyNameRejected: true,
+    creatorPrefilled: true, creatorCloses: true, deleted: true,
+  }, 'custom templates must be creatable, persisted, deduplicated, deletable, with the creator modal prefilled');
 });

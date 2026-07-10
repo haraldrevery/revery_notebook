@@ -2,7 +2,7 @@
 // ── Menu Actions Definition ────────────────────────────────────────────────
 const menuActions = [
   // Safely fallback to empty array if the external file didn't load
-  { type: 'submenu', label: 'Insert YAML ▸', items: typeof yamlTemplates !== 'undefined' ? yamlTemplates : [] },
+  { type: 'submenu', label: 'Insert YAML ▸', items: typeof yamlTemplates !== 'undefined' ? yamlTemplates : [], customKind: 'yaml' },
   { type: 'divider' },
   { label: 'Bold (Ctrl+B)', action: 'bold' },
   { label: 'Italic (Ctrl+I)', action: 'italic' },

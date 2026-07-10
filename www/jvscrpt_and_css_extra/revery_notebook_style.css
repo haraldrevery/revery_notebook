@@ -440,6 +440,34 @@ body:has(.menu-container.show) #outline-divider::after {
   pointer-events: none;
 }
 
+/* ── Custom templates: submenu ✕ + creator modal fields ─────────────────── */
+.tmpl-del {
+  margin-left: auto;
+  padding-left: 1em;
+  opacity: 0;
+  color: var(--text-muted);
+  transition: opacity 0.12s, color 0.12s;
+}
+.menu-item:hover .tmpl-del { opacity: 0.7; }
+.menu-item .tmpl-del:hover { opacity: 1; color: #f87171; }
+.tmpl-name { width: 100%; box-sizing: border-box; max-width: none; margin-bottom: 10px; }
+.tmpl-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 12em;
+  resize: vertical;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-md);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  padding: 8px 10px;
+}
+.tmpl-textarea:focus { outline: none; border-color: var(--accent, #7a8ee0); }
+.tmpl-error { color: #f87171; font-size: 0.72rem; min-height: 1.2em; margin-top: 8px; }
+
 /* ── Editor pane (Defaults to 33.33%) ── */
 #editor-pane {
   display: flex;
