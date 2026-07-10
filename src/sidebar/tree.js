@@ -526,39 +526,39 @@ async function renderTree() {
 
     const items = isMulti
       ? [
-          { label: `Rename ${selectedItems.size} items…`, action: () => renameSelectedNodes() },
-          { label: `Delete ${selectedItems.size} items`,  action: () => deleteSelectedNodes(), danger: true },
+          { label: window.t('Rename {n} items…').replace('{n}', selectedItems.size), action: () => renameSelectedNodes() },
+          { label: window.t('Delete {n} items').replace('{n}', selectedItems.size),  action: () => deleteSelectedNodes(), danger: true },
         ]
       : type === 'dir'
       ? [
-          { label: 'New File Here',    action: () => createNewFile(nodePath) },
-          { label: 'New Folder Here',  action: () => createNewFolder(nodePath) },
-          { label: 'Rename',           action: () => renameNode(nodePath, 'dir') },
+          { label: window.t('New File Here'),    action: () => createNewFile(nodePath) },
+          { label: window.t('New Folder Here'),  action: () => createNewFolder(nodePath) },
+          { label: window.t('Rename'),           action: () => renameNode(nodePath, 'dir') },
           { sep: true },
-          { label: 'Show in Explorer', action: () => window.NativeAPI.showInExplorer(nodePath) },
-          { label: 'Delete',           action: () => deleteNode(nodePath, 'dir'), danger: true },
+          { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(nodePath) },
+          { label: window.t('Delete'),           action: () => deleteNode(nodePath, 'dir'), danger: true },
         ]
       : nodeCategory === 'text'
       ? [
-          { label: 'Open',             action: () => openFile(nodePath) },
-          { label: 'Rename',           action: () => renameNode(nodePath, 'file') },
+          { label: window.t('Open'),             action: () => openFile(nodePath) },
+          { label: window.t('Rename'),           action: () => renameNode(nodePath, 'file') },
           { sep: true },
-          { label: 'Show in Explorer', action: () => window.NativeAPI.showInExplorer(nodePath) },
-          { label: 'Delete',           action: () => deleteNode(nodePath, 'file'), danger: true },
+          { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(nodePath) },
+          { label: window.t('Delete'),           action: () => deleteNode(nodePath, 'file'), danger: true },
         ]
       : nodeCategory === 'media'
       ? [
-          { label: 'Preview',          action: () => openMediaFile(nodePath) },
-          { label: 'Rename',           action: () => renameNode(nodePath, 'file') },
+          { label: window.t('Preview'),          action: () => openMediaFile(nodePath) },
+          { label: window.t('Rename'),           action: () => renameNode(nodePath, 'file') },
           { sep: true },
-          { label: 'Show in Explorer', action: () => window.NativeAPI.showInExplorer(nodePath) },
-          { label: 'Delete',           action: () => deleteNode(nodePath, 'file'), danger: true },
+          { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(nodePath) },
+          { label: window.t('Delete'),           action: () => deleteNode(nodePath, 'file'), danger: true },
         ]
       : /* other/unsupported */ [
-          { label: 'Rename',           action: () => renameNode(nodePath, 'file') },
+          { label: window.t('Rename'),           action: () => renameNode(nodePath, 'file') },
           { sep: true },
-          { label: 'Show in Explorer', action: () => window.NativeAPI.showInExplorer(nodePath) },
-          { label: 'Delete',           action: () => deleteNode(nodePath, 'file'), danger: true },
+          { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(nodePath) },
+          { label: window.t('Delete'),           action: () => deleteNode(nodePath, 'file'), danger: true },
         ];
 
     renderContextMenu(x, y, items);
@@ -608,10 +608,10 @@ async function renderTree() {
   function showRootContextMenu(x, y) {
     if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return;
     renderContextMenu(x, y, [
-      { label: 'New File',         action: () => createNewFile(S.rootPath) },
-      { label: 'New Folder',       action: () => createNewFolder(S.rootPath) },
+      { label: window.t('New File'),         action: () => createNewFile(S.rootPath) },
+      { label: window.t('New Folder'),       action: () => createNewFolder(S.rootPath) },
       { sep: true },
-      { label: 'Show in Explorer', action: () => window.NativeAPI.showInExplorer(S.rootPath) },
+      { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(S.rootPath) },
     ]);
   }
 

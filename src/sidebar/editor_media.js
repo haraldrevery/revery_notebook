@@ -60,8 +60,8 @@ function notifyIssues(errors) {
   if (!errors.length) return;
   window.NativeAPI.showMessageBox({
     type: 'warning',
-    title: 'Copy Issues',
-    message: `${errors.length} file(s) could not be added:`,
+    title: window.t('Copy Issues'),
+    message: window.t('{n} file(s) could not be added:').replace('{n}', errors.length),
     detail: errors.join('\n'),
   });
 }

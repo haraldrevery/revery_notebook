@@ -146,8 +146,8 @@ const execRename = async () => {
       console.error('[Sidebar] Inline rename failed:', err);
       docTitleEl.value = oldBaseName;
       await window.NativeAPI.showMessageBox({
-        type: 'error', title: 'Rename Failed',
-        message: `Could not rename file to "${safeName}".`,
+        type: 'error', title: window.t('Rename Failed'),
+        message: window.t('Could not rename file to "{name}".').replace('{name}', safeName),
         detail: String(err),
       });
     } finally {
@@ -218,8 +218,8 @@ try {
   _autoSaveCooldownUntil = Date.now() + AUTOSAVE_FAILURE_COOLDOWN_MS;
   _firstDirtyTime = 0;
   await window.NativeAPI.showMessageBox({
-    type: 'error', title: 'Save Failed',
-    message: `Could not write to:\n${pathToSave}`,
+    type: 'error', title: window.t('Save Failed'),
+    message: window.t('Could not write to:') + '\n' + pathToSave,
     detail: String(err)
   });
   return false;
@@ -460,8 +460,8 @@ export function initSaveEngine() {
               _scratchpadFailureWarned = true;
               window.NativeAPI.showMessageBox({
                 type: 'warning',
-                title: 'Could Not Create File',
-                message: 'A file could not be created to save your work.',
+                title: window.t('Could Not Create File'),
+                message: window.t('A file could not be created to save your work.'),
                 detail: String(err) + '\n\nYour typed content is still visible but has not been saved to disk. The app will retry automatically on your next keystroke.',
                 buttons: ['OK'],
                 defaultId: 0,

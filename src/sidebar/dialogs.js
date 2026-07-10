@@ -396,7 +396,7 @@ export function initDialogStyles() {
  * show which files a link update will touch — the user sees exactly what
  * will be modified before anything is written).
  */
-export function showConfirmDialog(promptText, detailLines = [], okLabel = 'OK') {
+export function showConfirmDialog(promptText, detailLines = [], okLabel = null) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'revery-input-overlay';
@@ -420,11 +420,11 @@ export function showConfirmDialog(promptText, detailLines = [], okLabel = 'OK') 
     btnRow.className = 'revery-input-buttons';
 
     const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
+    cancelBtn.textContent = window.t('Cancel');
     cancelBtn.className = 'revery-input-cancel';
 
     const okBtn = document.createElement('button');
-    okBtn.textContent = okLabel;
+    okBtn.textContent = okLabel || window.t('OK');
     okBtn.className = 'revery-input-ok';
 
     function finish(v) {
@@ -474,11 +474,11 @@ export function showInputDialog(promptText, defaultValue = '') {
       btnRow.className = 'revery-input-buttons';
 
       const cancelBtn = document.createElement('button');
-      cancelBtn.textContent = 'Cancel';
+      cancelBtn.textContent = window.t('Cancel');
       cancelBtn.className   = 'revery-input-cancel';
 
       const okBtn = document.createElement('button');
-      okBtn.textContent = 'OK';
+      okBtn.textContent = window.t('OK');
       okBtn.className   = 'revery-input-ok';
 
       function finish(value) {

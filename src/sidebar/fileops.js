@@ -79,10 +79,11 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
         const total = plans.reduce((a, p) => a + p.changes, 0);
         const names = plans.map((p) => p.path.replace(/\\/g, '/').split('/').pop());
         const shown = names.slice(0, 8);
-        if (names.length > shown.length) shown.push(`…and ${names.length - shown.length} more`);
+        if (names.length > shown.length) shown.push(window.t('…and {n} more').replace('{n}', names.length - shown.length));
         const ok = await showConfirmDialog(
-          `Update ${total} link${total === 1 ? '' : 's'} in ${plans.length} file${plans.length === 1 ? '' : 's'} so they keep working?`,
-          shown, 'Update links');
+          window.t('Update {n} link(s) in {m} file(s) so they keep working?')
+            .replace('{n}', total).replace('{m}', plans.length),
+          shown, window.t('Update links'));
         if (!ok) return;
       }
 
@@ -102,8 +103,8 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       }
       if (errors.length && window.NativeAPI.showMessageBox) {
         await window.NativeAPI.showMessageBox({
-          type: 'warning', title: 'Link Update',
-          message: `${errors.length} file(s) could not be updated (their links are unchanged):`,
+          type: 'warning', title: window.t('Link Update'),
+          message: window.t('{n} file(s) could not be updated (their links are unchanged):').replace('{n}', errors.length),
           detail: errors.join('\n'),
         });
       }
@@ -176,8 +177,8 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
 
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
-          type: 'warning', title: 'Undo Failed Partially',
-          message: `${errors.length} item(s) could not be moved back:`,
+          type: 'warning', title: window.t('Undo Failed Partially'),
+          message: window.t('{n} item(s) could not be moved back:').replace('{n}', errors.length),
           detail: errors.join('\n'),
         });
       }
@@ -271,8 +272,8 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
 
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
-          type: 'warning', title: 'Move Issues',
-          message: `${errors.length} item(s) could not be moved:`,
+          type: 'warning', title: window.t('Move Issues'),
+          message: window.t('{n} item(s) could not be moved:').replace('{n}', errors.length),
           detail: errors.join('\n'),
         });
       }
@@ -310,8 +311,8 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       const defaultBase = firstName.replace(/\.(md|txt)$/, '');
 
       const baseName = await showInputDialog(
-        `Rename ${paths.length} items — enter a base name\n` +
-        '(items will be named: name, name_2, name_3 …):',
+        window.t('Rename {n} items — enter a base name').replace('{n}', paths.length) +
+        '\n' + window.t('(items will be named: name, name_2, name_3 …):'),
         defaultBase
       );
       if (!baseName) return;
@@ -398,11 +399,11 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
 
       const result = await window.NativeAPI.showMessageBox({
         type: 'question',
-        buttons: ['Delete', 'Cancel'],
+        buttons: [window.t('Delete'), window.t('Cancel')],
         defaultId: 1,
-        title:  `Delete ${n} Item${n > 1 ? 's' : ''}`,
-        message: `Permanently delete ${n} item${n > 1 ? 's' : ''}?`,
-        detail: 'This cannot be undone.',
+        title:  window.t('Delete {n} item(s)').replace('{n}', n),
+        message: window.t('Permanently delete {n} item(s)?').replace('{n}', n),
+        detail: window.t('This cannot be undone.'),
       });
       if (result.response !== 0) return;
 
@@ -572,8 +573,8 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       content = await window.NativeAPI.readFile(filePath);
     } catch (err) {
       await window.NativeAPI.showMessageBox({
-        type: 'error', title: 'Open Failed',
-        message: `Could not read:\n${filePath}`,
+        type: 'error', title: window.t('Open Failed'),
+        message: window.t('Could not read:') + '\n' + filePath,
         detail: String(err)
       });
       return;
@@ -621,8 +622,8 @@ async function createNewFile(targetDir) {
     const dir = targetDir || S.selectedDirPath || S.rootPath;
     if (!dir) {
       await window.NativeAPI.showMessageBox({
-        type: 'info', title: 'No Folder Open',
-        message: 'Please open a project folder first.'
+        type: 'info', title: window.t('No Folder Open'),
+        message: window.t('Please open a project folder first.')
       });
       return;
     }
@@ -648,8 +649,8 @@ async function createNewFile(targetDir) {
         }
         console.error('[Sidebar] createFile failed:', err);
         await window.NativeAPI.showMessageBox({
-          type: 'error', title: 'Could Not Create File',
-          message: 'The file could not be created.',
+          type: 'error', title: window.t('Could Not Create File'),
+          message: window.t('The file could not be created.'),
           detail: String(err),
         });
         return;
@@ -671,7 +672,7 @@ async function createNewFile(targetDir) {
     const dir = targetDir || S.selectedDirPath || S.rootPath;
     if (!dir) return;
 
-    const name = await showInputDialog('New folder name:');
+    const name = await showInputDialog(window.t('New folder name:'));
     if (!name || !name.trim()) return;
 
     const safeName = name.trim().replace(/[/\\?%*:|"<>]/g, '_');
@@ -709,7 +710,7 @@ async function renameNode(nodePath, type) {
       const parts   = nodePath.replace(/\\/g, '/').split('/');
       const oldName = parts[parts.length - 1];
 
-      const newName = await showInputDialog(`Rename "${oldName}" to:`, oldName);
+      const newName = await showInputDialog(window.t('Rename "{name}" to:').replace('{name}', oldName), oldName);
       if (!newName || newName.trim() === oldName) return;
 
       const safeName  = newName.trim().replace(/[/\\?%*:|"<>]/g, '_');
@@ -777,9 +778,9 @@ async function deleteNode(nodePath, type) {
 
       const result = await window.NativeAPI.showMessageBox({
         type: 'question',
-        buttons: ['Move to Trash', 'Cancel'],
+        buttons: [window.t('Move to Trash'), window.t('Cancel')],
         defaultId: 1,
-        title: `Delete ${type === 'dir' ? 'Folder' : 'File'}`,
+        title: type === 'dir' ? window.t('Delete Folder') : window.t('Delete File'),
         message: `Move "${name}" to Trash?`,
         detail: type === 'dir'
           ? 'The folder and all its contents will be moved to your system trash. You can restore them from there.'

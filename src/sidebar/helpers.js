@@ -190,15 +190,15 @@ import { S } from './state.js';
 
     await window.NativeAPI.showMessageBox({
       type:    'warning',
-      title:   'Recovery Backup Files Found',
-      message: `${all.length} backup file(s) from a previous interrupted save were found.`,
+      title:   window.t('Recovery Backup Files Found'),
+      message: window.t('{n} backup file(s) from a previous interrupted save were found.').replace('{n}', all.length),
       detail:
         `These were created during a cross-device save that did not complete. ` +
         `The matching original file may be corrupted.\n\n${display}${overflow}\n\n` +
         `To recover: open the file in Revery and verify it looks correct. ` +
         `If it is corrupted, locate the .revery_bak file in your file manager ` +
         `and rename it to replace the original (drop the ".<timestamp>.revery_bak" suffix).`,
-      buttons: ['OK'],
+      buttons: [window.t('OK')],
     });
   }
 

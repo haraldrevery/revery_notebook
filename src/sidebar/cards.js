@@ -136,7 +136,7 @@ let _cardGeneration = 0;
          would otherwise read every text file in it off a slow disk. */
       loadCardPreview(entry.path, previewEl, generation);
     } else if (entry.type === 'dir') {
-      previewEl.textContent = 'Folder';
+      previewEl.textContent = window.t('Folder');
       previewEl.style.fontStyle = 'italic';
     }
 
@@ -258,8 +258,8 @@ let _cardGeneration = 0;
     if (!isAtRoot) {
       const backBtn = document.createElement('button');
       backBtn.className   = 'sidebar-card-back';
-      backBtn.textContent = '← Back';
-      backBtn.title       = 'Go up one level';
+      backBtn.textContent = '← ' + window.t('Back');
+      backBtn.title       = window.t('Go up one level');
       backBtn.addEventListener('click', () => {
         const parts = normDir.split('/');
         parts.pop();
@@ -283,7 +283,7 @@ let _cardGeneration = 0;
     /* ── Loading indicator ── */
     const loadingEl = document.createElement('div');
     loadingEl.className   = 'sidebar-loading';
-    loadingEl.textContent = 'Loading…';
+    loadingEl.textContent = window.t('Loading…');
     treeEl.appendChild(loadingEl);
 
     /* ── Fetch directory ── */
@@ -306,7 +306,7 @@ let _cardGeneration = 0;
     if (entries.length === 0) {
       const empty = document.createElement('div');
       empty.className   = 'sidebar-loading';
-      empty.textContent = 'Empty folder';
+      empty.textContent = window.t('Empty folder');
       treeEl.appendChild(empty);
       return;
     }

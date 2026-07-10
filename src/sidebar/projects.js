@@ -68,13 +68,13 @@ async function saveProjects(arr) {
     /* Header label */
     const hdr = document.createElement('div');
     hdr.className   = 'revery-projects-header';
-    hdr.textContent = 'Recent Projects';
+    hdr.textContent = window.t('Recent Projects');
     menu.appendChild(hdr);
 
     if (projects.length === 0) {
       const empty = document.createElement('div');
       empty.className   = 'revery-projects-empty';
-      empty.textContent = 'No recent projects yet';
+      empty.textContent = window.t('No recent projects yet');
       menu.appendChild(empty);
     } else {
       projects.forEach(proj => {
@@ -137,14 +137,14 @@ async function saveProjects(arr) {
     /* ── Browse for a new folder ── */
     const browseBtn = document.createElement('button');
     browseBtn.className   = 'revery-projects-action';
-    browseBtn.replaceChildren(icon('folder-open'), '  Browse for folder…');
+    browseBtn.replaceChildren(icon('folder-open'), '  ' + window.t('Browse for folder…'));
     browseBtn.addEventListener('click', () => { menu.remove(); promptOpenFolder(); });
     menu.appendChild(browseBtn);
 
     /* ── Manage projects ── */
     const manageBtn = document.createElement('button');
     manageBtn.className   = 'revery-projects-action';
-    manageBtn.replaceChildren(icon('sliders'), '  Manage projects…');
+    manageBtn.replaceChildren(icon('sliders'), '  ' + window.t('Manage projects…'));
     manageBtn.addEventListener('click', () => { menu.remove(); showManageProjectsModal(); });
     menu.appendChild(manageBtn);
 
@@ -188,13 +188,13 @@ async function saveProjects(arr) {
     /* Title */
     const titleEl = document.createElement('p');
     titleEl.style.cssText = 'font-weight: 400; font-size: 1rem; margin: 0 0 6px; padding-bottom: 10px; border-bottom: 1px solid var(--border, #444);';
-    titleEl.textContent   = 'Manage Projects';
+    titleEl.textContent   = window.t('Manage Projects');
     box.appendChild(titleEl);
 
     /* Hint */
     const hintEl = document.createElement('p');
     hintEl.style.cssText  = 'font-size: 0.8rem; opacity: 0.6; margin: 8px 0 12px;';
-    hintEl.textContent    = 'Remove folders from the quick-switch list. No files are deleted.';
+    hintEl.textContent    = window.t('Remove folders from the quick-switch list. No files are deleted.');
     box.appendChild(hintEl);
 
     /* Scrollable project list */
@@ -214,7 +214,7 @@ async function saveProjects(arr) {
       if (projects.length === 0) {
         const empty = document.createElement('div');
         empty.style.cssText   = 'padding: 20px 0; text-align: center; opacity: 0.5; font-size: 0.85rem;';
-        empty.textContent     = 'No projects in list';
+        empty.textContent     = window.t('No projects in list');
         listEl.appendChild(empty);
         return;
       }
@@ -245,8 +245,8 @@ async function saveProjects(arr) {
         const removeBtn = document.createElement('button');
         removeBtn.className = 'revery-input-cancel';
         removeBtn.style.cssText = 'padding: 3px 10px; font-size: 0.78rem; flex-shrink: 0; cursor: pointer;';
-        removeBtn.textContent   = 'Remove';
-        removeBtn.title         = 'Remove from list (does not delete files)';
+        removeBtn.textContent   = window.t('Remove');
+        removeBtn.title         = window.t('Remove from list (does not delete files)');
         removeBtn.addEventListener('click', () => {
           /* Always reload from storage, remove by index from fresh array */
           const current = loadProjects();
@@ -271,7 +271,7 @@ async function saveProjects(arr) {
     btnRow.style.marginTop = '14px';
     const doneBtn = document.createElement('button');
     doneBtn.className   = 'revery-input-ok';
-    doneBtn.textContent = 'Done';
+    doneBtn.textContent = window.t('Done');
     doneBtn.addEventListener('click', () => overlay.remove());
     btnRow.appendChild(doneBtn);
     box.appendChild(btnRow);

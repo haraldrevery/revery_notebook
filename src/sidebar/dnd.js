@@ -131,8 +131,8 @@ function getDropTargetDir(eventTarget) {
       }
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
-          type: 'warning', title: 'Copy Issues',
-          message: `${errors.length} file(s) could not be copied:`,
+          type: 'warning', title: window.t('Copy Issues'),
+          message: window.t('{n} file(s) could not be copied:').replace('{n}', errors.length),
           detail: errors.join('\n'),
         });
       }

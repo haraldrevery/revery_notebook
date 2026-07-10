@@ -328,10 +328,17 @@ if (guideTitle) guideTitle.textContent = window.t('User Guide');
     { id: 'sidebar-open-folder',    titleKey: 'Open folder…' },
     { id: 'sidebar-new-file',       titleKey: 'New .md file in root folder' },
     { id: 'sidebar-new-folder',     titleKey: 'New folder in root folder' },
+    { id: 'sidebar-search-btn',     titleKey: 'Search project (Ctrl+Shift+F)' },
+    { id: 'sidebar-view-btn',       titleKey: 'Switch to card view' },
     { id: 'sidebar-sort-btn',       titleKey: 'Sort files…' },
     { id: 'sidebar-card-smaller',   titleKey: 'Smaller cards' },
     { id: 'sidebar-card-larger',    titleKey: 'Larger cards' }
   ];
+  updateTitle('#btn-sidebar', 'Open project folder');
+  updateTitle('#btn-sidebar-mobile', 'Open project folder');
+  updateTitle('#win-btn-min', 'Minimize');
+  updateTitle('#win-btn-max', 'Maximize / Restore');
+  updateTitle('#win-btn-close', 'Close');
   sidebarButtons.forEach(({ id, titleKey }) => {
     const el = document.getElementById(id);
     if (el) el.title = window.t(titleKey);

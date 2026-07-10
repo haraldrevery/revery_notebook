@@ -53,7 +53,7 @@ function ensureUi() {
   input.autocomplete = 'off';
   const closeBtn = document.createElement('button');
   closeBtn.id = 'sidebar-search-close';
-  closeBtn.title = 'Close (Escape)';
+  closeBtn.title = window.t('Close (Escape)');
   closeBtn.textContent = '✕';
   row.appendChild(input);
   row.appendChild(closeBtn);

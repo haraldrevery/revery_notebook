@@ -393,7 +393,7 @@
       document.head.appendChild(style);
     })();
   }
-  function showConfirmDialog(promptText, detailLines = [], okLabel = "OK") {
+  function showConfirmDialog(promptText, detailLines = [], okLabel = null) {
     return new Promise((resolve) => {
       const overlay = document.createElement("div");
       overlay.className = "revery-input-overlay";
@@ -411,10 +411,10 @@
       const btnRow = document.createElement("div");
       btnRow.className = "revery-input-buttons";
       const cancelBtn = document.createElement("button");
-      cancelBtn.textContent = "Cancel";
+      cancelBtn.textContent = window.t("Cancel");
       cancelBtn.className = "revery-input-cancel";
       const okBtn = document.createElement("button");
-      okBtn.textContent = okLabel;
+      okBtn.textContent = okLabel || window.t("OK");
       okBtn.className = "revery-input-ok";
       function finish(v) {
         if (!document.body.contains(overlay)) return;
@@ -459,10 +459,10 @@
       const btnRow = document.createElement("div");
       btnRow.className = "revery-input-buttons";
       const cancelBtn = document.createElement("button");
-      cancelBtn.textContent = "Cancel";
+      cancelBtn.textContent = window.t("Cancel");
       cancelBtn.className = "revery-input-cancel";
       const okBtn = document.createElement("button");
-      okBtn.textContent = "OK";
+      okBtn.textContent = window.t("OK");
       okBtn.className = "revery-input-ok";
       function finish(value) {
         if (!document.body.contains(overlay)) return;
@@ -672,14 +672,14 @@
 \u2022 \u2026and ${all.length - 5} more` : "";
     await window.NativeAPI.showMessageBox({
       type: "warning",
-      title: "Recovery Backup Files Found",
-      message: `${all.length} backup file(s) from a previous interrupted save were found.`,
+      title: window.t("Recovery Backup Files Found"),
+      message: window.t("{n} backup file(s) from a previous interrupted save were found.").replace("{n}", all.length),
       detail: `These were created during a cross-device save that did not complete. The matching original file may be corrupted.
 
 ${display}${overflow}
 
 To recover: open the file in Revery and verify it looks correct. If it is corrupted, locate the .revery_bak file in your file manager and rename it to replace the original (drop the ".<timestamp>.revery_bak" suffix).`,
-      buttons: ["OK"]
+      buttons: [window.t("OK")]
     });
   }
 
@@ -963,12 +963,12 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     menu.className = "revery-projects-menu";
     const hdr = document.createElement("div");
     hdr.className = "revery-projects-header";
-    hdr.textContent = "Recent Projects";
+    hdr.textContent = window.t("Recent Projects");
     menu.appendChild(hdr);
     if (projects.length === 0) {
       const empty = document.createElement("div");
       empty.className = "revery-projects-empty";
-      empty.textContent = "No recent projects yet";
+      empty.textContent = window.t("No recent projects yet");
       menu.appendChild(empty);
     } else {
       projects.forEach((proj) => {
@@ -1014,7 +1014,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     menu.appendChild(sep);
     const browseBtn = document.createElement("button");
     browseBtn.className = "revery-projects-action";
-    browseBtn.replaceChildren(icon("folder-open"), "  Browse for folder\u2026");
+    browseBtn.replaceChildren(icon("folder-open"), "  " + window.t("Browse for folder\u2026"));
     browseBtn.addEventListener("click", () => {
       menu.remove();
       promptOpenFolder();
@@ -1022,7 +1022,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     menu.appendChild(browseBtn);
     const manageBtn = document.createElement("button");
     manageBtn.className = "revery-projects-action";
-    manageBtn.replaceChildren(icon("sliders"), "  Manage projects\u2026");
+    manageBtn.replaceChildren(icon("sliders"), "  " + window.t("Manage projects\u2026"));
     manageBtn.addEventListener("click", () => {
       menu.remove();
       showManageProjectsModal();
@@ -1054,11 +1054,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     box.style.cssText = "gap: 0; min-width: 360px; max-width: 520px; width: 90%;";
     const titleEl = document.createElement("p");
     titleEl.style.cssText = "font-weight: 400; font-size: 1rem; margin: 0 0 6px; padding-bottom: 10px; border-bottom: 1px solid var(--border, #444);";
-    titleEl.textContent = "Manage Projects";
+    titleEl.textContent = window.t("Manage Projects");
     box.appendChild(titleEl);
     const hintEl = document.createElement("p");
     hintEl.style.cssText = "font-size: 0.8rem; opacity: 0.6; margin: 8px 0 12px;";
-    hintEl.textContent = "Remove folders from the quick-switch list. No files are deleted.";
+    hintEl.textContent = window.t("Remove folders from the quick-switch list. No files are deleted.");
     box.appendChild(hintEl);
     const listEl = document.createElement("div");
     listEl.style.cssText = "overflow-y: auto; max-height: 55vh; display: flex; flex-direction: column; scrollbar-width: thin;";
@@ -1069,7 +1069,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (projects.length === 0) {
         const empty = document.createElement("div");
         empty.style.cssText = "padding: 20px 0; text-align: center; opacity: 0.5; font-size: 0.85rem;";
-        empty.textContent = "No projects in list";
+        empty.textContent = window.t("No projects in list");
         listEl.appendChild(empty);
         return;
       }
@@ -1093,8 +1093,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         const removeBtn = document.createElement("button");
         removeBtn.className = "revery-input-cancel";
         removeBtn.style.cssText = "padding: 3px 10px; font-size: 0.78rem; flex-shrink: 0; cursor: pointer;";
-        removeBtn.textContent = "Remove";
-        removeBtn.title = "Remove from list (does not delete files)";
+        removeBtn.textContent = window.t("Remove");
+        removeBtn.title = window.t("Remove from list (does not delete files)");
         removeBtn.addEventListener("click", () => {
           const current = loadProjects();
           const updated = current.filter(
@@ -1113,7 +1113,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     btnRow.style.marginTop = "14px";
     const doneBtn = document.createElement("button");
     doneBtn.className = "revery-input-ok";
-    doneBtn.textContent = "Done";
+    doneBtn.textContent = window.t("Done");
     doneBtn.addEventListener("click", () => overlay.remove());
     btnRow.appendChild(doneBtn);
     box.appendChild(btnRow);
@@ -1228,8 +1228,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         docTitleEl.value = oldBaseName;
         await window.NativeAPI.showMessageBox({
           type: "error",
-          title: "Rename Failed",
-          message: `Could not rename file to "${safeName}".`,
+          title: window.t("Rename Failed"),
+          message: window.t('Could not rename file to "{name}".').replace("{name}", safeName),
           detail: String(err)
         });
       } finally {
@@ -1275,9 +1275,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         _firstDirtyTime = 0;
         await window.NativeAPI.showMessageBox({
           type: "error",
-          title: "Save Failed",
-          message: `Could not write to:
-${pathToSave}`,
+          title: window.t("Save Failed"),
+          message: window.t("Could not write to:") + "\n" + pathToSave,
           detail: String(err)
         });
         return false;
@@ -1433,8 +1432,8 @@ ${pathToSave}`,
                 _scratchpadFailureWarned = true;
                 window.NativeAPI.showMessageBox({
                   type: "warning",
-                  title: "Could Not Create File",
-                  message: "A file could not be created to save your work.",
+                  title: window.t("Could Not Create File"),
+                  message: window.t("A file could not be created to save your work."),
                   detail: String(err) + "\n\nYour typed content is still visible but has not been saved to disk. The app will retry automatically on your next keystroke.",
                   buttons: ["OK"],
                   defaultId: 0
@@ -1753,11 +1752,11 @@ ${pathToSave}`,
         const total = plans.reduce((a, p) => a + p.changes, 0);
         const names = plans.map((p) => p.path.replace(/\\/g, "/").split("/").pop());
         const shown = names.slice(0, 8);
-        if (names.length > shown.length) shown.push(`\u2026and ${names.length - shown.length} more`);
+        if (names.length > shown.length) shown.push(window.t("\u2026and {n} more").replace("{n}", names.length - shown.length));
         const ok = await showConfirmDialog(
-          `Update ${total} link${total === 1 ? "" : "s"} in ${plans.length} file${plans.length === 1 ? "" : "s"} so they keep working?`,
+          window.t("Update {n} link(s) in {m} file(s) so they keep working?").replace("{n}", total).replace("{m}", plans.length),
           shown,
-          "Update links"
+          window.t("Update links")
         );
         if (!ok) return;
       }
@@ -1778,8 +1777,8 @@ ${pathToSave}`,
       if (errors.length && window.NativeAPI.showMessageBox) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
-          title: "Link Update",
-          message: `${errors.length} file(s) could not be updated (their links are unchanged):`,
+          title: window.t("Link Update"),
+          message: window.t("{n} file(s) could not be updated (their links are unchanged):").replace("{n}", errors.length),
           detail: errors.join("\n")
         });
       }
@@ -1832,8 +1831,8 @@ ${pathToSave}`,
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
-          title: "Undo Failed Partially",
-          message: `${errors.length} item(s) could not be moved back:`,
+          title: window.t("Undo Failed Partially"),
+          message: window.t("{n} item(s) could not be moved back:").replace("{n}", errors.length),
           detail: errors.join("\n")
         });
       }
@@ -1901,8 +1900,8 @@ ${pathToSave}`,
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
-          title: "Move Issues",
-          message: `${errors.length} item(s) could not be moved:`,
+          title: window.t("Move Issues"),
+          message: window.t("{n} item(s) could not be moved:").replace("{n}", errors.length),
           detail: errors.join("\n")
         });
       }
@@ -1926,8 +1925,7 @@ ${pathToSave}`,
       const firstName = paths[0].replace(/\\/g, "/").split("/").pop();
       const defaultBase = firstName.replace(/\.(md|txt)$/, "");
       const baseName = await showInputDialog(
-        `Rename ${paths.length} items \u2014 enter a base name
-(items will be named: name, name_2, name_3 \u2026):`,
+        window.t("Rename {n} items \u2014 enter a base name").replace("{n}", paths.length) + "\n" + window.t("(items will be named: name, name_2, name_3 \u2026):"),
         defaultBase
       );
       if (!baseName) return;
@@ -1999,11 +1997,11 @@ ${pathToSave}`,
       const n = paths.length;
       const result = await window.NativeAPI.showMessageBox({
         type: "question",
-        buttons: ["Delete", "Cancel"],
+        buttons: [window.t("Delete"), window.t("Cancel")],
         defaultId: 1,
-        title: `Delete ${n} Item${n > 1 ? "s" : ""}`,
-        message: `Permanently delete ${n} item${n > 1 ? "s" : ""}?`,
-        detail: "This cannot be undone."
+        title: window.t("Delete {n} item(s)").replace("{n}", n),
+        message: window.t("Permanently delete {n} item(s)?").replace("{n}", n),
+        detail: window.t("This cannot be undone.")
       });
       if (result.response !== 0) return;
       for (const p of paths) {
@@ -2110,9 +2108,8 @@ ${pathToSave}`,
     } catch (err) {
       await window.NativeAPI.showMessageBox({
         type: "error",
-        title: "Open Failed",
-        message: `Could not read:
-${filePath}`,
+        title: window.t("Open Failed"),
+        message: window.t("Could not read:") + "\n" + filePath,
         detail: String(err)
       });
       return;
@@ -2142,8 +2139,8 @@ ${filePath}`,
     if (!dir) {
       await window.NativeAPI.showMessageBox({
         type: "info",
-        title: "No Folder Open",
-        message: "Please open a project folder first."
+        title: window.t("No Folder Open"),
+        message: window.t("Please open a project folder first.")
       });
       return;
     }
@@ -2164,8 +2161,8 @@ ${filePath}`,
         console.error("[Sidebar] createFile failed:", err);
         await window.NativeAPI.showMessageBox({
           type: "error",
-          title: "Could Not Create File",
-          message: "The file could not be created.",
+          title: window.t("Could Not Create File"),
+          message: window.t("The file could not be created."),
           detail: String(err)
         });
         return;
@@ -2183,7 +2180,7 @@ ${filePath}`,
   async function createNewFolder(targetDir) {
     const dir = targetDir || S.selectedDirPath || S.rootPath;
     if (!dir) return;
-    const name = await showInputDialog("New folder name:");
+    const name = await showInputDialog(window.t("New folder name:"));
     if (!name || !name.trim()) return;
     const safeName = name.trim().replace(/[/\\?%*:|"<>]/g, "_");
     const sep = dir.endsWith("/") || dir.endsWith("\\") ? "" : "/";
@@ -2209,7 +2206,7 @@ ${filePath}`,
     try {
       const parts = nodePath.replace(/\\/g, "/").split("/");
       const oldName = parts[parts.length - 1];
-      const newName = await showInputDialog(`Rename "${oldName}" to:`, oldName);
+      const newName = await showInputDialog(window.t('Rename "{name}" to:').replace("{name}", oldName), oldName);
       if (!newName || newName.trim() === oldName) return;
       const safeName = newName.trim().replace(/[/\\?%*:|"<>]/g, "_");
       const finalName = type === "file" && !safeName.includes(".") ? safeName + oldName.substring(oldName.lastIndexOf(".")) : safeName;
@@ -2264,9 +2261,9 @@ ${filePath}`,
       const name = nodePath.replace(/\\/g, "/").split("/").pop();
       const result = await window.NativeAPI.showMessageBox({
         type: "question",
-        buttons: ["Move to Trash", "Cancel"],
+        buttons: [window.t("Move to Trash"), window.t("Cancel")],
         defaultId: 1,
-        title: `Delete ${type === "dir" ? "Folder" : "File"}`,
+        title: type === "dir" ? window.t("Delete Folder") : window.t("Delete File"),
         message: `Move "${name}" to Trash?`,
         detail: type === "dir" ? "The folder and all its contents will be moved to your system trash. You can restore them from there." : "The file will be moved to your system trash. You can restore it from there."
       });
@@ -2772,34 +2769,34 @@ ${filePath}`,
     const isMulti = selectedItems.size > 1 && selectedItems.has(nodePath);
     const nodeCategory = type === "file" ? getFileCategory(nodePath.replace(/\\/g, "/").split("/").pop()) : "dir";
     const items = isMulti ? [
-      { label: `Rename ${selectedItems.size} items\u2026`, action: () => renameSelectedNodes() },
-      { label: `Delete ${selectedItems.size} items`, action: () => deleteSelectedNodes(), danger: true }
+      { label: window.t("Rename {n} items\u2026").replace("{n}", selectedItems.size), action: () => renameSelectedNodes() },
+      { label: window.t("Delete {n} items").replace("{n}", selectedItems.size), action: () => deleteSelectedNodes(), danger: true }
     ] : type === "dir" ? [
-      { label: "New File Here", action: () => createNewFile(nodePath) },
-      { label: "New Folder Here", action: () => createNewFolder(nodePath) },
-      { label: "Rename", action: () => renameNode(nodePath, "dir") },
+      { label: window.t("New File Here"), action: () => createNewFile(nodePath) },
+      { label: window.t("New Folder Here"), action: () => createNewFolder(nodePath) },
+      { label: window.t("Rename"), action: () => renameNode(nodePath, "dir") },
       { sep: true },
-      { label: "Show in Explorer", action: () => window.NativeAPI.showInExplorer(nodePath) },
-      { label: "Delete", action: () => deleteNode(nodePath, "dir"), danger: true }
+      { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(nodePath) },
+      { label: window.t("Delete"), action: () => deleteNode(nodePath, "dir"), danger: true }
     ] : nodeCategory === "text" ? [
-      { label: "Open", action: () => openFile(nodePath) },
-      { label: "Rename", action: () => renameNode(nodePath, "file") },
+      { label: window.t("Open"), action: () => openFile(nodePath) },
+      { label: window.t("Rename"), action: () => renameNode(nodePath, "file") },
       { sep: true },
-      { label: "Show in Explorer", action: () => window.NativeAPI.showInExplorer(nodePath) },
-      { label: "Delete", action: () => deleteNode(nodePath, "file"), danger: true }
+      { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(nodePath) },
+      { label: window.t("Delete"), action: () => deleteNode(nodePath, "file"), danger: true }
     ] : nodeCategory === "media" ? [
-      { label: "Preview", action: () => openMediaFile(nodePath) },
-      { label: "Rename", action: () => renameNode(nodePath, "file") },
+      { label: window.t("Preview"), action: () => openMediaFile(nodePath) },
+      { label: window.t("Rename"), action: () => renameNode(nodePath, "file") },
       { sep: true },
-      { label: "Show in Explorer", action: () => window.NativeAPI.showInExplorer(nodePath) },
-      { label: "Delete", action: () => deleteNode(nodePath, "file"), danger: true }
+      { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(nodePath) },
+      { label: window.t("Delete"), action: () => deleteNode(nodePath, "file"), danger: true }
     ] : (
       /* other/unsupported */
       [
-        { label: "Rename", action: () => renameNode(nodePath, "file") },
+        { label: window.t("Rename"), action: () => renameNode(nodePath, "file") },
         { sep: true },
-        { label: "Show in Explorer", action: () => window.NativeAPI.showInExplorer(nodePath) },
-        { label: "Delete", action: () => deleteNode(nodePath, "file"), danger: true }
+        { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(nodePath) },
+        { label: window.t("Delete"), action: () => deleteNode(nodePath, "file"), danger: true }
       ]
     );
     renderContextMenu(x, y, items);
@@ -2838,10 +2835,10 @@ ${filePath}`,
   function showRootContextMenu(x, y) {
     if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return;
     renderContextMenu(x, y, [
-      { label: "New File", action: () => createNewFile(S.rootPath) },
-      { label: "New Folder", action: () => createNewFolder(S.rootPath) },
+      { label: window.t("New File"), action: () => createNewFile(S.rootPath) },
+      { label: window.t("New Folder"), action: () => createNewFolder(S.rootPath) },
       { sep: true },
-      { label: "Show in Explorer", action: () => window.NativeAPI.showInExplorer(S.rootPath) }
+      { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(S.rootPath) }
     ]);
   }
   function highlightActiveFile(filePath) {
@@ -2980,7 +2977,7 @@ ${filePath}`,
     if (category === "text" && !window.slowHardwareMode) {
       loadCardPreview(entry.path, previewEl, generation);
     } else if (entry.type === "dir") {
-      previewEl.textContent = "Folder";
+      previewEl.textContent = window.t("Folder");
       previewEl.style.fontStyle = "italic";
     }
     body.append(titleEl, previewEl);
@@ -3073,8 +3070,8 @@ ${filePath}`,
     if (!isAtRoot) {
       const backBtn = document.createElement("button");
       backBtn.className = "sidebar-card-back";
-      backBtn.textContent = "\u2190 Back";
-      backBtn.title = "Go up one level";
+      backBtn.textContent = "\u2190 " + window.t("Back");
+      backBtn.title = window.t("Go up one level");
       backBtn.addEventListener("click", () => {
         const parts = normDir.split("/");
         parts.pop();
@@ -3094,7 +3091,7 @@ ${filePath}`,
     treeEl.appendChild(navEl);
     const loadingEl = document.createElement("div");
     loadingEl.className = "sidebar-loading";
-    loadingEl.textContent = "Loading\u2026";
+    loadingEl.textContent = window.t("Loading\u2026");
     treeEl.appendChild(loadingEl);
     let entries;
     try {
@@ -3110,7 +3107,7 @@ ${filePath}`,
     if (entries.length === 0) {
       const empty = document.createElement("div");
       empty.className = "sidebar-loading";
-      empty.textContent = "Empty folder";
+      empty.textContent = window.t("Empty folder");
       treeEl.appendChild(empty);
       return;
     }
@@ -3243,8 +3240,8 @@ ${filePath}`,
     if (!errors.length) return;
     window.NativeAPI.showMessageBox({
       type: "warning",
-      title: "Copy Issues",
-      message: `${errors.length} file(s) could not be added:`,
+      title: window.t("Copy Issues"),
+      message: window.t("{n} file(s) could not be added:").replace("{n}", errors.length),
       detail: errors.join("\n")
     });
   }
@@ -3436,8 +3433,8 @@ ${filePath}`,
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
-          title: "Copy Issues",
-          message: `${errors.length} file(s) could not be copied:`,
+          title: window.t("Copy Issues"),
+          message: window.t("{n} file(s) could not be copied:").replace("{n}", errors.length),
           detail: errors.join("\n")
         });
       }
@@ -4111,7 +4108,7 @@ Restore these changes, or discard and keep the saved version.`,
     input.autocomplete = "off";
     const closeBtn = document.createElement("button");
     closeBtn.id = "sidebar-search-close";
-    closeBtn.title = "Close (Escape)";
+    closeBtn.title = window.t("Close (Escape)");
     closeBtn.textContent = "\u2715";
     row.appendChild(input);
     row.appendChild(closeBtn);
