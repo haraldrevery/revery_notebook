@@ -923,7 +923,7 @@ END OF TERMS AND CONDITIONS</pre>
         <table class="mod-table">
           <tbody>
             <tr><td class="mod-td-w52">Ctrl + F</td><td class="mod-td">Open Find / Replace</td></tr>
-            <tr><td class="mod-td-w52">Ctrl + Z</td><td class="mod-td">Undo</td></tr>
+            <tr><td class="mod-td-w52">Ctrl + Z</td><td class="mod-td">Undo (outside the editor: undoes the last file move/rename)</td></tr>
             <tr><td class="mod-td-w52">Ctrl + Y</td><td class="mod-td">Redo</td></tr>
             <tr><td class="mod-td-w52">Ctrl + S</td><td class="mod-td">Export / Save file</td></tr>
             <tr><td class="mod-td-w52">Tab (in editor)</td><td class="mod-td">Insert 4 spaces</td></tr>
@@ -952,8 +952,12 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>YAML suggestions</strong> — click into the frontmatter block (the <code>---</code> section at the top of a note) and a menu offers the keys and values already used across your project, so tags and metadata never need retyping. Arrow keys select, Enter inserts, Escape closes; it also opens as you type. Works only inside frontmatter.</li>
           <li><strong>Project search</strong> (desktop) — the magnifier in the file panel (or Ctrl+Shift+F) searches every note in your project. Click a result to open the file with the match selected; Escape brings the file tree back. Plain text matching — use the in-document find bar (Ctrl+F) for regex.</li>
           <li><strong>Outline text size</strong> — the − and + buttons in the Outline panel header scale just the outline list (also under Settings → Outline font size); nothing else in the UI changes.</li>
-          <li><strong>PDF export</strong> — File menu → Export as .pdf opens an options window: optional front page (title, author, a low-opacity background image, centered or corner layout), clickable table of contents, article or book layout, margins, font size, page size and page numbers. It renders exactly like the preview (fonts, code colors, math). On the desktop app it saves a real PDF; in the browser it opens the system print dialog (choose “Save as PDF”).</li>
-          <li><strong>LaTeX project export</strong> — File menu → LaTeX project (.zip) exports a ready-to-compile folder: main.tex plus an images/ folder with every referenced picture. Options: pdflatex or xelatex, article/report/book template, title page and table of contents. (In the browser it downloads a single .tex file.)</li>
+          <li><strong>PDF export</strong> — File menu → Export as .pdf opens an options window: optional front page (title, author, a low-opacity cover image — one of the built-in backgrounds or your own — centered or corner layout), clickable table of contents, article or book layout, margins, font, font size (8–18 pt), page size (A4/A5/A6/Letter), page numbers, and optional page breaks before every H1 and/or H2. It renders like the preview (code colors, math; with the Harald font, bold text shows as underlined — its brand style). The Electron desktop app saves the PDF directly; on Tauri and in the browser the system print dialog opens (choose “Save as PDF”).</li>
+          <li><strong>LaTeX project export</strong> — File menu → LaTeX project (.zip) exports a ready-to-compile folder: main.tex plus an images/ folder with every referenced picture. Options: pdflatex or xelatex, five templates — Article, Report, Book, plus the styled Book (Revery) and Homework (Revery) — title page, table of contents on its own page, and optional page breaks before H1/H2. The Revery templates need XeLaTeX (the menu only shows templates your chosen engine can compile), and Book (Revery) bundles its fonts into the zip. (In the browser it downloads a single .tex file.)</li>
+          <li><strong>Custom templates</strong> — the Insert YAML ▸ (Toolbar menu) and Import Template ▸ (File menu) lists end with <em>New template…</em>: give it a name, write the content, press Create — it appears in the menu right away and is stored on this computer. Hover a custom entry and click the ✕ to delete it; the built-in templates are untouchable.</li>
+          <li><strong>Path suggestions in links</strong> (desktop) — typing inside a link destination like <code>![image](here)</code> opens a dropdown of the folders, images and notes at that spot in your project. Arrow keys + Enter accept; picking a folder inserts it and shows the next level.</li>
+          <li><strong>Links follow renames</strong> (desktop) — renaming or moving a file or folder offers to update every markdown link that points at it (you are shown exactly which files change before anything is written). Undo (Ctrl+Z with the editor unfocused) restores the links too.</li>
+          <li><strong>Advanced Options</strong> — click the top bar logo → Advanced Options: currently the logo position (centered, or in the left corner next to the File button). More advanced settings will live here over time.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
@@ -964,7 +968,7 @@ END OF TERMS AND CONDITIONS</pre>
           <tbody>
             <tr><td class="mod-td-4"># Heading 1</td><td>Large heading (Chapters)</td></tr>
             <tr><td class="mod-td-4">## Heading 2</td><td>Medium heading (Subchapters)</td></tr>
-            <tr><td class="mod-td-4">**bold**</td><td><strong>bold</strong></td></tr>
+            <tr><td class="mod-td-4">**bold**</td><td><strong>bold</strong> (shown underlined under the Harald font)</td></tr>
             <tr><td class="mod-td-4">*italic*</td><td><em>italic</em></td></tr>
             <tr><td class="mod-td-4">~~strikethrough~~</td><td><s>strikethrough</s></td></tr>
             <tr><td class="mod-td-4">\`inline code\`</td><td>inline code</td></tr>
@@ -995,7 +999,7 @@ END OF TERMS AND CONDITIONS</pre>
         <table class="mod-table">
           <tbody>
             <tr><td class="mod-td-w52">Ctrl + F</td><td class="mod-td">Öppna Sök / Ersätt</td></tr>
-            <tr><td class="mod-td-w52">Ctrl + Z</td><td class="mod-td">Ångra</td></tr>
+            <tr><td class="mod-td-w52">Ctrl + Z</td><td class="mod-td">Ångra (utanför redigeraren: ångrar senaste filflytt/namnbyte)</td></tr>
             <tr><td class="mod-td-w52">Ctrl + Y</td><td class="mod-td">Gör om</td></tr>
             <tr><td class="mod-td-w52">Ctrl + S</td><td class="mod-td">Exportera / spara fil</td></tr>
             <tr><td class="mod-td-w52">Tab (i redigeraren)</td><td class="mod-td">Infoga 4 mellanslag</td></tr>
@@ -1024,8 +1028,12 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>YAML-förslag</strong> — klicka i frontmatter-blocket (<code>---</code>-sektionen överst i en anteckning) så visas en meny med nycklar och värden som redan används i ditt projekt, så taggar och metadata aldrig behöver skrivas om. Piltangenter väljer, Enter infogar, Escape stänger; menyn öppnas också medan du skriver. Fungerar bara inuti frontmatter.</li>
           <li><strong>Projektsökning</strong> (skrivbord) — förstoringsglaset i filpanelen (eller Ctrl+Shift+F) söker i alla anteckningar i ditt projekt. Klicka på en träff för att öppna filen med träffen markerad; Escape tar tillbaka filträdet. Ren textsökning — använd dokumentsökningen (Ctrl+F) för regex.</li>
           <li><strong>Dispositionens textstorlek</strong> — knapparna − och + i dispositionspanelens rubrik skalar bara dispositionslistan (finns även under Inställningar → Dispositionens teckenstorlek); inget annat i gränssnittet påverkas.</li>
-          <li><strong>PDF-export</strong> — Arkiv-menyn → Exportera som .pdf öppnar ett alternativfönster: valfri förstasida (titel, författare, en bakgrundsbild med låg opacitet, centrerad eller hörnlayout), klickbar innehållsförteckning, artikel- eller boklayout, marginaler, teckenstorlek, sidstorlek och sidnummer. Den renderas exakt som förhandsgranskningen (typsnitt, kodfärger, matematik). I skrivbordsappen sparas en riktig PDF; i webbläsaren öppnas systemets utskriftsdialog (välj ”Spara som PDF”).</li>
-          <li><strong>LaTeX-projektexport</strong> — Arkiv-menyn → LaTeX-projekt (.zip) exporterar en färdig att kompilera-mapp: main.tex plus en images/-mapp med alla refererade bilder. Alternativ: pdflatex eller xelatex, mall för artikel/rapport/bok, titelsida och innehållsförteckning. (I webbläsaren laddas en enda .tex-fil ner.)</li>
+          <li><strong>PDF-export</strong> — Arkiv-menyn → Exportera som .pdf öppnar ett alternativfönster: valfri förstasida (titel, författare, en omslagsbild med låg opacitet — en av de inbyggda bakgrunderna eller en egen — centrerad eller hörnlayout), klickbar innehållsförteckning, artikel- eller boklayout, marginaler, typsnitt, teckenstorlek (8–18 pt), sidstorlek (A4/A5/A6/Letter), sidnummer och valfria sidbrytningar före varje H1 och/eller H2. Den renderas som förhandsgranskningen (kodfärger, matematik; med Harald-typsnittet visas fet text understruken — dess varumärkesstil). Electron-skrivbordsappen sparar PDF:en direkt; på Tauri och i webbläsaren öppnas systemets utskriftsdialog (välj ”Spara som PDF”).</li>
+          <li><strong>LaTeX-projektexport</strong> — Arkiv-menyn → LaTeX-projekt (.zip) exporterar en färdig att kompilera-mapp: main.tex plus en images/-mapp med alla refererade bilder. Alternativ: pdflatex eller xelatex, fem mallar — Artikel, Rapport, Bok samt de stilade Bok (Revery) och Inlämning (Revery) — titelsida, innehållsförteckning på egen sida och valfria sidbrytningar före H1/H2. Revery-mallarna kräver XeLaTeX (menyn visar bara mallar som den valda motorn kan kompilera), och Bok (Revery) paketerar sina typsnitt i zip-filen. (I webbläsaren laddas en enda .tex-fil ner.)</li>
+          <li><strong>Egna mallar</strong> — listorna Infoga YAML ▸ (Verktyg-menyn) och Importera mall ▸ (Arkiv-menyn) slutar med <em>Ny mall…</em>: ge den ett namn, skriv innehållet, tryck Skapa — den dyker upp i menyn direkt och sparas på den här datorn. Håll muspekaren över en egen mall och klicka på ✕ för att radera den; de inbyggda mallarna kan inte ändras.</li>
+          <li><strong>Sökvägsförslag i länkar</strong> (skrivbord) — när du skriver i en länkdestination som <code>![bild](här)</code> öppnas en meny med mappar, bilder och anteckningar på den platsen i ditt projekt. Piltangenter + Enter väljer; väljer du en mapp infogas den och nästa nivå visas.</li>
+          <li><strong>Länkar följer namnbyten</strong> (skrivbord) — när du byter namn på eller flyttar en fil eller mapp erbjuds du att uppdatera alla markdown-länkar som pekar på den (du ser exakt vilka filer som ändras innan något skrivs). Ångra (Ctrl+Z när redigeraren inte har fokus) återställer även länkarna.</li>
+          <li><strong>Avancerade alternativ</strong> — klicka på logotypen i topplisten → Avancerade alternativ: för närvarande logotypens position (centrerad, eller i vänstra hörnet bredvid Arkiv-knappen). Fler avancerade inställningar hamnar här med tiden.</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
@@ -1036,7 +1044,7 @@ END OF TERMS AND CONDITIONS</pre>
           <tbody>
             <tr><td class="mod-td-4"># Rubrik 1</td><td>Stor rubrik (Kapitel)</td></tr>
             <tr><td class="mod-td-4">## Rubrik 2</td><td>Mellanrubrik (Delkapitel)</td></tr>
-            <tr><td class="mod-td-4">**fet**</td><td><strong>fet</strong></td></tr>
+            <tr><td class="mod-td-4">**fet**</td><td><strong>fet</strong> (visas understruken med Harald-typsnittet)</td></tr>
             <tr><td class="mod-td-4">*kursiv*</td><td><em>kursiv</em></td></tr>
             <tr><td class="mod-td-4">~~genomstruken~~</td><td><s>genomstruken</s></td></tr>
             <tr><td class="mod-td-4">\`inline-kod\`</td><td>inline-kod</td></tr>
