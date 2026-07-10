@@ -590,6 +590,41 @@
     && !/\\newpage/.test(window.exporterBuildLatex({}).tex)
     && !/\\newpage\s*\n\\section\{Intro\}/.test(window.exporterBuildLatex({ newPageH1: true }).tex);
 
+  /* 11b-2. Engine-aware print CSS: Chromium (Electron) keeps the named
+     full-bleed cover; the webkit/scoped targets get an absolute-mm cover
+     inside the page margins and NO viewport units — the Chromium-only
+     vh/named-page combo is exactly what broke the front page (and the TOC
+     overlap it cascaded into) on WebKitGTK and in browsers. */
+  const pdfWk = window.exporterBuildPdfHtml(
+    { frontPage: true, frontTitle: 'T', toc: true, marginPreset: 'wide', pageSize: 'Letter' }, 'webkit');
+  exportSuite.engineSafeCover =
+    !pdfWk.html.includes('page: cover') && !pdfWk.html.includes('@page cover')
+    && !pdfWk.html.includes('100vh') && pdfWk.html.includes('height: 219.4mm')
+    && pdfF.html.includes('height: 279.4mm') && !pdfF.html.includes('100vh');
+
+  /* 11b-3. Custom fonts in the PDF export: system-kind resolves by family,
+     file-kind embeds its data-URL @font-face into the standalone document,
+     the export modal's Font dropdown lists them, and a deleted font falls
+     back to Serif. */
+  {
+    const pfSys = window.createCustomFont({ kind: 'system', label: 'E2E PdfFont', family: 'Verdana' });
+    const pfFile = window.createCustomFont({ kind: 'file', label: 'E2E PdfFileFont', data: 'data:font/woff2;base64,AAAA' });
+    const sysHtml = window.exporterBuildPdfHtml({ font: 'custom:' + pfSys.id }).html;
+    const fileHtml = window.exporterBuildPdfHtml({ font: 'custom:' + pfFile.id }).html;
+    window.exporterOpen('pdf');
+    const modalFonts = Array.from(document.querySelectorAll('#export-modal .export-dd-item'))
+      .map((b) => b.textContent);
+    document.querySelector('#export-modal .modal-buttons .modal-btn').click(); // Cancel
+    window.deleteCustomFont(pfSys.id);
+    window.deleteCustomFont(pfFile.id);
+    exportSuite.pdfCustomFonts = pfSys.ok === true && pfFile.ok === true
+      && sysHtml.includes('"Verdana", sans-serif')
+      && fileHtml.includes('RvCustom-') && fileHtml.includes('data:font/woff2')
+      && modalFonts.some((t) => t.includes('E2E PdfFont'));
+    exportSuite.pdfCustomFontFallback = window.exporterBuildPdfHtml({ font: 'custom:' + pfSys.id })
+      .html.includes("Georgia, 'Times New Roman', serif");
+  }
+
   /* 11c. Brand aesthetic templates: extbook/article documentclass + styled
      preamble, FORCED xelatex (even when pdflatex is passed), correct heading
      depth, and the book template reports its bundled fonts. */

@@ -698,6 +698,17 @@ function _saveCustomFonts(fonts) {
   }
 }
 
+/* @font-face rules for every file-kind custom font. Shared by the live
+   page (style element below) and the PDF export's standalone documents
+   (via window.getCustomFontFaceCss), so an imported font renders
+   identically on screen and in print. */
+function _customFontFaceCss() {
+  return _loadCustomFonts()
+    .filter((f) => f.kind === 'file')
+    .map((f) => `@font-face { font-family: '${f.family}'; src: url('${f.data}'); font-display: swap; }`)
+    .join('\n');
+}
+
 /* One <style> holds every file-kind @font-face; regenerated wholesale so
    create/delete can never leave stale faces behind. */
 function _applyCustomFontFaces() {
@@ -707,11 +718,15 @@ function _applyCustomFontFaces() {
     styleEl.id = 'custom-fonts-css';
     document.head.appendChild(styleEl);
   }
-  styleEl.textContent = _loadCustomFonts()
-    .filter((f) => f.kind === 'file')
-    .map((f) => `@font-face { font-family: '${f.family}'; src: url('${f.data}'); font-display: swap; }`)
-    .join('\n');
+  styleEl.textContent = _customFontFaceCss();
 }
+
+/* Read-only hooks for the PDF exporter (markdown_editor_export.js): the
+   custom-font list for its Font dropdown, and the @font-face CSS to embed
+   in standalone print documents. */
+window.getCustomFonts = () => _loadCustomFonts()
+  .map(({ id, label, family, kind }) => ({ id, label, family, kind }));
+window.getCustomFontFaceCss = _customFontFaceCss;
 
 /* Menu value 'custom:<id>' → CSS font-family stack, for applyFontTypes. */
 function _customFontMapEntries() {

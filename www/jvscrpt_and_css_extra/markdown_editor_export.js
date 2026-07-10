@@ -735,6 +735,21 @@
   };
   /* A4/A5/A6 are CSS @page size keywords; Letter is 'letter'. */
   const PAGE_SIZE = { A4: 'A4', A5: 'A5', A6: 'A6', Letter: 'letter' };
+  /* Page HEIGHTS in mm — the cover is sized in absolute mm computed here,
+     never with viewport units: print-vh and CSS named pages are
+     Chromium-only, which is exactly what broke the front page (and the
+     TOC overlap it cascaded into) on WebKitGTK and in browsers. */
+  const PAGE_H_MM = { A4: 297, A5: 210, A6: 148, Letter: 279.4 };
+
+  /* Resolve the chosen PDF font — built-ins or a user-added custom font
+     ('custom:<id>', provided by markdown_editor_menus.js). */
+  function pdfFontStack(font) {
+    if (font && font.startsWith('custom:') && typeof window.getCustomFonts === 'function') {
+      const f = window.getCustomFonts().find((c) => 'custom:' + c.id === font);
+      if (f) return `"${f.family.replace(/"/g, '')}", sans-serif`;
+    }
+    return FONT_STACKS[font] || FONT_STACKS.serif;
+  }
 
   /* Build the shared parts (front page, TOC, body) — called once per
      export. Adds anchor ids for TOC links and returns the metadata the
@@ -782,18 +797,30 @@
     return { title, author, frontHtml, tocHtml, bodyHtml: clone.innerHTML };
   }
 
-  /* Print CSS from the options. `scoped` = true prefixes every content
-     rule with #export-print-root (the in-app print path injects into the
-     live document and must not leak styles into the app); `@page` rules
-     stay global either way. `scoped` also SKIPS @font-face — the in-app
-     path already has the brand fonts loaded (same origin), while the
-     Electron self-contained document needs them (resolved via <base>). */
-  function pdfCss(opts, scoped) {
+  /* Print CSS from the options, per DELIVERY TARGET:
+       'chromium' — Electron's printToPDF: full standalone document, may use
+                    Chromium-only print features (named pages → full-bleed
+                    zero-margin cover).
+       'webkit'   — Tauri's print window: same standalone document, but NO
+                    named pages and NO viewport units (WebKitGTK ignores the
+                    former and mis-computes the latter in print) — the cover
+                    is sized in absolute mm inside the normal page margins.
+       'scoped'   — the web in-app print path: every content rule prefixed
+                    with #export-print-root so nothing leaks into the app;
+                    engine-safe like 'webkit' (the browser may be anything);
+                    skips @font-face (fonts already live in the page). */
+  function pdfCss(opts, target) {
+    const scoped = target === 'scoped';
+    const fullBleed = target === 'chromium';
     const B = scoped ? '#export-print-root' : 'body';       // body-level selector
     const P = scoped ? '#export-print-root ' : '';          // descendant prefix
     const mm = MARGIN_MM[opts.marginPreset] || 20;
     const size = PAGE_SIZE[opts.pageSize] || 'A4';
-    const font = FONT_STACKS[opts.font] || FONT_STACKS.serif;
+    const font = pdfFontStack(opts.font);
+    /* Cover height in ABSOLUTE mm: the full page on Chromium (its named
+       cover page has margin 0), the printable area elsewhere. */
+    const pageH = PAGE_H_MM[opts.pageSize] || 297;
+    const coverH = fullBleed ? pageH : Math.max(60, Math.round((pageH - 2 * mm) * 10) / 10);
 
     /* The Harald Revery face has no true bold and its synthesized (faux) bold
        reads poorly, so — ONLY when a Harald font is selected — drop bold on the
@@ -820,9 +847,16 @@ ${P}.front-page .fp-title { font-weight: normal; }` : '';
 @page :left  { margin: ${mm}mm ${mm + 6}mm ${mm}mm ${Math.max(6, mm - 6)}mm; }`
       : '';
 
+    /* Standalone documents (Electron/Tauri) need the brand faces (relative
+       urls resolved via <base>) AND any imported custom fonts (embedded
+       data-URL faces from the live app). The scoped path skips both — the
+       faces are already registered in the page. */
+    const customFaces = (!scoped && typeof window.getCustomFontFaceCss === 'function')
+      ? window.getCustomFontFaceCss() : '';
     const fontFace = scoped ? '' : `
 @font-face { font-family: 'HaraldText'; src: url('fonts/HaraldReveryTextFont.woff2') format('woff2'); font-display: swap; }
-@font-face { font-family: 'HaraldMono'; src: url('fonts/HaraldReveryMonoFont.woff2') format('woff2'); font-display: swap; }`;
+@font-face { font-family: 'HaraldMono'; src: url('fonts/HaraldReveryMonoFont.woff2') format('woff2'); font-display: swap; }
+${customFaces}`;
 
     /* New page before H1 / H2 (independent toggles). The first content
        block never forces a leading blank page. */
@@ -833,7 +867,7 @@ ${P}.front-page .fp-title { font-weight: normal; }` : '';
 
     return `${fontFace}
 @page { size: ${size}; margin: ${mm}mm; }
-@page cover { margin: 0; }
+${fullBleed ? '@page cover { margin: 0; }' : ''}
 ${bookMargins}
 ${P}*, ${P}*::before, ${P}*::after { box-sizing: border-box; margin: 0; padding: 0; }
 ${B} {
@@ -862,7 +896,7 @@ ${P}th { background: #f3f4f6; }
 ${P}img { max-width: 100%; height: auto; display: block; margin: 1.3em auto; }
 ${P}hr { border: none; border-top: 1px solid #ccc; margin: 1.6em 0; }
 ${P}math { font-size: ${mathEm}em; }
-${P}.front-page { position: relative; height: 100vh; page: cover; page-break-after: always; break-after: page; overflow: hidden; }
+${P}.front-page { position: relative; height: ${coverH}mm; ${fullBleed ? 'page: cover; ' : ''}page-break-after: always; break-after: page; overflow: hidden; }
 ${P}.fp-bg { position: absolute; inset: 0; background-position: center; background-size: cover; background-repeat: no-repeat; }
 ${P}.front-page .fp-title { font-size: 2.6em; font-weight: 700; letter-spacing: 0.02em; }
 ${P}.front-page .fp-author { font-size: 1.25em; color: #444; margin-top: 0.8em; }
@@ -886,7 +920,7 @@ ${haraldBold}
      and the brand fonts) resolve from the temp file's location. KaTeX is
      already converted to native MathML by cleanProseClone (no katex.css
      needed). */
-  function buildPdfDocument(opts) {
+  function buildPdfDocument(opts, target = 'chromium') {
     opts = Object.assign({}, DEFAULTS.pdf, opts || {});
     const parts = pdfParts(opts);
     if (!parts) return null;
@@ -899,7 +933,7 @@ ${haraldBold}
 <base href="${baseHref}">
 <title>${escapeHtml(parts.title)}</title>
 <link rel="stylesheet" href="jvscrpt_and_css_extra/github-dark.min.css">
-<style>${pdfCss(opts, false)}</style>
+<style>${pdfCss(opts, target)}</style>
 </head>
 <body>
 ${parts.frontHtml}
@@ -929,7 +963,7 @@ ${parts.bodyHtml}
 
     const styleEl = document.createElement('style');
     styleEl.id = 'export-print-css';
-    styleEl.textContent = pdfCss(opts, true);
+    styleEl.textContent = pdfCss(opts, 'scoped');
 
     const rootEl = document.createElement('div');
     rootEl.id = 'export-print-root';
@@ -964,10 +998,12 @@ ${parts.bodyHtml}
   ══════════════════════════════════════════════════════════════════ */
 
   async function runPdfExport() {
-    const built = buildPdfDocument(exportSettings.pdf);
-    if (!built) return;
+    /* Build for the delivery target: Chromium print features for
+       Electron's printToPDF, engine-safe CSS for the Tauri print window. */
     const canDirect = window.NativeAPI && typeof window.NativeAPI.exportPdf === 'function'
       && window.NativeAPI.exportPdf;
+    const built = buildPdfDocument(exportSettings.pdf, canDirect ? 'chromium' : 'webkit');
+    if (!built) return;
     if (canDirect) {
       try {
         const res = await window.NativeAPI.exportPdf(built.html, {
@@ -1215,9 +1251,16 @@ ${parts.bodyHtml}
     wrap.appendChild(row('Margins', dropdown(
       [['narrow', 'Narrow'], ['normal', 'Normal'], ['wide', 'Wide']],
       () => p.marginPreset, (v) => { p.marginPreset = v; })));
+    /* Built-in stacks + the user's custom fonts (from the Settings font
+       menus). File-kind customs are embedded into the standalone print
+       documents as data-URL @font-face; system-kind resolve by name. A
+       font deleted later simply falls back to Serif at export time. */
+    const customFontChoices = (typeof window.getCustomFonts === 'function')
+      ? window.getCustomFonts().map((f) => ['custom:' + f.id, f.label]) : [];
     wrap.appendChild(row('Font', dropdown(
       [['serif', 'Serif'], ['sans', 'Sans-serif'], ['mono', 'Monospace'],
-       ['harald-text', 'Harald Text'], ['harald-mono', 'Harald Mono']],
+       ['harald-text', 'Harald Text'], ['harald-mono', 'Harald Mono'],
+       ...customFontChoices],
       () => p.font, (v) => { p.font = v; })));
     wrap.appendChild(row('Font size', dropdown(
       [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map((n) => [n, n + ' pt']),
