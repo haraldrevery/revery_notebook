@@ -616,28 +616,50 @@ getVolatileContent(path) {
        dedicated print window — see exportPdfWindow. */
     exportPdf: null,
 
-    /* SPIKE: print a standalone document in a separate WebviewWindow.
-       The full self-contained export HTML is staged in localStorage (shared
-       across same-origin windows) and pdf_print.html renders + prints it,
-       with none of the live app present to pollute the layout. Resolves once
-       the window is created; rejects (→ caller falls back to printInApp) if
-       the WebviewWindow API or creation fails. */
+    /* Tauri PDF: print a standalone document in a separate WebviewWindow —
+       the ONLY approach that has proven reliable on WebKitGTK (the iframe,
+       in-app @media print, and native WebKitPrintOperation attempts all
+       produced broken output). The full self-contained export HTML is
+       staged in localStorage (shared across same-origin windows) and
+       pdf_print.html renders + prints it, with none of the live app present
+       to pollute the layout.
+
+       Hardened delivery chain:
+       - UNIQUE window label per export (pdf-print-<ts>): Tauri's close()
+         is async destruction, so a fixed label could collide with a
+         still-dying window ("label already exists") on quick re-export.
+         Stale windows from earlier exports are closed best-effort.
+       - Staging retries once after clearing the previous payload (quota).
+       - Rejects with a specific reason; the caller shows it to the user —
+         it must NOT silently fall back to a worse renderer. */
     async exportPdfWindow(html) {
-      try { localStorage.setItem('__revery_pdf_payload__', html); }
-      catch (e) { throw new Error('could not stage PDF payload: ' + e); }
+      const KEY = '__revery_pdf_payload__';
+      try {
+        localStorage.setItem(KEY, html);
+      } catch (e1) {
+        try {
+          localStorage.removeItem(KEY);
+          localStorage.setItem(KEY, html);
+        } catch (e2) {
+          throw new Error('The document is too large to hand to the print window (storage full).');
+        }
+      }
 
       const T = window.__TAURI__;
       const WW = T && T.webviewWindow && T.webviewWindow.WebviewWindow;
-      if (!WW) throw new Error('WebviewWindow API unavailable');
+      if (!WW) throw new Error('The print window API is unavailable in this build.');
 
-      /* Close any stale print window from a previous export. */
+      /* Best-effort close of print windows from previous exports. Unique
+         labels mean a lagging close can never collide with the new one. */
       try {
-        const prev = await WW.getByLabel('pdf-print');
-        if (prev) await prev.close();
-      } catch (e) { /* none, or close raced — ignore */ }
+        const all = await T.webviewWindow.getAllWebviewWindows();
+        for (const w of all) {
+          if (w.label && w.label.startsWith('pdf-print')) { try { await w.close(); } catch (_) {} }
+        }
+      } catch (_) { /* enumeration unavailable — harmless */ }
 
       return await new Promise((resolve, reject) => {
-        const w = new WW('pdf-print', {
+        const w = new WW('pdf-print-' + Date.now(), {
           url: 'pdf_print.html',
           title: 'Export PDF',
           width: 820,
@@ -646,7 +668,7 @@ getVolatileContent(path) {
         });
         w.once('tauri://created', () => resolve({ ok: true }));
         w.once('tauri://error', (ev) =>
-          reject(new Error('print window failed: ' + JSON.stringify(ev && ev.payload))));
+          reject(new Error('The print window could not be opened: ' + JSON.stringify(ev && ev.payload))));
       });
     },
 

@@ -733,6 +733,48 @@
       && logoDd.style.left === '50%';
   }
 
+  /* 11i. Tauri PDF print page (pdf_print.html/js): its payload graft is
+     engine-independent DOM code, so the harness can pin it — the exact
+     regression class that shipped "Preparing document…" into PDFs. The
+     iframe's print() is stubbed on load and the iframe is removed before
+     the 200ms print timer fires, so no real dialog can open. */
+  const pdfPrintWindow = await (async () => {
+    const PAYLOAD = '<!DOCTYPE html><html><head><title>PDF Probe Doc</title></head>'
+      + '<body><main id="probe-main">Hello PDF</main></body></html>';
+    const loadPrintPage = (stage) => new Promise((resolve) => {
+      if (stage) localStorage.setItem('__revery_pdf_payload__', PAYLOAD);
+      else localStorage.removeItem('__revery_pdf_payload__');
+      const fr = document.createElement('iframe');
+      fr.style.cssText = 'position:fixed;left:-2000px;top:0;width:800px;height:600px;';
+      fr.src = 'pdf_print.html';
+      fr.addEventListener('load', () => {
+        try { fr.contentWindow.print = () => {}; } catch (_) {}
+        setTimeout(() => {
+          const d = fr.contentDocument;
+          const out = {
+            text: d && d.body ? d.body.textContent : '',
+            title: d ? d.title : '',
+            hasMain: !!(d && d.getElementById('probe-main')),
+            payloadCleared: localStorage.getItem('__revery_pdf_payload__') === null,
+          };
+          fr.remove(); // kills the pending print timers with the document
+          resolve(out);
+        }, 60);
+      });
+      document.body.appendChild(fr);
+    });
+
+    const staged = await loadPrintPage(true);
+    const empty = await loadPrintPage(false);
+    return {
+      grafted: staged.hasMain && staged.text.includes('Hello PDF'),
+      placeholderGone: !staged.text.includes('Preparing document'),
+      titleAdopted: staged.title === 'PDF Probe Doc',
+      payloadCleared: staged.payloadCleared,
+      emptyShowsError: empty.text.includes('No document was staged'),
+    };
+  })();
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
@@ -841,5 +883,6 @@
            replacedText, ghostCount, barHidden, supersededCount,
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
            lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
-           outlineFontButtons, exportSuite, customTemplates, linkComplete, advanced };
+           outlineFontButtons, exportSuite, customTemplates, linkComplete, advanced,
+           pdfPrintWindow };
 })()

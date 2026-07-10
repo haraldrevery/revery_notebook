@@ -988,16 +988,26 @@ ${parts.bodyHtml}
     } else if (window.NativeAPI && typeof window.NativeAPI.exportPdfWindow === 'function') {
       /* Tauri: print a standalone document in a dedicated window so the live
          app (CodeMirror, #workspace, app CSS) can never leak into the PDF.
-         Falls back to the in-app print path if the window can't be opened. */
+         On failure, TELL the user and stop — never fall back to the in-app
+         print path here: on WebKitGTK it renders the app into the PDF
+         (the exact "inconsistent/messy output" this window exists to fix).
+         A loud error beats silently producing garbage. */
       try {
         await window.NativeAPI.exportPdfWindow(built.html);
       } catch (err) {
-        console.error('[export] PDF window failed, falling back to in-app print:', err);
-        printInApp(exportSettings.pdf);
+        console.error('[export] PDF print window failed:', err);
+        if (window.NativeAPI.showMessageBox) {
+          window.NativeAPI.showMessageBox({
+            type: 'error', title: 'PDF Export',
+            message: T('The PDF print window could not be opened. Close any open print window and try again.'),
+            detail: String((err && err.message) || err),
+          });
+        }
       }
     } else {
-      /* Web: render into the page + window.print() → the system print dialog
-         ("Print to File / Save as PDF"). */
+      /* Web: render into the page + window.print() → the browser's print
+         dialog ("Save as PDF"). Browsers are Chromium/Gecko — the cascade
+         problem that plagues WebKitGTK does not apply there. */
       printInApp(exportSettings.pdf);
     }
   }

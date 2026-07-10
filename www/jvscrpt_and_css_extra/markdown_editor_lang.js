@@ -139,6 +139,7 @@ window.uiTranslations = {
   "Custom…": { "Swedish": "Anpassad…" },
   "New template…": { "Swedish": "Ny mall…" },
   "Advanced Options": { "Swedish": "Avancerade alternativ" },
+  "The PDF print window could not be opened. Close any open print window and try again.": { "Swedish": "PDF-utskriftsfönstret kunde inte öppnas. Stäng eventuella öppna utskriftsfönster och försök igen." },
 
   /* ── i18n audit fixes: keys the code already requests via t() ── */
   "Background opacity ▸": { "Swedish": "Bakgrundsopacitet ▸" },

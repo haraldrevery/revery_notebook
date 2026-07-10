@@ -157,4 +157,12 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   assert.deepEqual(r.advanced, {
     menuEntry: true, modalOpens: true, movedLeft: true, restoredCenter: true,
   }, 'Advanced Options must open from the logo menu and the logo-position setting must move the logo and persist');
+
+  // 18. Tauri PDF print page: the staged payload must fully replace the
+  //     page (no "Preparing document…" leaking into PDFs), adopt the title,
+  //     consume the payload, and show a visible error when nothing is staged
+  assert.deepEqual(r.pdfPrintWindow, {
+    grafted: true, placeholderGone: true, titleAdopted: true,
+    payloadCleared: true, emptyShowsError: true,
+  }, 'pdf_print.html must graft the staged document wholesale and fail visibly, never print the placeholder');
 });

@@ -35,15 +35,26 @@
      element) deterministically, with no parser re-entrancy quirks. The
      payload's <base> precedes its <link>/<style>, so relative assets (code
      theme, brand fonts) still resolve. */
-  var doc = new DOMParser().parseFromString(html, 'text/html');
-  function adoptAll(el) {
-    /* Snapshot first: childNodes is LIVE and adoptNode removes each node
-       from it — iterating it directly would skip every other node. */
-    return Array.prototype.slice.call(el.childNodes)
-      .map(function (n) { return document.adoptNode(n); });
+  try {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    if (!doc || !doc.body || !doc.body.childNodes.length) {
+      throw new Error('parsed document is empty');
+    }
+    var adoptAll = function (el) {
+      /* Snapshot first: childNodes is LIVE and adoptNode removes each node
+         from it — iterating it directly would skip every other node. */
+      return Array.prototype.slice.call(el.childNodes)
+        .map(function (n) { return document.adoptNode(n); });
+    };
+    document.head.replaceChildren.apply(document.head, adoptAll(doc.head));
+    document.body.replaceChildren.apply(document.body, adoptAll(doc.body));
+  } catch (err) {
+    /* A visible message beats a blank window (and beats printing the
+       placeholder — the bug class this file's approach exists to prevent). */
+    document.body.textContent = 'Could not prepare the document for printing: '
+      + ((err && err.message) || err);
+    return;
   }
-  document.head.replaceChildren.apply(document.head, adoptAll(doc.head));
-  document.body.replaceChildren.apply(document.body, adoptAll(doc.body));
 
   var printed = false;
   function doPrint() {
