@@ -1869,6 +1869,20 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   height: 0.75em;
 }
 
+/* Icons in front of text: top-bar buttons and dropdown menu rows. Both are
+   flex + align-items:center, so the icon rides the same centering as the
+   label. .rv-icon-slot is the equal-width spacer menuIcon() returns for
+   iconless rows in a menu that has icons — keeps the label column aligned. */
+.tb-btn .rv-icon { margin-right: 0.5em; flex: none; }
+.menu-item > .rv-icon,
+.menu-item > .rv-icon-slot {
+  width: 1em;
+  height: 1em;
+  margin-right: 0.55em;
+  flex: none;
+}
+.rv-icon-slot { display: inline-block; }
+
 .sidebar-btn {
   background: transparent;
   border: none;
