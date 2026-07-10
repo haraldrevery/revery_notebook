@@ -336,4 +336,21 @@ Details: [ARCHITECTURE.md → Security Model](ARCHITECTURE.md#security-model).
 
 ---
 
+## License
+
+- **Code** — [Apache License 2.0](LICENSE) © 2026 Harald Mark Thirslund.
+  Use it, modify it, ship it; keep the [NOTICE](NOTICE) file.
+- **Brand assets** — the Harald Revery fonts, background images, the
+  Revery logo, the icon set (including glyph outlines embedded in source
+  files), and the installer artwork are **proprietary, all rights
+  reserved**. You may keep them, unmodified and in place, solely to build
+  and run this software (forks included) — but you may not extract them,
+  modify them, or use them in anything else. Full terms:
+  [LICENSE-ASSETS](LICENSE-ASSETS). Permission requests:
+  contact@haraldrevery.com.
+- **Third-party libraries** ship under their own licenses — see the Legal
+  page inside the app.
+
+---
+
 *Built by [Harald Mark Thirslund](https://haraldrevery.com) · Gothenburg, SE*

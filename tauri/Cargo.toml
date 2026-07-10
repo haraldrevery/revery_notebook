@@ -2,6 +2,7 @@
 name    = "revery-notebook"
 version = "1.0.0"
 edition = "2021"
+license = "Apache-2.0"
 
 # No [lib] section — all code lives in src/main.rs (binary only).
 # The [lib] block requires src/lib.rs to exist; removing it fixes

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Revery Notebook — Desktop wrapper (Electron + Tauri)",
   "private": true,
+  "license": "Apache-2.0",
   "main": "electron/main.js",
   "engines": {
     "node": ">=22"

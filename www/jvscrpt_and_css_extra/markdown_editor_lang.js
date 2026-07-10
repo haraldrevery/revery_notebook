@@ -414,16 +414,16 @@ window.uiTemplates = {
   legal: {
     English: `
       <section class="mod-mb-20">
-        <h4 class="mod-h4">Ownership &amp; Intellectual Property</h4>
-        <p class="mod-p">Revery Notebook is designed, developed, and operated by <strong>Harald Mark Thirslund</strong>, Göteborg (Gothenburg), Sweden.</p>
-        <p class="mod-p">The following are the exclusive intellectual property of Harald Mark Thirslund and are protected under applicable Swedish, EU, and international copyright and trademark law:</p>
+        <h4 class="mod-h4">Ownership, Licensing &amp; Intellectual Property</h4>
+        <p class="mod-p">Revery Notebook is designed, developed, and operated by <strong>Harald Mark Thirslund</strong>, Göteborg (Gothenburg), Sweden. Copyright © 2026 Harald Mark Thirslund.</p>
+        <p class="mod-p"><strong>Source code:</strong> the application source code is licensed under the <strong>Apache License 2.0</strong> (see the LICENSE and NOTICE files in the source repository). You may use, modify, and redistribute the code under that license's terms.</p>
+        <p class="mod-p"><strong>Brand assets are NOT covered by the Apache License.</strong> The following remain the exclusive intellectual property of Harald Mark Thirslund, protected under applicable Swedish, EU, and international copyright and trademark law:</p>
         <ul class="mod-ul">
-          <li>The <strong>HaraldText</strong> and <strong>HaraldMono</strong> typefaces ("Harald Revery Font").</li>
-          <li>All logo graphics, image assets, and visual brand elements used on this website.</li>
-          <li>The application source code authored by Harald Mark Thirslund.</li>
+          <li>The <strong>HaraldText</strong> and <strong>HaraldMono</strong> typefaces ("Harald Revery Font"), in every format.</li>
+          <li>All logo graphics, background images, icon glyphs (including outlines embedded in source files), installer artwork, and other visual brand elements.</li>
           <li>All original written content published on haraldrevery.com.</li>
         </ul>
-        <p class="mod-p-0">Unauthorised reproduction, redistribution, or commercial use of these assets is strictly prohibited without prior written consent from Harald Mark Thirslund.</p>
+        <p class="mod-p-0">These assets may be kept and used, unmodified and in place, solely to build and run this software (including forks). Any other use — extraction, modification, standalone redistribution, or use in other projects or branding — is prohibited without prior written consent (contact@haraldrevery.com). Full terms: the LICENSE-ASSETS file in the source repository.</p>
       </section>
       <hr class="mod-hr">
 
@@ -687,15 +687,15 @@ END OF TERMS AND CONDITIONS</pre>
     Swedish: `
       <section class="mod-mb-20">
         <h4 class="mod-h4">Äganderätt &amp; immateriella rättigheter</h4>
-        <p class="mod-p">Revery Notebook är designad, utvecklad och drivs av <strong>Harald Mark Thirslund</strong>, Göteborg, Sverige.</p>
-        <p class="mod-p">Följande är Harald Mark Thirslunds exklusiva immateriella egendom och skyddas enligt tillämplig svensk, EU-rättslig och internationell upphovsrätt och varumärkesrätt:</p>
+        <p class="mod-p">Revery Notebook är designad, utvecklad och drivs av <strong>Harald Mark Thirslund</strong>, Göteborg, Sverige. Copyright © 2026 Harald Mark Thirslund.</p>
+        <p class="mod-p"><strong>Källkod:</strong> applikationens källkod är licensierad under <strong>Apache License 2.0</strong> (se filerna LICENSE och NOTICE i källkodsförrådet). Du får använda, ändra och vidaredistribuera koden enligt den licensens villkor.</p>
+        <p class="mod-p"><strong>Varumärkestillgångarna omfattas INTE av Apache-licensen.</strong> Följande förblir Harald Mark Thirslunds exklusiva immateriella egendom och skyddas enligt tillämplig svensk, EU-rättslig och internationell upphovsrätt och varumärkesrätt:</p>
         <ul class="mod-ul">
-          <li>Typsnitten <strong>HaraldText</strong> och <strong>HaraldMono</strong> ("Harald Revery typsnitt").</li>
-          <li>Alla logotyper, bildfiler och visuella varumärkeselement på denna webbplats.</li>
-          <li>Applikationskoden som är skriven av Harald Mark Thirslund.</li>
+          <li>Typsnitten <strong>HaraldText</strong> och <strong>HaraldMono</strong> ("Harald Revery typsnitt"), i alla format.</li>
+          <li>Alla logotyper, bakgrundsbilder, ikonglyfer (inklusive konturer inbäddade i källkodsfiler), installationsprogrammets grafik och övriga visuella varumärkeselement.</li>
           <li>Allt originalt skrivet innehåll publicerat på haraldrevery.com.</li>
         </ul>
-        <p class="mod-p-0">Obehörig reproduktion, vidaredistribution eller kommersiell användning av dessa tillgångar är strängt förbjuden utan föregående skriftligt medgivande från Harald Mark Thirslund.</p>
+        <p class="mod-p-0">Dessa tillgångar får behållas och användas, oförändrade och på plats, enbart för att bygga och köra denna programvara (inklusive förgreningar). All annan användning — extrahering, ändring, separat vidaredistribution eller användning i andra projekt eller varumärken — är förbjuden utan föregående skriftligt medgivande (contact@haraldrevery.com). Fullständiga villkor: filen LICENSE-ASSETS i källkodsförrådet.</p>
       </section>
       <hr class="mod-hr">
 

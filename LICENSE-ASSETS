@@ -1,0 +1,58 @@
+REVERY NOTEBOOK — BRAND ASSETS LICENSE
+Copyright © 2026 Harald Mark Thirslund, Sweden. All rights reserved.
+
+The source code of this project is licensed under the Apache License 2.0
+(see the LICENSE file). THIS FILE governs the brand assets, which are NOT
+covered by that license.
+
+1. COVERED MATERIAL ("the Assets")
+
+   a. The Harald Revery typefaces ("HaraldReveryTextFont" and
+      "HaraldReveryMonoFont") in every format and location, including
+      www/fonts/ (.ttf, .otf, .woff, .woff2).
+   b. The background photographs and images in www/image_assets/.
+   c. The Revery logo in every form, including the inline SVG in
+      www/index.html and the application icons in tauri/icons/.
+   d. The icon set in svg_icons_to_use/, INCLUDING the glyph outline
+      path data derived from it that is embedded in source files
+      (src/sidebar/icons.js, www/index.html, and the generated bundles).
+   e. The installer artwork in images_for_installer/.
+
+2. LIMITED PERMISSION
+
+   You may keep and use the Assets, unmodified and in their existing
+   locations, solely to build, run, and distribute this software —
+   including forks and modified versions of this repository — so that
+   the application functions and appears as intended.
+
+3. PROHIBITED
+
+   Except as allowed in section 2, you may NOT, without prior written
+   permission from the copyright holder:
+   a. extract, copy, or redistribute any Asset separately from this
+      software;
+   b. modify an Asset or create derivative works of it;
+   c. use any Asset (including the typefaces and the logo) in any other
+      project, product, service, website, or branding;
+   d. sell or sublicense any Asset.
+
+   All rights not expressly granted are reserved.
+
+4. PERMISSION REQUESTS
+
+   contact@haraldrevery.com — https://haraldrevery.com
+
+5. THIRD-PARTY MATERIAL
+
+   Third-party components bundled with this repository (markdown-it,
+   markdown-it-footnote, KaTeX and its fonts, markdown-it-texmath,
+   CodeMirror, highlight.js, DOMPurify) are NOT Assets and are governed
+   by their own licenses (full texts on the application's Legal page).
+
+6. NO WARRANTY
+
+   The Assets are provided "AS IS", without warranty of any kind.
+
+7. GOVERNING LAW
+
+   This license is governed by the laws of Sweden.

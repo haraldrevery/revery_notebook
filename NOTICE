@@ -1,0 +1,18 @@
+Revery Notebook
+Copyright 2026 Harald Mark Thirslund, Sweden
+https://haraldrevery.com
+
+This product includes software developed by Harald Mark Thirslund.
+
+The source code of this project is licensed under the Apache License,
+Version 2.0 (see the LICENSE file).
+
+IMPORTANT — brand assets are NOT covered by the Apache License:
+the Harald Revery fonts, background images, the Revery logo, the icon
+set, and the installer artwork bundled with this repository are
+proprietary. See the LICENSE-ASSETS file for their terms.
+
+Bundled third-party components (markdown-it, markdown-it-footnote,
+KaTeX and its fonts, markdown-it-texmath, CodeMirror, highlight.js,
+DOMPurify) are distributed under their own licenses; see the Legal
+page inside the application for the full texts.
