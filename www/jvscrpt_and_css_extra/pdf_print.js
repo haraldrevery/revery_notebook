@@ -25,10 +25,25 @@
     return;
   }
 
-  /* Replace the whole document with the export document. */
-  document.open();
-  document.write(html);
-  document.close();
+  /* Replace this page's content with the export document via plain DOM.
+     NOT document.open()/write(): this script runs synchronously while the
+     page is still parsing, and per spec document.open() is a NO-OP from a
+     parser-inserted script — write() then APPENDS at the parser's insertion
+     point instead of replacing, which left the "Preparing document…"
+     placeholder as the first element of the printed PDF. Grafting the parsed
+     payload's head/body wholesale removes the placeholder (and this script
+     element) deterministically, with no parser re-entrancy quirks. The
+     payload's <base> precedes its <link>/<style>, so relative assets (code
+     theme, brand fonts) still resolve. */
+  var doc = new DOMParser().parseFromString(html, 'text/html');
+  function adoptAll(el) {
+    /* Snapshot first: childNodes is LIVE and adoptNode removes each node
+       from it — iterating it directly would skip every other node. */
+    return Array.prototype.slice.call(el.childNodes)
+      .map(function (n) { return document.adoptNode(n); });
+  }
+  document.head.replaceChildren.apply(document.head, adoptAll(doc.head));
+  document.body.replaceChildren.apply(document.body, adoptAll(doc.body));
 
   var printed = false;
   function doPrint() {
