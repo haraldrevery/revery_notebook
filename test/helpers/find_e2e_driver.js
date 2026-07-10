@@ -618,6 +618,28 @@
   exportSuite.homeworkReveryXelatex = texHwR.tex.includes('fontspec')
     && !texHwR.tex.includes('inputenc') && (texHwR.fonts || []).length === 0;
 
+  /* 11d. Bold treatment follows the preview font: Harald (brand default) →
+     underlined regular weight; any other font → real bold, no underline.
+     The doc set in 11b renders `Body **text**`, so #preview has a strong. */
+  {
+    const strongEl = document.querySelector('#preview .prose strong');
+    const st = () => {
+      const cs = getComputedStyle(strongEl);
+      return { deco: cs.textDecorationLine, weight: parseInt(cs.fontWeight, 10) };
+    };
+    const s1 = st();
+    exportSuite.boldHaraldUnderline = !!strongEl
+      && s1.deco.includes('underline') && s1.weight === 400
+      && document.documentElement.classList.contains('preview-font-harald');
+    previewFontType = 'serif'; applyFontTypes();
+    const s2 = st();
+    exportSuite.boldOtherFontsReal = !s2.deco.includes('underline') && s2.weight >= 600
+      && !document.documentElement.classList.contains('preview-font-harald');
+    previewFontType = 'harald'; applyFontTypes();
+    const s3 = st();
+    exportSuite.boldHaraldRestored = s3.deco.includes('underline') && s3.weight === 400;
+  }
+
   /* 12. Zip Project Export is desktop-only: this harness runs in WEB mode,
          so the File menu must not contain the entry (buildMenu gating). */
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))

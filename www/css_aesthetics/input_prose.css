@@ -24,7 +24,10 @@
   }
 
 
-  .prose strong, .prose b {
+  /* Underline-instead-of-bold is the HARALD-FONT treatment only (the brand
+     face has no real bold). applyFontTypes() toggles .preview-font-harald on
+     <html>; other preview fonts fall through to normal bold. */
+  .preview-font-harald .prose strong, .preview-font-harald .prose b {
     font-weight: 400 !important; /* Force no bold */
     color: inherit;
     text-decoration: underline;  /* Apply underline for emphasis */

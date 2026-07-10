@@ -675,6 +675,13 @@ function applyFontTypes() {
     document.documentElement.style.setProperty('--katex-font-size', '0.7em');
   }
 
+  /* The Harald face has no real bold, so prose.css renders bold text as
+     underlined regular weight — but ONLY under this class. Any other preview
+     font falls through to normal bold (Tailwind's own strong weights).
+     Same branch condition as above, so the class always tracks the var. */
+  document.documentElement.classList.toggle('preview-font-harald',
+    !(previewFontType !== 'harald' && fontMap[previewFontType]));
+
   const outlineFontFamily = (previewFontType !== 'harald' && fontMap[previewFontType]) 
     ? fontMap[previewFontType] 
     : '';
