@@ -2,17 +2,116 @@
    switching, the undo stack, and multi-select bulk operations. */
 import { S, treeEl, docTitleEl, folderNameEl, btnOpenFolder, btnNewFile, btnNewFolder,
          expandedDirs, selectedItems, _previewCache } from './state.js';
-import { showInputDialog } from './dialogs.js';
+import { showInputDialog, showConfirmDialog } from './dialogs.js';
 import { getFileCategory, mediaMarkdown, uniquePath, uniqueDestPath } from './helpers.js';
 import { saveActiveFile, markClean, scheduleAutoSave } from './save.js';
 import { renderTree, updateMultiSelectHighlight, updateSelectedDirHighlight, highlightActiveFile } from './tree.js';
 import { openSidebar, switchFromMobileSidebar } from './panel.js';
 import { startWatchingFile } from './watcher.js';
 import { recordProjectOpen } from './projects.js';
+import { rewriteLinksInText, buildAbsMapper, invertRecords } from './link_rewrite.js';
+import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
 
   /* ── Undo stack (moves + renames only — deletes are irreversible) ── */
   const MAX_UNDO  = 30;
   const undoStack = []; // [{type:'move'|'rename', records:[{oldPath,newPath}]}]
+
+  /* ══════════════════════════════════════════════════════════════════
+     LINK UPDATING ON RENAME/MOVE
+     After a successful rename/move, scan the project's text files and
+     rewrite markdown links that resolved to the moved path(s), so links
+     never rot. Every safety property lives here:
+       - matching is by RESOLVED target (same semantics as the renderer),
+         computed by the pure, unit-tested link_rewrite.js — never by
+         text search;
+       - a file is written ONLY if a link actually changed, through the
+         backends' atomic write path;
+       - the active document is updated in the EDITOR BUFFER (a normal
+         undoable edit that flows through autosave), never behind it;
+       - the user confirms first, seeing exactly which files change
+         (undo runs silently — reverting is completing their intent);
+       - any per-file error skips that file and is reported; nothing
+         aborts half-written.
+  ══════════════════════════════════════════════════════════════════ */
+
+  const _dirOf = (p) => p.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+
+  async function updateLinksAfterPathChange(records, { confirm = true } = {}) {
+    try {
+      if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return;
+      records = (records || []).filter((r) => r && r.oldPath && r.newPath
+        && r.oldPath.replace(/\\/g, '/') !== r.newPath.replace(/\\/g, '/'));
+      if (!records.length) return;
+
+      invalidateProjectScan(); // paths just changed — never scan a stale tree
+      const files = await listProjectTextFiles(['md', 'txt']);
+      if (!files.length) return;
+
+      const mapAbs = buildAbsMapper(records);
+      const mapBack = buildAbsMapper(invertRecords(records));
+      const editorEl = document.getElementById('editor');
+      const activeNorm = S.activeFilePath ? S.activeFilePath.replace(/\\/g, '/') : null;
+
+      const plans = [];
+      for (const f of files) {
+        const postPath = f.path.replace(/\\/g, '/');
+        const prePath = mapBack(postPath) || postPath;
+        const isActive = activeNorm === postPath;
+        let content;
+        if (isActive && editorEl) {
+          content = editorEl.value; // buffer may be dirtier than disk — use it
+        } else {
+          try { content = await window.NativeAPI.readFile(f.path); } catch (_) { continue; }
+        }
+        if (typeof content !== 'string') continue;
+        const res = rewriteLinksInText(content, {
+          fileDirBefore: _dirOf(prePath),
+          fileDirAfter: _dirOf(postPath),
+          mapAbs,
+        });
+        if (res.changes > 0 && res.text !== content) {
+          plans.push({ path: f.path, isActive, text: res.text, changes: res.changes });
+        }
+      }
+      if (!plans.length) return;
+
+      if (confirm) {
+        const total = plans.reduce((a, p) => a + p.changes, 0);
+        const names = plans.map((p) => p.path.replace(/\\/g, '/').split('/').pop());
+        const shown = names.slice(0, 8);
+        if (names.length > shown.length) shown.push(`…and ${names.length - shown.length} more`);
+        const ok = await showConfirmDialog(
+          `Update ${total} link${total === 1 ? '' : 's'} in ${plans.length} file${plans.length === 1 ? '' : 's'} so they keep working?`,
+          shown, 'Update links');
+        if (!ok) return;
+      }
+
+      const errors = [];
+      for (const p of plans) {
+        try {
+          if (p.isActive && editorEl) {
+            window.insertWithUndo(0, editorEl.value.length, p.text);
+            if (typeof render === 'function') render();
+          } else {
+            S._suppressWatchUntil = Date.now() + 3000;
+            await window.NativeAPI.writeFile(p.path, p.text);
+          }
+        } catch (err) {
+          errors.push(`${p.path.replace(/\\/g, '/').split('/').pop()}: ${err.message || err}`);
+        }
+      }
+      if (errors.length && window.NativeAPI.showMessageBox) {
+        await window.NativeAPI.showMessageBox({
+          type: 'warning', title: 'Link Update',
+          message: `${errors.length} file(s) could not be updated (their links are unchanged):`,
+          detail: errors.join('\n'),
+        });
+      }
+    } catch (err) {
+      /* Never let link maintenance break the rename itself. */
+      console.error('[Sidebar] link update failed (files left unchanged):', err);
+    }
+  }
 
   /* ══════════════════════════════════════════════════════════════════
      UNDO STACK
@@ -71,6 +170,9 @@ import { recordProjectOpen } from './projects.js';
 
       selectedItems.clear(); S.selectionAnchor = null;
       await renderTree();
+      /* Reverse the link rewrites too — silently: undoing the rename means
+         restoring the links, no second confirmation needed. */
+      await updateLinksAfterPathChange(invertRecords(op.records), { confirm: false });
 
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
@@ -165,6 +267,7 @@ import { recordProjectOpen } from './projects.js';
       S.selectionAnchor = null;
       if (movedRecords.length) pushUndo({ type: 'move', records: movedRecords });
       await renderTree();
+      if (movedRecords.length) await updateLinksAfterPathChange(movedRecords);
 
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
@@ -279,6 +382,7 @@ import { recordProjectOpen } from './projects.js';
       selectedItems.clear(); S.selectionAnchor = null;
       if (renamedRecords.length) pushUndo({ type: 'rename', records: renamedRecords });
       await renderTree();
+      if (renamedRecords.length) await updateLinksAfterPathChange(renamedRecords);
     } finally {
       S._operationLock = false;
     }
@@ -655,6 +759,7 @@ async function renameNode(nodePath, type) {
         }
 
         await renderTree();
+        await updateLinksAfterPathChange([{ oldPath: nodePath, newPath }]);
       } catch (err) {
         console.error('[Sidebar] renameNode failed:', err);
       }

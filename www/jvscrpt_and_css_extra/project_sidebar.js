@@ -393,6 +393,56 @@
       document.head.appendChild(style);
     })();
   }
+  function showConfirmDialog(promptText, detailLines = [], okLabel = "OK") {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "revery-input-overlay";
+      const box = document.createElement("div");
+      box.className = "revery-input-box";
+      const label = document.createElement("p");
+      label.textContent = promptText;
+      box.appendChild(label);
+      if (detailLines.length) {
+        const list = document.createElement("div");
+        list.style.cssText = "max-height:9em;overflow-y:auto;margin:8px 0;font-size:0.78em;opacity:0.85;white-space:pre-wrap;";
+        list.textContent = detailLines.join("\n");
+        box.appendChild(list);
+      }
+      const btnRow = document.createElement("div");
+      btnRow.className = "revery-input-buttons";
+      const cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.className = "revery-input-cancel";
+      const okBtn = document.createElement("button");
+      okBtn.textContent = okLabel;
+      okBtn.className = "revery-input-ok";
+      function finish(v) {
+        if (!document.body.contains(overlay)) return;
+        document.body.removeChild(overlay);
+        resolve(v);
+      }
+      cancelBtn.addEventListener("click", () => finish(false));
+      okBtn.addEventListener("click", () => finish(true));
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) finish(false);
+      });
+      overlay.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          finish(false);
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          finish(true);
+        }
+      });
+      btnRow.append(cancelBtn, okBtn);
+      box.appendChild(btnRow);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      requestAnimationFrame(() => okBtn.focus());
+    });
+  }
   function showInputDialog(promptText, defaultValue = "") {
     return new Promise((resolve) => {
       const overlay = document.createElement("div");
@@ -1518,9 +1568,225 @@ ${pathToSave}`,
     });
   }
 
+  // src/sidebar/link_rewrite.js
+  function norm(p) {
+    return String(p || "").replace(/\\/g, "/").replace(/(.)\/$/, "$1");
+  }
+  var SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+  var ABS_WIN_RE = /^[a-zA-Z]:\//;
+  function isAbsoluteDest(p) {
+    return p.startsWith("/") || ABS_WIN_RE.test(p);
+  }
+  function resolveRel(baseDir, rel) {
+    baseDir = norm(baseDir);
+    rel = norm(rel);
+    if (isAbsoluteDest(rel)) return rel;
+    const parts = baseDir.split("/");
+    for (const seg of rel.split("/")) {
+      if (seg === "..") parts.pop();
+      else if (seg !== "." && seg !== "") parts.push(seg);
+    }
+    return parts.join("/");
+  }
+  function makeRelative(fromDir, toFile) {
+    fromDir = norm(fromDir);
+    toFile = norm(toFile);
+    const fParts = fromDir.split("/");
+    const tParts = toFile.split("/");
+    let common = 0;
+    while (common < fParts.length && common < tParts.length && fParts[common] === tParts[common]) common++;
+    const up = fParts.length - common;
+    return "../".repeat(up) + tParts.slice(common).join("/");
+  }
+  function encodeDest(p) {
+    return p.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
+  }
+  function decodeSafe(s) {
+    try {
+      return decodeURIComponent(s);
+    } catch (_) {
+      return s;
+    }
+  }
+  function buildAbsMapper(records) {
+    const pairs = records.map((r) => [norm(r.oldPath), norm(r.newPath)]);
+    return (abs) => {
+      for (const [o, n] of pairs) {
+        if (abs === o) return n;
+        if (abs.startsWith(o + "/")) return n + abs.slice(o.length);
+      }
+      return null;
+    };
+  }
+  function invertRecords(records) {
+    return records.map((r) => ({ oldPath: r.newPath, newPath: r.oldPath }));
+  }
+  var LINK_RE = /(!?)\[([^\]]*)\]\(\s*([^()\s]+)(\s+"[^"]*"|\s+'[^']*')?\s*\)/g;
+  function rewriteLinksInText(text, opts) {
+    const dirBefore = norm(opts.fileDirBefore);
+    const dirAfter = norm(opts.fileDirAfter);
+    const mapAbs = opts.mapAbs || (() => null);
+    const selfMoved = dirBefore !== dirAfter;
+    let changes = 0;
+    let inFence = false;
+    let fenceChar = "";
+    const out = text.split("\n").map((line) => {
+      const fence = line.match(/^\s*(`{3,}|~{3,})/);
+      if (fence) {
+        const ch = fence[1][0];
+        if (!inFence) {
+          inFence = true;
+          fenceChar = ch;
+        } else if (ch === fenceChar) {
+          inFence = false;
+        }
+        return line;
+      }
+      if (inFence) return line;
+      const spans = [];
+      const masked = line.replace(/`[^`]*`/g, (m) => {
+        spans.push(m);
+        return "\0" + (spans.length - 1) + "\0";
+      });
+      const rewritten = masked.replace(LINK_RE, (full, bang, label, dest, title) => {
+        if (SCHEME_RE.test(dest) || dest.startsWith("#")) return full;
+        const decoded = decodeSafe(dest);
+        if (SCHEME_RE.test(decoded) || decoded.startsWith("#")) return full;
+        const wasAbsolute = isAbsoluteDest(norm(decoded));
+        const absOld = resolveRel(dirBefore, decoded);
+        const mapped = mapAbs(absOld);
+        if (mapped === null && !(selfMoved && !wasAbsolute)) return full;
+        const absNew = mapped === null ? absOld : mapped;
+        const newDest = encodeDest(wasAbsolute ? absNew : makeRelative(dirAfter, absNew));
+        if (newDest === dest) return full;
+        changes++;
+        return `${bang}[${label}](${newDest}${title || ""})`;
+      });
+      return rewritten.replace(/\u0000(\d+)\u0000/g, (_, i) => spans[+i]);
+    });
+    return { text: out.join("\n"), changes };
+  }
+
+  // src/sidebar/project_scan.js
+  var MAX_FILES = 800;
+  var LIST_TTL_MS = 15 * 1e3;
+  var _cache = { at: 0, root: null, files: null };
+  async function listProjectTextFiles(exts) {
+    if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return [];
+    const wanted = new Set((exts && exts.length ? exts : ["md"]).map((e) => e.toLowerCase()));
+    const now = Date.now();
+    if (!_cache.files || _cache.root !== S.rootPath || now - _cache.at >= LIST_TTL_MS) {
+      const files = [];
+      const walk = async (dir) => {
+        if (files.length >= MAX_FILES) return;
+        let entries;
+        try {
+          entries = await window.NativeAPI.readDirectory(dir);
+        } catch (_) {
+          return;
+        }
+        for (const e of entries) {
+          if (files.length >= MAX_FILES) return;
+          if (!e || !e.name || e.name.startsWith(".")) continue;
+          if (e.type === "dir") {
+            await walk(e.path);
+          } else {
+            files.push({ path: e.path, name: e.name, mtime: e.mtime });
+          }
+        }
+      };
+      await walk(S.rootPath);
+      _cache = { at: now, root: S.rootPath, files };
+    }
+    return _cache.files.filter((f) => {
+      const dot = f.name.lastIndexOf(".");
+      return dot > 0 && wanted.has(f.name.slice(dot + 1).toLowerCase());
+    });
+  }
+  function invalidateProjectScan() {
+    _cache = { at: 0, root: null, files: null };
+  }
+
   // src/sidebar/fileops.js
   var MAX_UNDO = 30;
   var undoStack2 = [];
+  var _dirOf = (p) => p.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+  async function updateLinksAfterPathChange(records, { confirm = true } = {}) {
+    try {
+      if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return;
+      records = (records || []).filter((r) => r && r.oldPath && r.newPath && r.oldPath.replace(/\\/g, "/") !== r.newPath.replace(/\\/g, "/"));
+      if (!records.length) return;
+      invalidateProjectScan();
+      const files = await listProjectTextFiles(["md", "txt"]);
+      if (!files.length) return;
+      const mapAbs = buildAbsMapper(records);
+      const mapBack = buildAbsMapper(invertRecords(records));
+      const editorEl = document.getElementById("editor");
+      const activeNorm = S.activeFilePath ? S.activeFilePath.replace(/\\/g, "/") : null;
+      const plans = [];
+      for (const f of files) {
+        const postPath = f.path.replace(/\\/g, "/");
+        const prePath = mapBack(postPath) || postPath;
+        const isActive = activeNorm === postPath;
+        let content;
+        if (isActive && editorEl) {
+          content = editorEl.value;
+        } else {
+          try {
+            content = await window.NativeAPI.readFile(f.path);
+          } catch (_) {
+            continue;
+          }
+        }
+        if (typeof content !== "string") continue;
+        const res = rewriteLinksInText(content, {
+          fileDirBefore: _dirOf(prePath),
+          fileDirAfter: _dirOf(postPath),
+          mapAbs
+        });
+        if (res.changes > 0 && res.text !== content) {
+          plans.push({ path: f.path, isActive, text: res.text, changes: res.changes });
+        }
+      }
+      if (!plans.length) return;
+      if (confirm) {
+        const total = plans.reduce((a, p) => a + p.changes, 0);
+        const names = plans.map((p) => p.path.replace(/\\/g, "/").split("/").pop());
+        const shown = names.slice(0, 8);
+        if (names.length > shown.length) shown.push(`\u2026and ${names.length - shown.length} more`);
+        const ok = await showConfirmDialog(
+          `Update ${total} link${total === 1 ? "" : "s"} in ${plans.length} file${plans.length === 1 ? "" : "s"} so they keep working?`,
+          shown,
+          "Update links"
+        );
+        if (!ok) return;
+      }
+      const errors = [];
+      for (const p of plans) {
+        try {
+          if (p.isActive && editorEl) {
+            window.insertWithUndo(0, editorEl.value.length, p.text);
+            if (typeof render === "function") render();
+          } else {
+            S._suppressWatchUntil = Date.now() + 3e3;
+            await window.NativeAPI.writeFile(p.path, p.text);
+          }
+        } catch (err) {
+          errors.push(`${p.path.replace(/\\/g, "/").split("/").pop()}: ${err.message || err}`);
+        }
+      }
+      if (errors.length && window.NativeAPI.showMessageBox) {
+        await window.NativeAPI.showMessageBox({
+          type: "warning",
+          title: "Link Update",
+          message: `${errors.length} file(s) could not be updated (their links are unchanged):`,
+          detail: errors.join("\n")
+        });
+      }
+    } catch (err) {
+      console.error("[Sidebar] link update failed (files left unchanged):", err);
+    }
+  }
   function pushUndo(op) {
     undoStack2.push(op);
     if (undoStack2.length > MAX_UNDO) undoStack2.shift();
@@ -1562,6 +1828,7 @@ ${pathToSave}`,
       selectedItems.clear();
       S.selectionAnchor = null;
       await renderTree();
+      await updateLinksAfterPathChange(invertRecords(op.records), { confirm: false });
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
@@ -1630,6 +1897,7 @@ ${pathToSave}`,
       S.selectionAnchor = null;
       if (movedRecords.length) pushUndo({ type: "move", records: movedRecords });
       await renderTree();
+      if (movedRecords.length) await updateLinksAfterPathChange(movedRecords);
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
@@ -1718,6 +1986,7 @@ ${pathToSave}`,
       S.selectionAnchor = null;
       if (renamedRecords.length) pushUndo({ type: "rename", records: renamedRecords });
       await renderTree();
+      if (renamedRecords.length) await updateLinksAfterPathChange(renamedRecords);
     } finally {
       S._operationLock = false;
     }
@@ -1980,6 +2249,7 @@ ${filePath}`,
           }
         }
         await renderTree();
+        await updateLinksAfterPathChange([{ oldPath: nodePath, newPath }]);
       } catch (err) {
         console.error("[Sidebar] renameNode failed:", err);
       }
@@ -3702,43 +3972,6 @@ Restore these changes, or discard and keep the saved version.`,
         }
       }
     })();
-  }
-
-  // src/sidebar/project_scan.js
-  var MAX_FILES = 800;
-  var LIST_TTL_MS = 15 * 1e3;
-  var _cache = { at: 0, root: null, files: null };
-  async function listProjectTextFiles(exts) {
-    if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return [];
-    const wanted = new Set((exts && exts.length ? exts : ["md"]).map((e) => e.toLowerCase()));
-    const now = Date.now();
-    if (!_cache.files || _cache.root !== S.rootPath || now - _cache.at >= LIST_TTL_MS) {
-      const files = [];
-      const walk = async (dir) => {
-        if (files.length >= MAX_FILES) return;
-        let entries;
-        try {
-          entries = await window.NativeAPI.readDirectory(dir);
-        } catch (_) {
-          return;
-        }
-        for (const e of entries) {
-          if (files.length >= MAX_FILES) return;
-          if (!e || !e.name || e.name.startsWith(".")) continue;
-          if (e.type === "dir") {
-            await walk(e.path);
-          } else {
-            files.push({ path: e.path, name: e.name, mtime: e.mtime });
-          }
-        }
-      };
-      await walk(S.rootPath);
-      _cache = { at: now, root: S.rootPath, files };
-    }
-    return _cache.files.filter((f) => {
-      const dot = f.name.lastIndexOf(".");
-      return dot > 0 && wanted.has(f.name.slice(dot + 1).toLowerCase());
-    });
   }
 
   // src/sidebar/yaml_index.js

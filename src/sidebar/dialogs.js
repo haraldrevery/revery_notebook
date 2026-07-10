@@ -390,6 +390,64 @@ export function initDialogStyles() {
   })();
 }
 
+/**
+ * OK/Cancel confirmation styled like showInputDialog. Resolves true only on
+ * an explicit OK. `detailLines` renders as a small scrollable list (used to
+ * show which files a link update will touch — the user sees exactly what
+ * will be modified before anything is written).
+ */
+export function showConfirmDialog(promptText, detailLines = [], okLabel = 'OK') {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'revery-input-overlay';
+
+    const box = document.createElement('div');
+    box.className = 'revery-input-box';
+
+    const label = document.createElement('p');
+    label.textContent = promptText;
+    box.appendChild(label);
+
+    if (detailLines.length) {
+      const list = document.createElement('div');
+      list.style.cssText =
+        'max-height:9em;overflow-y:auto;margin:8px 0;font-size:0.78em;opacity:0.85;white-space:pre-wrap;';
+      list.textContent = detailLines.join('\n');
+      box.appendChild(list);
+    }
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'revery-input-buttons';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.className = 'revery-input-cancel';
+
+    const okBtn = document.createElement('button');
+    okBtn.textContent = okLabel;
+    okBtn.className = 'revery-input-ok';
+
+    function finish(v) {
+      if (!document.body.contains(overlay)) return;
+      document.body.removeChild(overlay);
+      resolve(v);
+    }
+    cancelBtn.addEventListener('click', () => finish(false));
+    okBtn.addEventListener('click', () => finish(true));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    });
+
+    btnRow.append(cancelBtn, okBtn);
+    box.appendChild(btnRow);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => okBtn.focus());
+  });
+}
+
   /**
    * showInputDialog(promptText, defaultValue?)
    * Returns a Promise<string|null> — null means the user cancelled.
