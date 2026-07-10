@@ -962,14 +962,14 @@ END OF TERMS AND CONDITIONS</pre>
     English: `
       <section class="mod-mb-20">
         <h4 class="mod-about-title">½</h4>
-        <p class="mod-p">A markdown editor with my brand aesthetics. Simple and just works. Also has some LaTeX syntax support.</p>
+        <p class="mod-p">A markdown editor with my brand aesthetics. Simple and just works. LaTeX math, live preview, project folders on desktop, and PDF/LaTeX/zip export.</p>
       </section>
       <hr class="mod-hr">
       <section class="mod-mb-20">
         <h4 class="mod-about-title">Version Info</h4>
         <ul class="mod-list-none">
-          <li><span class="mod-mono">v1.0.2</span> — Stable</li>
-          <li><span class="mod-mono">Build:</span> April 2026</li>
+          <li><span class="mod-mono">v1.0.0</span> — Stable</li>
+          <li><span class="mod-mono">Build:</span> July 2026</li>
         </ul>
       </section>
       <hr class="mod-hr">
@@ -978,23 +978,29 @@ END OF TERMS AND CONDITIONS</pre>
         <ul class="mod-list-none">
           <li>Auto-save writes files atomically — a crash mid-save can never corrupt your document.</li>
           <li>A crash backup of your typing is kept while you write; recovery is offered on the next start.</li>
+          <li>Renaming or moving files keeps the links in your notes working (with your confirmation).</li>
           <li>The app never opens links and never acts as a browser.</li>
           <li>Only one instance runs at a time, so saves never compete for the same file.</li>
         </ul>
+      </section>
+      <hr class="mod-hr">
+      <section class="mod-mb-20">
+        <h4 class="mod-about-title">Copyright &amp; License</h4>
+        <p class="mod-p-0">© 2026 Harald Mark Thirslund, Sweden. The source code is licensed under Apache License 2.0; the fonts, images, logo and icons are proprietary — see the Legal page for details.</p>
       </section>
       <hr class="mod-hr">
     `,
     Swedish: `
       <section class="mod-mb-20">
         <h4 class="mod-about-title">½</h4>
-        <p class="mod-p">En markdownredigerare med min varumärkesestetik. Enkel och fungerar bara. Har också visst stöd för LaTeX-syntax.</p>
+        <p class="mod-p">En markdownredigerare med min varumärkesestetik. Enkel och fungerar bara. LaTeX-matematik, live preview, projektmappar på skrivbordet och PDF-/LaTeX-/zip-export.</p>
       </section>
       <hr class="mod-hr">
       <section class="mod-mb-20">
         <h4 class="mod-about-title">Versionsinfo</h4>
         <ul class="mod-list-none">
-          <li><span class="mod-mono">v1.0.2</span> — Stabil</li>
-          <li><span class="mod-mono">Bygg:</span> April 2026</li>
+          <li><span class="mod-mono">v1.0.0</span> — Stabil</li>
+          <li><span class="mod-mono">Bygg:</span> Juli 2026</li>
         </ul>
       </section>
       <hr class="mod-hr">
@@ -1003,9 +1009,15 @@ END OF TERMS AND CONDITIONS</pre>
         <ul class="mod-list-none">
           <li>Autospar skriver filer atomiskt — en krasch mitt i en sparning kan aldrig förstöra ditt dokument.</li>
           <li>En kraschsäkerhetskopia av det du skriver sparas löpande; återställning erbjuds vid nästa start.</li>
+          <li>När filer byter namn eller flyttas hålls länkarna i dina anteckningar fungerande (efter din bekräftelse).</li>
           <li>Appen öppnar aldrig länkar och agerar aldrig webbläsare.</li>
           <li>Endast en instans körs åt gången, så sparningar konkurrerar aldrig om samma fil.</li>
         </ul>
+      </section>
+      <hr class="mod-hr">
+      <section class="mod-mb-20">
+        <h4 class="mod-about-title">Upphovsrätt &amp; licens</h4>
+        <p class="mod-p-0">© 2026 Harald Mark Thirslund, Sverige. Källkoden är licensierad under Apache License 2.0; typsnitten, bilderna, logotypen och ikonerna är upphovsrättsskyddade — se sidan Juridiskt för detaljer.</p>
       </section>
       <hr class="mod-hr">
     `
