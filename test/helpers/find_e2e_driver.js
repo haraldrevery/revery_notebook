@@ -894,6 +894,12 @@
     window.openFontImporter();
     const fmodal = document.getElementById('font-importer-modal');
     out.importerOpens = !!fmodal && !!fmodal.querySelector('.font-imp-sample');
+    /* Installed-font list: unified NativeAPI hook + APP-STYLED suggestion
+       menu (export-dd classes) — never a native, unstyleable <datalist>. */
+    out.sysFontHook = !!(window.NativeAPI && typeof window.NativeAPI.listSystemFonts === 'function')
+      && Array.isArray(await window.NativeAPI.listSystemFonts());
+    out.styledPicker = !!fmodal.querySelector('.font-imp-sys .export-dd-menu')
+      && !fmodal.querySelector('datalist');
     if (fmodal) fmodal.querySelector('.modal-buttons .modal-btn').click(); // Cancel
     out.importerCloses = !document.getElementById('font-importer-modal');
     return out;

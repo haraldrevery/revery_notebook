@@ -1354,8 +1354,10 @@ window.openTemplateCreator = openTemplateCreator;
    - a font FILE (.ttf/.otf/.woff/.woff2 → data URL, works in every shell:
      CSP already allows font-src data:), or
    - an INSTALLED font, by name — CSS resolves installed families by name
-     on every platform; where the Chromium-only queryLocalFonts() API
-     exists (Electron) the input gains a datalist of real font names.
+     on every platform. The suggestion list comes from
+     NativeAPI.listSystemFonts() (Electron: Local Font Access API;
+     Tauri: Rust-side fontdb) and renders app-styled, never as a
+     native datalist.
    A sample line previews the pending font before adding. */
 function openFontImporter() {
   const existing = document.getElementById('font-importer-modal');
@@ -1417,27 +1419,83 @@ function openFontImporter() {
   fileRow.appendChild(fileNote);
   content.appendChild(fileRow);
 
-  /* Source B: installed font by name (datalist where the API exists). */
+  /* Source B: installed font by name. The family list comes from
+     NativeAPI.listSystemFonts() — Electron/browsers via the Local Font
+     Access API, Tauri via Rust-side fontdb enumeration (WebKitGTK has no
+     web API for this). It renders as an APP-STYLED suggestion menu: a
+     native <datalist> is drawn by the OS and cannot be styled. Typed
+     names keep working even when no list is available. */
+  const sysWrap = document.createElement('div');
+  sysWrap.className = 'export-dd font-imp-sys';
   const sysInput = document.createElement('input');
   sysInput.type = 'text';
   sysInput.className = 'export-text tmpl-name';
   sysInput.placeholder = window.t('Installed font name');
-  const dl = document.createElement('datalist');
-  dl.id = 'font-importer-syslist';
-  sysInput.setAttribute('list', dl.id);
-  if (typeof window.queryLocalFonts === 'function') {
-    window.queryLocalFonts().then((fonts) => {
-      const seen = new Set();
-      fonts.forEach((f) => {
-        if (seen.has(f.family)) return;
-        seen.add(f.family);
-        const o = document.createElement('option');
-        o.value = f.family;
-        dl.appendChild(o);
-      });
-    }).catch(() => { /* permission denied / unavailable — typed name still works */ });
+  const sysMenu = document.createElement('div');
+  sysMenu.className = 'export-dd-menu';
+  sysWrap.appendChild(sysInput);
+  sysWrap.appendChild(sysMenu);
+
+  let sysFamilies = [];
+  let sysActive = -1;
+  if (window.NativeAPI && typeof window.NativeAPI.listSystemFonts === 'function') {
+    Promise.resolve(window.NativeAPI.listSystemFonts())
+      .then((names) => { sysFamilies = Array.isArray(names) ? names : []; })
+      .catch(() => { /* no list — typed names still work */ });
   }
+
+  const applySysChoice = (fam) => {
+    sysInput.value = fam;
+    pending = { kind: 'system', family: fam, data: null };
+    fileNote.textContent = '';
+    errNote.textContent = '';
+    if (!nameInput.value.trim()) nameInput.value = fam;
+    sample.style.fontFamily = `"${fam.replace(/"/g, '')}", sans-serif`;
+  };
+
+  const renderSysMenu = () => {
+    const q = sysInput.value.trim().toLowerCase();
+    const hits = (q ? sysFamilies.filter((n) => n.toLowerCase().includes(q)) : sysFamilies).slice(0, 100);
+    sysMenu.innerHTML = '';
+    sysActive = -1;
+    if (!hits.length) { sysMenu.classList.remove('open'); return; }
+    hits.forEach((fam) => {
+      const item = document.createElement('button');
+      item.className = 'export-dd-item';
+      item.textContent = fam;
+      /* mousedown (not click): fires before the input's blur hides the menu */
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        applySysChoice(fam);
+        sysMenu.classList.remove('open');
+      });
+      sysMenu.appendChild(item);
+    });
+    sysMenu.classList.add('open');
+  };
+
+  sysInput.addEventListener('focus', renderSysMenu);
+  sysInput.addEventListener('blur', () => setTimeout(() => sysMenu.classList.remove('open'), 120));
+  sysInput.addEventListener('keydown', (e) => {
+    const items = sysMenu.querySelectorAll('.export-dd-item');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!items.length) return;
+      e.preventDefault();
+      sysActive = e.key === 'ArrowDown'
+        ? (sysActive + 1) % items.length
+        : (sysActive - 1 + items.length) % items.length;
+      items.forEach((it, i) => it.classList.toggle('active', i === sysActive));
+      items[sysActive].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' && sysActive >= 0 && items[sysActive]) {
+      e.preventDefault();
+      applySysChoice(items[sysActive].textContent);
+      sysMenu.classList.remove('open');
+    } else if (e.key === 'Escape') {
+      sysMenu.classList.remove('open');
+    }
+  });
   sysInput.addEventListener('input', () => {
+    renderSysMenu();
     const fam = sysInput.value.trim();
     if (!fam) return;
     pending = { kind: 'system', family: fam, data: null };
@@ -1446,8 +1504,7 @@ function openFontImporter() {
     if (!nameInput.value.trim()) nameInput.value = fam;
     sample.style.fontFamily = `"${fam.replace(/"/g, '')}", sans-serif`;
   });
-  content.appendChild(sysInput);
-  content.appendChild(dl);
+  content.appendChild(sysWrap);
 
   const previewStyle = document.createElement('style');
   content.appendChild(previewStyle);

@@ -30,6 +30,20 @@
     );
   }
 
+  /* System font FAMILY names via the Chromium-only Local Font Access API
+     (Electron and some browsers). Resolves to [] wherever the API or the
+     permission is missing — the font picker then simply offers no list,
+     and typed family names keep working. */
+  async function queryLocalFontFamilies() {
+    try {
+      if (typeof window.queryLocalFonts === 'function') {
+        const fonts = await window.queryLocalFonts();
+        return [...new Set(fonts.map((f) => f.family))].sort();
+      }
+    } catch (_) { /* permission denied / no user gesture */ }
+    return [];
+  }
+
   /* ── Volatile content: crash-safe temp backup ────────────────────────
      setVolatileContent(path, content) persists the editor state to a
      temp/backup location in case of crash. … */
@@ -442,6 +456,9 @@ writeVolatileNow(path, content) {
       // We manually encode them so the browser doesn't interpret them as URL fragments/queries.
       return 'file://' + encodeURI(forward).replace(/#/g, '%23').replace(/\?/g, '%3F');
     },
+
+    /** Installed font family names (Chromium Local Font Access API). */
+    listSystemFonts: queryLocalFontFamilies,
   };
 
 
@@ -846,6 +863,12 @@ getVolatileContent(path) {
       }
       return absolutePath;
     },
+
+    /** Installed font family names — enumerated in Rust (fontdb): WebKitGTK
+        has no Local Font Access API. Names only, never paths. */
+    listSystemFonts() {
+      return this._invoke('list_system_fonts').catch(() => []);
+    },
   };
 
 
@@ -1090,6 +1113,9 @@ getVolatileContent(path) {
 
     /** In web mode local images are already relative to the page – return as-is. */
     toMediaUrl(absolutePath) { return absolutePath; },
+
+    /** Installed font family names where the browser supports the API. */
+    listSystemFonts: queryLocalFontFamilies,
 
     showInExplorer() { /* not applicable in web mode */ },
   };

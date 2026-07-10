@@ -130,7 +130,7 @@ const ENV        = isTauri ? 'tauri' : isElectron ? 'electron' : 'web';
 | Dialogs / window | `showMessageBox` (multi-button routed through an in-page HTML dialog on Tauri), `onWindowClose`, `confirmClose`, `minimizeWindow`, `toggleMaximizeWindow`, `closeWindow`, `setFullscreen`, `showInExplorer` |
 | Settings / pointers | `getLastOpenedFile`/`setLastOpenedFile`/`clearLastOpenedFile`, `getLastRootPath`/`setLastRootPath`, `getPendingRename`/`setPendingRename`, `getProjectHistory`/`setProjectHistory`, `getAppDataPath`, `getDefaultNotesFolder`, `clearAllSettings` |
 | Export | `exportProjectZip` (no args — backend owns source root and destination), `exportLatexZip(tex, images, baseName, bundleFonts)`, `exportPdf(html, opts)` (Electron only — `null` elsewhere), `exportPdfWindow(html)` (Tauri only — dedicated print window) |
-| Media | `toMediaUrl(absPath)` (file:// on Electron, asset protocol on Tauri), `onNativeFileDrop` |
+| Media | `toMediaUrl(absPath)` (file:// on Electron, asset protocol on Tauri), `onNativeFileDrop`, `listSystemFonts` (Electron/web: Local Font Access API; Tauri: Rust fontdb) |
 
 Feature detection is by METHOD PRESENCE, not by environment name: e.g. the
 exporter checks `typeof NativeAPI.exportPdf === 'function'` (Electron direct
@@ -365,6 +365,7 @@ collision.
 | Export | `export_project_zip` (no renderer args; `zip` crate, atomic write), `export_latex_zip` (per-image root validation + allowlisted `bundle_fonts` via `include_bytes!`) |
 | Dialog / window | `show_message_box`, `confirm_close`, `minimize_window`, `toggle_maximize_window`, `close_window`, `set_fullscreen`, `show_in_folder` |
 | Settings | `get/set_last_opened_file`, `get/set_last_root_path`, `get/set_pending_rename`, `get/set_project_history`, `get_app_data_path`, `get_default_notes_folder`, `clear_all_settings` |
+| Fonts | `list_system_fonts` (fontdb enumeration — family names only, no paths) |
 
 ### Managed State
 
@@ -750,7 +751,9 @@ hit that.
   menus end with "Custom font…". Two kinds — imported font FILES (data-URL
   `@font-face` in one regenerated `<style id="custom-fonts-css">`, family
   `RvCustom-<id>`) and INSTALLED fonts by name (CSS resolves any installed
-  family; Electron enhances the input with `queryLocalFonts()`). Stored
+  family; the picker list comes from `NativeAPI.listSystemFonts()` —
+  Local Font Access API on Electron/web, Rust fontdb on Tauri — rendered
+  as an app-styled menu, never a native datalist). Stored
   under `revery_custom_fonts`; all application flows through
   `applyFontTypes()`, so live-preview parity, outline, KaTeX sizing and
   the Harald bold-underline rule handle customs automatically.

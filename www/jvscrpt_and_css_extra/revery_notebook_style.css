@@ -469,6 +469,12 @@ body:has(.menu-container.show) #outline-divider::after {
 .tmpl-error { color: #f87171; font-size: 0.72rem; min-height: 1.2em; margin-top: 8px; }
 
 /* ── Custom font importer ──────────────────────────────────────────────── */
+/* The installed-font picker: full-width app-styled suggestion menu under
+   the input (reuses the export-dd classes; a native <datalist> cannot be
+   styled). .active = keyboard-highlighted row. */
+.font-imp-sys { max-width: none; }
+.font-imp-sys .export-dd-menu { left: 0; right: 0; }
+.export-dd-item.active { background: var(--bg-hover); }
 .font-imp-row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
 .font-imp-note { font-size: 0.72rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .font-imp-sample {

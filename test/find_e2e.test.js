@@ -173,6 +173,6 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     created: true, rowsInBothMenus: true, customEntry: true, applied: true,
     persisted: true, duplicateRejected: true, emptyRejected: true,
     faceInjected: true, deletedReverts: true,
-    importerOpens: true, importerCloses: true,
-  }, 'custom fonts must appear in both font menus with ✕, apply via the CSS var, persist, and revert to Harald on delete');
+    importerOpens: true, sysFontHook: true, styledPicker: true, importerCloses: true,
+  }, 'custom fonts must appear in both font menus with ✕, apply via the CSS var, persist, revert to Harald on delete, and the importer must use the app-styled system-font picker');
 });

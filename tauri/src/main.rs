@@ -1675,6 +1675,26 @@ fn build_zip_from_entries(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, Stri
     Ok(cursor.into_inner())
 }
 
+/// System font FAMILY names for the custom-font picker. WebKitGTK has no
+/// Local Font Access API, so enumeration happens here. Read-only by
+/// construction: names only, no filesystem paths cross the IPC boundary.
+#[tauri::command]
+async fn list_system_fonts() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        let mut names: Vec<String> = db
+            .faces()
+            .filter_map(|f| f.families.first().map(|(name, _)| name.clone()))
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    })
+    .await
+    .map_err(|e| format!("font enumeration failed: {e}"))
+}
+
 #[tauri::command]
 async fn export_latex_zip(
     app: AppHandle,
@@ -2810,6 +2830,7 @@ tauri::Builder::default()
             save_file,
             export_project_zip,
             export_latex_zip,
+            list_system_fonts,
             show_message_box,
             confirm_close,
             watch_file,
