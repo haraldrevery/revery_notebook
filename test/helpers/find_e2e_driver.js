@@ -590,6 +590,43 @@
     && !/\\newpage/.test(window.exporterBuildLatex({}).tex)
     && !/\\newpage\s*\n\\section\{Intro\}/.test(window.exporterBuildLatex({ newPageH1: true }).tex);
 
+  /* 11a-2. LaTeX section splitting: template-style \include files. Split
+     points are marked at heading EMISSION (sentinels), so a verbatim block
+     containing \section-looking text can never be sliced mid-environment —
+     the exact LaTeX-breakage risk of splitting the finished output. */
+  {
+    const s1 = window.exporterBuildLatex({ splitSections: 'h1' });
+    exportSuite.latexSplitH1 = s1.sections.length === 1
+      && s1.sections[0].name === 'intro'
+      && s1.sections[0].content.includes('\\section{Intro}')
+      && s1.sections[0].content.includes('\\subsection{Sub}')
+      && s1.tex.includes('\\include{sections/intro}')
+      && !s1.tex.includes('\\section{Intro}');
+    const s2 = window.exporterBuildLatex({ splitSections: 'h2' });
+    exportSuite.latexSplitH2 = s2.sections.length === 2
+      && s2.tex.includes('\\include{sections/intro}')
+      && s2.tex.includes('\\include{sections/sub}')
+      && s2.sections[1].content.includes('\\subsection{Sub}');
+    const s0 = window.exporterBuildLatex({});
+    exportSuite.latexSplitOff = s0.sections.length === 0 && !s0.tex.includes('\\include{');
+
+    /* Verbatim immunity + slug dedupe: a code fence containing a fake
+       \section and a fake heading must stay one un-split verbatim block,
+       and two same-named headings get distinct file names. */
+    const prevDoc = editor.value;
+    replaceEditorContent('# A B\n\ntext\n\n# A B\n\nmore\n\n```\n\\\\section{Fake}\n# not a heading\n```\n\n# Last\n');
+    const st = window.exporterBuildLatex({ splitSections: 'h1' });
+    exportSuite.latexSplitSafe = st.sections.length === 3
+      && st.sections[0].name === 'a-b'
+      && st.sections[1].name === 'a-b-2'
+      && st.sections[2].name === 'last'
+      && st.sections[1].content.includes('\\begin{verbatim}')
+      && st.sections[1].content.includes('# not a heading');
+    replaceEditorContent(prevDoc);
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    await sleep(150); // preview re-render for the probes below
+  }
+
   /* 11b-2. Engine-aware print CSS: Chromium (Electron) keeps the named
      full-bleed cover; the webkit/scoped targets get an absolute-mm cover
      inside the page margins and NO viewport units — the Chromium-only

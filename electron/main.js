@@ -809,11 +809,24 @@ ipcMain.handle('export:pdf', async (_event, html, opts) => {
    Every image path is validated against the trusted root before reading
    (the renderer chooses names, never locations). Same dialog + atomic
    write + entry-zip pattern as everything else.                        */
-ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName, bundleFonts) => {
+ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName, bundleFonts, sections) => {
   if (typeof tex !== 'string') throw new Error('Invalid LaTeX document');
   const root = requireRoot();
 
   const entries = [{ name: 'main.tex', data: tex }];
+
+  /* Split-section files. The renderer sends bare slugs; the archive path
+     is constructed HERE, so an entry can never escape sections/. */
+  for (const sec of (Array.isArray(sections) ? sections : []).slice(0, 300)) {
+    if (!sec || typeof sec.name !== 'string' || typeof sec.content !== 'string') continue;
+    if (!/^[a-z0-9-]{1,60}$/.test(sec.name)) {
+      throw new Error(`Invalid section name in export: ${sec.name}`);
+    }
+    if (sec.content.length > 2 * 1024 * 1024) {
+      throw new Error(`Section too large: ${sec.name}`);
+    }
+    entries.push({ name: `sections/${sec.name}.tex`, data: sec.content });
+  }
   for (const img of (Array.isArray(images) ? images : [])) {
     if (!img || typeof img.srcPath !== 'string' || typeof img.zipName !== 'string') continue;
     if (!/^[\w. \-()À-￿]+$/.test(img.zipName)) {

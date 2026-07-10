@@ -57,6 +57,7 @@
       toc: false,
       newPageH1: false,          // \newpage before every # / H1
       newPageH2: false,          // \newpage before every ## / H2
+      splitSections: 'none',     // 'none' | 'h1' | 'h2' — own .tex file per section
     },
   };
 
@@ -563,6 +564,23 @@
       : ['\\section', '\\subsection', '\\subsubsection',
          '\\paragraph', '\\subparagraph', '\\subparagraph'];
 
+    /* Section splitting (template-style \include files): 'h1' starts a new
+       sections/<slug>.tex at every #, 'h2' at every # AND ## (a new H1
+       necessarily ends the previous H2 section too). Slugs are strict
+       ASCII — \include filenames with spaces or non-ASCII are fragile
+       across TeX engines and operating systems. */
+    const splitLevel = opts.splitSections === 'h1' ? 1 : opts.splitSections === 'h2' ? 2 : 0;
+    const usedSlugs = new Set();
+    const sectionSlug = (t) => {
+      const base = String(t).toLowerCase().replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '').slice(0, 40) || 'section';
+      let cand = base;
+      let n = 2;
+      while (usedSlugs.has(cand)) cand = `${base}-${n++}`;
+      usedSlugs.add(cand);
+      return cand;
+    };
+
     const lines  = raw.split('\n');
     const output = [];
     let i = 0;
@@ -582,6 +600,15 @@
         const wantBreak = (level === 1 && opts.newPageH1) || (level === 2 && opts.newPageH2);
         if (wantBreak && output.some((l) => l && l.trim() !== '')) {
           output.push('\\newpage');
+        }
+        /* Section splitting: mark file boundaries HERE, at heading emission —
+           never by scanning the finished LaTeX, where a verbatim block could
+           legally contain a line that LOOKS like \section{...} and a textual
+           split would slice mid-environment. The sentinel uses the same
+           control characters as the protected-block system, which cannot
+           occur in document text. */
+        if (splitLevel && level <= splitLevel) {
+          output.push(`\x02SEC:${sectionSlug(title)}\x03`);
         }
         output.push(`${cmds[level - 1]}{${processInline(title)}}`);
         i++; continue;
@@ -649,7 +676,23 @@
     }
 
     /* ── 9. Restore protected blocks ── */
-    const body = restoreProtected(output.join('\n'));
+    let body = restoreProtected(output.join('\n'));
+
+    /* Cut the body at the sentinels into sections/<slug>.tex files; the
+       main document keeps anything before the first split heading inline
+       and references each file with \include (which \clearpage's around
+       it — the same chapters/problems-on-fresh-pages behavior as the
+       hand-written templates this mirrors). */
+    const sections = [];
+    if (splitLevel) {
+      const segs = body.split(/^\x02SEC:([a-z0-9-]+)\x03$/m);
+      const mainParts = [segs[0].trim()];
+      for (let k = 1; k < segs.length; k += 2) {
+        sections.push({ name: segs[k], content: segs[k + 1].trim() + '\n' });
+        mainParts.push(`\\include{sections/${segs[k]}}`);
+      }
+      body = mainParts.filter(Boolean).join('\n\n');
+    }
 
     /* ── 10. Assemble the .tex document from the template descriptor ──
        Honor the user's engine when the template supports it; otherwise fall
@@ -688,7 +731,7 @@
     ];
     const tex = docParts.join('\n').replace(/\n{3,}/g, '\n\n');
 
-    return { tex, images: collectedImages, baseName: exportBaseName(), fonts: desc.bundleFonts || [] };
+    return { tex, images: collectedImages, baseName: exportBaseName(), fonts: desc.bundleFonts || [], sections };
   }
 
   /* ══════════════════════════════════════════════════════════════════
@@ -1049,12 +1092,16 @@ ${parts.bodyHtml}
   }
 
   async function runLatexExport() {
-    const built = buildLatexDocument(exportSettings.latex);
     const canZip = window.NativeAPI && typeof window.NativeAPI.exportLatexZip === 'function'
       && window.NativeAPI.exportLatexZip;
+    /* The web fallback is a single-.tex download — a browser download cannot
+       carry a sections/ folder, so splitting only applies to the zip path. */
+    const built = buildLatexDocument(canZip
+      ? exportSettings.latex
+      : Object.assign({}, exportSettings.latex, { splitSections: 'none' }));
     if (canZip) {
       try {
-        const res = await window.NativeAPI.exportLatexZip(built.tex, built.images, built.baseName, built.fonts);
+        const res = await window.NativeAPI.exportLatexZip(built.tex, built.images, built.baseName, built.fonts, built.sections);
         if (res && res.ok && typeof showSavedIndicator === 'function') showSavedIndicator();
       } catch (err) {
         console.error('[export] LaTeX zip failed:', err);
@@ -1322,6 +1369,11 @@ ${parts.bodyHtml}
     wrap.appendChild(toggleRow('Table of contents', () => l.toc, (v) => { l.toc = v; }));
     wrap.appendChild(toggleRow('New page before each H1', () => l.newPageH1, (v) => { l.newPageH1 = v; }));
     wrap.appendChild(toggleRow('New page before each H2', () => l.newPageH2, (v) => { l.newPageH2 = v; }));
+    /* Template-style file layout: each section in its own sections/<name>.tex,
+       referenced from main.tex with \include (desktop zip export only). */
+    wrap.appendChild(row('Split sections', dropdown(
+      [['none', 'None'], ['h1', 'One file per H1'], ['h2', 'One file per H1 and H2']],
+      () => l.splitSections, (v) => { l.splitSections = v; })));
 
     const note = document.createElement('div');
     note.className = 'export-note';

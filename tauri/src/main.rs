@@ -1642,6 +1642,12 @@ struct LatexImage {
     zip_name: String,
 }
 
+#[derive(serde::Deserialize)]
+struct LatexSection {
+    name: String,
+    content: String,
+}
+
 /// Build a zip from in-memory (name, bytes) entries with deflate.
 fn build_zip_from_entries(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
     use std::io::Write;
@@ -1676,6 +1682,7 @@ async fn export_latex_zip(
     images: Vec<LatexImage>,
     base_name: Option<String>,
     bundle_fonts: Option<Vec<String>>,
+    sections: Option<Vec<LatexSection>>,
     root_state: State<'_, RootPath>,
 ) -> Result<ZipExportResult, String> {
     use tauri_plugin_dialog::{DialogExt, FilePath};
@@ -1701,6 +1708,21 @@ async fn export_latex_zip(
                 .map_err(|e| format!("Cannot read image {}: {e}", img.zip_name))?;
             entries.push((format!("images/{}", img.zip_name), data));
         }
+    }
+
+    /* Split-section files. The renderer sends bare slugs; the archive
+       path is constructed HERE, so an entry can never escape sections/. */
+    for sec in sections.unwrap_or_default().into_iter().take(300) {
+        if sec.name.is_empty()
+            || sec.name.len() > 60
+            || !sec.name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(format!("Invalid section name in export: {}", sec.name));
+        }
+        if sec.content.len() > 2 * 1024 * 1024 {
+            return Err(format!("Section too large: {}", sec.name));
+        }
+        entries.push((format!("sections/{}.tex", sec.name), sec.content.into_bytes()));
     }
 
     /* Bundle brand fonts a template requests. The frontend may only name

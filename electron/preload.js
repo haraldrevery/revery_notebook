@@ -105,8 +105,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('export:pdf', html, opts),
 
   /** Export main.tex + referenced images as a LaTeX project zip. */
-  exportLatexZip: (tex, images, baseName, bundleFonts) =>
-    ipcRenderer.invoke('export:latex-zip', tex, images, baseName, bundleFonts),
+  exportLatexZip: (tex, images, baseName, bundleFonts, sections) =>
+    ipcRenderer.invoke('export:latex-zip', tex, images, baseName, bundleFonts, sections),
 
 /**
    * Request a close.  Triggers the existing 'window:close-request' flow
