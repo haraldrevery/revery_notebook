@@ -136,7 +136,7 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     boldHaraldUnderline: true, boldOtherFontsReal: true, boldHaraldRestored: true,
     dividerYieldsToMenus: true,
     engineSafeCover: true, pdfCustomFonts: true, pdfCustomFontFallback: true,
-    tocBreakBefore: true, printBodyUnflexed: true,
+    tocBreakBefore: true, printBodyUnflexed: true, webkitLean: true,
     latexSplitH1: true, latexSplitH2: true, latexSplitOff: true, latexSplitSafe: true,
   }, 'export builders must honor LaTeX templates/engines/title/TOC/clearpage/newpage-headers and PDF front-page/TOC/@page/A5-A6/per-header-break/font/asset-base options; both menu entries present; brand extbook/article templates force xelatex + report bundled fonts + are gated out under pdflatex; Harald PDF drops title bold + underlines inline bold + shrinks math to match');
 

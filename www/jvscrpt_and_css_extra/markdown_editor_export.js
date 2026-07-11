@@ -884,11 +884,26 @@ ${P}.front-page .fp-title { font-weight: normal; }` : '';
        factor under Harald; other fonts keep the 1.05em math size unchanged. */
     const mathEm = isHarald ? (1.05 * 0.7).toFixed(3) : '1.05';
 
+    /* WebKitGTK (the Tauri print window) implements only a SUBSET of print
+       CSS correctly. Everything it is known to mishandle is omitted for
+       that target: @page size/margins (the GTK dialog owns them; WebKit
+       composes the two inconsistently — clipped/shifted text),
+       @page :left/:right pseudo-pages, and the avoid-* fragmentation
+       hints (break-after: avoid-page on headings and break-inside:
+       avoid-page on pre/table often PAINT OVER adjacent content instead
+       of moving the block — the "broken headers and text" bug). What
+       remains for webkit is the reliable subset: typography, colors, the
+       mm-sized cover, and break-BEFORE forced breaks. */
+    const lean = target === 'webkit';
+
     /* Book format mirrors inner/outer margins on facing pages. */
-    const bookMargins = (opts.format === 'book')
+    const bookMargins = (opts.format === 'book' && !lean)
       ? `@page :right { margin: ${mm}mm ${Math.max(6, mm - 6)}mm ${mm}mm ${mm + 6}mm; }
 @page :left  { margin: ${mm}mm ${mm + 6}mm ${mm}mm ${Math.max(6, mm - 6)}mm; }`
       : '';
+    const pageRules = lean ? '' : `@page { size: ${size}; margin: ${mm}mm; }
+${fullBleed ? '@page cover { margin: 0; }' : ''}
+${bookMargins}`;
 
     /* Standalone documents (Electron/Tauri) need the brand faces (relative
        urls resolved via <base>) AND any imported custom fonts (embedded
@@ -921,9 +936,7 @@ ${customFaces}`;
       ((opts.frontPage || opts.toc) ? `${P}main { page-break-before: always; break-before: page; }\n` : '');
 
     return `${fontFace}
-@page { size: ${size}; margin: ${mm}mm; }
-${fullBleed ? '@page cover { margin: 0; }' : ''}
-${bookMargins}
+${pageRules}
 ${P}*, ${P}*::before, ${P}*::after { box-sizing: border-box; margin: 0; padding: 0; }
 ${B} {
   font-family: ${font};
@@ -933,7 +946,7 @@ ${B} {
 ${P}h1, ${P}h2, ${P}h3, ${P}h4, ${P}h5, ${P}h6 {
   font-weight: 700; line-height: 1.25;
   margin-top: 1.6em; margin-bottom: 0.5em;
-  break-after: avoid-page;
+  ${lean ? '' : 'break-after: avoid-page;'}
 }
 ${P}h1 { font-size: 1.9em; } ${P}h2 { font-size: 1.45em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
 ${P}h3 { font-size: 1.2em; } ${P}h4, ${P}h5, ${P}h6 { font-size: 1em; }
@@ -943,9 +956,9 @@ ${P}ul, ${P}ol { margin: 0 0 1.1em 1.6em; }
 ${P}li { margin-bottom: 0.2em; }
 ${P}blockquote { border-left: 3px solid #999; margin: 1.3em 0; padding: 0.3em 1.1em; color: #555; font-style: italic; }
 ${P}code { font-family: 'HaraldMono', 'Courier New', monospace; font-size: 0.88em; background: #f3f4f6; padding: 0.1em 0.35em; border-radius: 3px; }
-${P}pre { background: #0d1117; color: #c9d1d9; padding: 1em 1.2em; border-radius: 5px; margin: 1.3em 0; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; break-inside: avoid-page; }
+${P}pre { background: #0d1117; color: #c9d1d9; padding: 1em 1.2em; border-radius: 5px; margin: 1.3em 0; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word;${lean ? '' : ' break-inside: avoid-page;'} }
 ${P}pre code { background: none; padding: 0; color: inherit; font-size: 0.85em; }
-${P}table { width: 100%; border-collapse: collapse; margin: 1.3em 0; font-size: 0.92em; break-inside: avoid-page; }
+${P}table { width: 100%; border-collapse: collapse; margin: 1.3em 0; font-size: 0.92em;${lean ? '' : ' break-inside: avoid-page;'} }
 ${P}th, ${P}td { border: 1px solid #ccc; padding: 0.4em 0.6em; text-align: left; }
 ${P}th { background: #f3f4f6; }
 ${P}img { max-width: 100%; height: auto; display: block; margin: 1.3em auto; }

@@ -655,6 +655,12 @@
       && !tocOnly.includes('.toc { page-break-before')
       && tocOnly.includes('main { page-break-before: always')
       && !neither.includes('page-break-before');
+    /* The webkit target must carry NONE of the print features WebKitGTK
+       mishandles (@page rules, avoid-* fragmentation hints); the chromium
+       target keeps them all. */
+    exportSuite.webkitLean =
+      !both.includes('avoid-page') && !both.includes('@page')
+      && pdfF.html.includes('avoid-page') && pdfF.html.includes('@page { size:');
     let unflexed = false;
     for (const sheet of document.styleSheets) {
       let rules;
