@@ -689,6 +689,8 @@ Three delivery paths, feature-detected in `runPdfExport`:
 The E2E suite pins the print page's graft behavior (payload replaces the
 page wholesale, title adopted, visible error without a payload).
 
+Note: The web and Tauri version when toggling on the table of content for the pdf export most likely cause text to overlap and behave odd. This is maybe due to WebKitGTK and I can't fix it, use the Electron version if printing a non-broken pdf is important.
+
 **LaTeX project (.zip)**: the markdown→LaTeX converter plus every
 referenced project image, rewritten to `images/<name>` (deduped,
 LaTeX-safe names) so the archive is compile-ready. Templates come from a
