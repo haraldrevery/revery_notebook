@@ -1039,12 +1039,19 @@ ${parts.bodyHtml}
 
     document.head.appendChild(styleEl);
     document.body.appendChild(rootEl);
+    /* BOTH html and body get the marker: the app shell sets
+       `html, body { height: 100%; overflow: hidden }` (and body is flex),
+       and a clamped/hidden ROOT makes print pagination slice a one-viewport
+       layout — the overlapping-text bug. CSS cannot reach html from a body
+       class (parent), so the class is applied to both. */
+    document.documentElement.classList.add('exporting-pdf');
     document.body.classList.add('exporting-pdf');
 
     let done = false;
     const cleanup = () => {
       if (done) return;
       done = true;
+      document.documentElement.classList.remove('exporting-pdf');
       document.body.classList.remove('exporting-pdf');
       try { styleEl.remove(); } catch (_) {}
       try { rootEl.remove(); } catch (_) {}

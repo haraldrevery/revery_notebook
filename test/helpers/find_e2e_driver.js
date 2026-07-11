@@ -661,16 +661,40 @@
     exportSuite.webkitLean =
       !both.includes('avoid-page') && !both.includes('@page')
       && pdfF.html.includes('avoid-page') && pdfF.html.includes('@page { size:');
-    let unflexed = false;
+    let unflexed = false, unclamped = false;
     for (const sheet of document.styleSheets) {
       let rules;
       try { rules = sheet.cssRules; } catch (_) { continue; }
       for (const r of rules) {
-        if (r.media && /print/.test(r.media.mediaText) && /body\.exporting-pdf\s*\{/.test(r.cssText)
-            && r.cssText.includes('display: block')) { unflexed = true; }
+        if (!r.media || !/print/.test(r.media.mediaText)) continue;
+        if (/body\.exporting-pdf\s*\{/.test(r.cssText) && r.cssText.includes('display: block')) unflexed = true;
+        /* The shell also clamps the ROOT (`html { height:100%; overflow:hidden }`)
+           — printing a clipped one-viewport root slices overlapping pages, so
+           the print block must release html too. */
+        if (/html\.exporting-pdf\s*\{/.test(r.cssText) && r.cssText.includes('overflow: visible')) unclamped = true;
       }
     }
     exportSuite.printBodyUnflexed = unflexed;
+    exportSuite.printHtmlUnclamped = unclamped;
+    /* Live run: printInApp must mark BOTH html and body while printing
+       (CSS cannot reach html from a body class) and fully clean up after. */
+    {
+      const origPrint = window.print;
+      let during = false;
+      window.print = () => {
+        during = document.documentElement.classList.contains('exporting-pdf')
+          && document.body.classList.contains('exporting-pdf')
+          && !!document.getElementById('export-print-root');
+      };
+      window.exporterPrintInApp({ toc: true });
+      await sleep(400); // printInApp defers window.print by 200ms
+      window.print = origPrint;
+      window.dispatchEvent(new Event('afterprint'));
+      exportSuite.inAppPrintMarks = during
+        && !document.documentElement.classList.contains('exporting-pdf')
+        && !document.body.classList.contains('exporting-pdf')
+        && !document.getElementById('export-print-root');
+    }
   }
 
   /* 11b-3. Custom fonts in the PDF export: system-kind resolves by family,

@@ -2539,10 +2539,20 @@ body.live-preview-active #editor .cm-content {
    (and hiding #workspace hides #preview via the ancestor anyway).      */
 #export-print-root { display: none; }
 @media print {
-  /* The app shell body is display:flex — which makes the injected export
-     root a FLEX ITEM, and forced page breaks inside flex containers are
-     broken in every engine (content laid out as one box, then sliced →
-     the TOC/content overlap bug). Print the export as normal block flow. */
+  /* Two app-shell constraints make in-page print pagination impossible and
+     caused the overlapping-text exports:
+     1. `html, body { height: 100%; overflow: hidden }` clamps the ROOT to
+        one viewport and clips it — the print engine then slices a
+        one-screen layout into pages, painting text over text.
+     2. body is display:flex — the injected export root becomes a FLEX
+        ITEM, and forced page breaks inside flex containers are broken in
+        every engine.
+     printInApp puts the marker class on BOTH html and body (CSS cannot
+     reach html from a body class), and both are released here. */
+  html.exporting-pdf {
+    height: auto !important;
+    overflow: visible !important;
+  }
   body.exporting-pdf {
     display: block !important;
     height: auto !important;
