@@ -1432,12 +1432,33 @@ const ZIP_MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 /// the project can never leak content from outside the root into the
 /// archive. `exclude` is the destination zip itself, for when the user
 /// saves the archive inside their own project folder.
+/// File mtime → zip DOS timestamp, LOCAL wall clock — the same convention
+/// as the Electron exporter's dosDateTime(), so backups made by either
+/// installer carry identical, real modification times (the sidebar sorts
+/// by mtime; a restored backup must not scramble that order). The DOS
+/// format spans 1980–2107: the year is clamped like Electron's floor, and
+/// anything still unrepresentable falls back to the zip epoch rather than
+/// failing a backup over one odd mtime.
+fn zip_datetime_from(t: std::time::SystemTime) -> zip::DateTime {
+    use chrono::{Datelike, Timelike};
+    let dt: chrono::DateTime<chrono::Local> = t.into();
+    zip::DateTime::from_date_and_time(
+        dt.year().clamp(1980, 2107) as u16,
+        dt.month() as u8,
+        dt.day() as u8,
+        dt.hour() as u8,
+        dt.minute() as u8,
+        (dt.second().min(59)) as u8, // chrono leap second 60 is out of DOS range
+    )
+    .unwrap_or_default()
+}
+
 fn walk_project_for_zip(
     dir: &Path,
     rel: &str,
     exclude: Option<&Path>,
-    files: &mut Vec<(String, PathBuf)>,
-    dirs: &mut Vec<String>,
+    files: &mut Vec<(String, PathBuf, std::time::SystemTime)>,
+    dirs: &mut Vec<(String, std::time::SystemTime)>,
     total_bytes: &mut u64,
 ) -> Result<(), String> {
     let read = std::fs::read_dir(dir)
@@ -1462,8 +1483,12 @@ fn walk_project_for_zip(
         let name = entry.file_name().to_string_lossy().into_owned();
         let rel_child = if rel.is_empty() { name } else { format!("{rel}/{name}") };
 
+        // Real mtime for the archive entry (parity with the Electron
+        // exporter, which stores st.mtime). Non-fatal if unreadable.
+        let mtime = meta.modified().unwrap_or_else(|_| std::time::SystemTime::now());
+
         if meta.is_dir() {
-            dirs.push(rel_child.clone());
+            dirs.push((rel_child.clone(), mtime));
             if files.len() + dirs.len() > ZIP_MAX_ENTRIES {
                 return Err(format!(
                     "Project has too many items for zip export (limit {ZIP_MAX_ENTRIES})."
@@ -1475,7 +1500,7 @@ fn walk_project_for_zip(
             if *total_bytes > ZIP_MAX_TOTAL_BYTES {
                 return Err("Project is too large for zip export (limit 512 MB).".into());
             }
-            files.push((rel_child, path));
+            files.push((rel_child, path, mtime));
             if files.len() + dirs.len() > ZIP_MAX_ENTRIES {
                 return Err(format!(
                     "Project has too many items for zip export (limit {ZIP_MAX_ENTRIES})."
@@ -1494,22 +1519,22 @@ fn build_project_zip(
 ) -> Result<(Vec<u8>, usize, u64), String> {
     use std::io::Write;
 
-    let mut files: Vec<(String, PathBuf)> = Vec::new();
-    let mut dirs: Vec<String> = Vec::new();
+    let mut files: Vec<(String, PathBuf, std::time::SystemTime)> = Vec::new();
+    let mut dirs: Vec<(String, std::time::SystemTime)> = Vec::new();
     let mut total: u64 = 0;
     walk_project_for_zip(root, "", exclude, &mut files, &mut dirs, &mut total)?;
 
-    let opts = zip::write::SimpleFileOptions::default()
+    let base_opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
 
     // Directory entries first — preserves empty folders on extract.
-    for d in &dirs {
-        w.add_directory(d, opts)
+    for (d, mtime) in &dirs {
+        w.add_directory(d, base_opts.last_modified_time(zip_datetime_from(*mtime)))
             .map_err(|e| format!("zip dir entry failed: {e}"))?;
     }
-    for (rel, abs) in &files {
-        w.start_file(rel, opts)
+    for (rel, abs, mtime) in &files {
+        w.start_file(rel, base_opts.last_modified_time(zip_datetime_from(*mtime)))
             .map_err(|e| format!("zip entry failed: {e}"))?;
         let data = std::fs::read(abs)
             .map_err(|e| format!("Could not read {}: {e}", abs.display()))?;
@@ -1651,8 +1676,12 @@ struct LatexSection {
 /// Build a zip from in-memory (name, bytes) entries with deflate.
 fn build_zip_from_entries(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
     use std::io::Write;
+    // In-memory entries have no source mtime; stamp them with "now" —
+    // parity with the Electron exporter — instead of the crate's 1980
+    // epoch default, so extracted files carry a meaningful date.
     let opts = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+        .compression_method(zip::CompressionMethod::Deflated)
+        .last_modified_time(zip_datetime_from(std::time::SystemTime::now()));
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let mut dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (name, _) in entries {
@@ -3145,6 +3174,41 @@ mod tests {
     fn zip_from_entries_rejects_unsafe_names() {
         assert!(build_zip_from_entries(&[("../evil".to_string(), vec![1])]).is_err());
         assert!(build_zip_from_entries(&[("/abs".to_string(), vec![1])]).is_err());
+    }
+
+    /* Backups must carry REAL modification times (the sidebar sorts by
+       mtime — restoring a backup stamped with the zip crate's 1980 epoch
+       default would scramble that order). The fixture files were written
+       moments ago, so their entries must carry a current-era year, both
+       for the project walk (real file mtimes) and the in-memory entries
+       zip (stamped "now", parity with the Electron exporter). */
+    #[test]
+    fn zip_entries_carry_real_mtimes() {
+        let root = zip_fixture("zip-mtime");
+        let (bytes, _, _) = build_project_zip(&root, None).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        for name in ["note.md", "sub/inner.md", "empty/"] {
+            let entry = archive.by_name(name).unwrap();
+            let dt = entry
+                .last_modified()
+                .unwrap_or_else(|| panic!("{name} has no timestamp"));
+            assert!(dt.year() >= 2024, "{name} stamped {} — 1980-epoch default leaked", dt.year());
+        }
+
+        let bytes = build_zip_from_entries(&[("main.tex".to_string(), b"x".to_vec())]).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let dt = archive.by_name("main.tex").unwrap().last_modified().unwrap();
+        assert!(dt.year() >= 2024, "entries zip stamped {}", dt.year());
+    }
+
+    #[test]
+    fn zip_datetime_conversion_clamps_out_of_range() {
+        // Pre-DOS-epoch mtime (e.g. a file dated 1970) must clamp, not fail.
+        let dt = zip_datetime_from(std::time::UNIX_EPOCH);
+        assert_eq!(dt.year(), 1980);
+        // A current time round-trips with real components.
+        let now = zip_datetime_from(std::time::SystemTime::now());
+        assert!(now.year() >= 2024);
     }
 
     #[test]

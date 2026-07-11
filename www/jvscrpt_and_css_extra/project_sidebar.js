@@ -1345,6 +1345,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     window.sidebarSaveActiveFile = saveActiveFile;
     window.sidebarGetActiveFilePath = () => S.activeFilePath;
     window.sidebarGetRootPath = () => S.rootPath;
+    window.sidebarIsDirty = () => S.isDirty;
     window.sidebarPivotToNewFile = async function(newPath, newRoot) {
       S.activeFilePath = newPath;
       markClean();

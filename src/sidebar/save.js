@@ -338,6 +338,7 @@ export function initSaveEngine() {
   window.sidebarSaveActiveFile    = saveActiveFile;
   window.sidebarGetActiveFilePath = () => S.activeFilePath;
   window.sidebarGetRootPath       = () => S.rootPath;
+  window.sidebarIsDirty           = () => S.isDirty;
 
   // Pivot the sidebar state to a newly saved file (used by Save As)
   window.sidebarPivotToNewFile = async function(newPath, newRoot) {

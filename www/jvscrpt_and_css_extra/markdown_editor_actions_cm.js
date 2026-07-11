@@ -577,6 +577,27 @@ async function exportProjectZip() {
     });
     return;
   }
+  /* The archive is built from DISK, but the active file can lag the editor
+     by seconds (autosave debounce) — or indefinitely under a save-failure
+     cooldown or a "Keep my version" conflict hold. A backup must contain
+     the newest edits, so flush them first; if the flush fails, let the
+     user decide rather than silently archiving stale bytes. */
+  if (typeof window.sidebarIsDirty === 'function' && window.sidebarIsDirty()
+      && typeof window.sidebarSaveActiveFile === 'function') {
+    const saved = await window.sidebarSaveActiveFile();
+    if (!saved) {
+      const choice = await window.NativeAPI.showMessageBox({
+        type: 'warning',
+        title: window.t('Zip Project Export'),
+        message: window.t('Your latest changes could not be saved.'),
+        detail: window.t('The zip would contain the last saved version of the current file, not what is in the editor.'),
+        buttons: [window.t('Export anyway'), window.t('Cancel')],
+        defaultId: 1,
+        cancelId: 1,
+      });
+      if (!choice || choice.response !== 0) return;
+    }
+  }
   try {
     const res = await window.NativeAPI.exportProjectZip();
     if (!res || res.canceled) return; // user backed out of the dialog — silent
