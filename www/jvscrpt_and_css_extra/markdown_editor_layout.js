@@ -41,6 +41,9 @@ const onDocumentMove = e => {
     const outlinePane = document.getElementById('outline-pane');
     const newWidth = Math.min(Math.max(outlineStartWidth - (currentX - outlineStartX), 140), Math.min(420, total - 400));
     outlinePane.style.width = newWidth + 'px';
+    /* Desktop overlay mode: the divider is position:absolute and anchors
+       at `right: var(--outline-pane-w)` — keep it glued to the pane edge */
+    document.documentElement.style.setProperty('--outline-pane-w', newWidth + 'px');
   }
 };
 

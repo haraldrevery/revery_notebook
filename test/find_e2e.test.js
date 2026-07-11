@@ -79,8 +79,11 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
   assert.equal(r.bgRemoved, true, 'removing the custom background must clean storage and fall back');
 
   // 9. full import pipeline: File → decode → downscale → store → COMPUTED style
-  assert.deepEqual(r.pipeline, { stored: true, selected: true, rendered: true, opacityBumped: true },
-    'a real picked image must decode under the CSP and visibly render on #preview');
+  //    + the outline overlay must not change the preview pane box (texture fix)
+  assert.deepEqual(r.pipeline,
+    { stored: true, selected: true, rendered: true, opacityBumped: true,
+      textureStable: true, outlineInsetsText: true },
+    'a real picked image must decode under the CSP and visibly render on #preview; the outline overlay toggle must not resize the preview pane but must inset the preview text (padding-right 252px open / 52px closed)');
 
   // 10. live preview v2: rendered blocks, reveal-on-selection (block
   //     granularity), fresh-state survival, clean off
@@ -108,7 +111,8 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     clickUnderPointer: true, outlineScrollOnly: true, readerOutlineScrolls: true,
     edgeClickNoSteal: true, outlineSyncs: true, paddingParity: true,
     readerPadding: true, readerPaddingResets: true,
-  }, 'v2 blocks must render through the preview pipeline with computed-style parity: headers, code font+colors, hidden fences, image sizing, tables, multi-line math');
+    arrowDownByLine: true, arrowUpByLine: true,
+  }, 'v2 blocks must render through the preview pipeline with computed-style parity: headers, code font+colors, hidden fences, image sizing, tables, multi-line math; vertical arrows must walk raw doc lines through rendered blocks');
 
   // 12. zip export is desktop-only — absent from the File menu in web mode
   assert.equal(r.zipEntryHidden, true, 'Zip Project Export must be hidden in web mode');
@@ -139,6 +143,8 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     tocBreakBefore: true, printBodyUnflexed: true, webkitLean: true,
     printHtmlUnclamped: true, inAppPrintMarks: true,
     latexSplitH1: true, latexSplitH2: true, latexSplitOff: true, latexSplitSafe: true,
+    latexPaperDefault: true, latexPaperOption: true, latexPaperSafe: true,
+    latexLanguage: true, latexMetaOverride: true,
   }, 'export builders must honor LaTeX templates/engines/title/TOC/clearpage/newpage-headers and PDF front-page/TOC/@page/A5-A6/per-header-break/font/asset-base options; both menu entries present; brand extbook/article templates force xelatex + report bundled fonts + are gated out under pdflatex; Harald PDF drops title bold + underlines inline bold + shrinks math to match');
 
   // 14. outline +/- buttons scale only the outline font, persisted

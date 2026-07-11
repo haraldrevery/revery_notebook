@@ -514,6 +514,10 @@ body:has(.menu-container.show) #outline-divider::after {
   padding: 8px 20px 6px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
+  /* Solid panel color at 40% alpha (opaque fallback for engines without
+     color-mix) — the bar reads as a surface instead of bare texture.  */
+  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 40%, transparent);
 }
 #editor {
   flex: 1;
@@ -586,29 +590,29 @@ body:has(.menu-container.show) #outline-divider::after {
 /* ── CHANGE THESE URLS TO YOUR OWN BACKGROUND IMAGES ── */
 [data-theme="dark"] #preview {
   /* Overlays dark bg (#0a0a0a) to mimic low opacity without needing a scrolling ::before element */
-  background-image: 
-    linear-gradient(rgba(10, 10, 10, calc(1 - var(--bg_oacity))), rgba(10, 10, 10, calc(1 - var(--bg_oacity)))), 
+  background-image:
+    linear-gradient(rgba(10, 10, 10, calc(1 - var(--bg_oacity))), rgba(10, 10, 10, calc(1 - var(--bg_oacity)))),
     var(--preview-bg-image, none);
 }
 
 [data-theme="light"] #preview {
   /* Overlays light bg (#fafaf8) to mimic low opacity without needing a scrolling ::before element */
-  background-image: 
-    linear-gradient(rgba(250, 250, 248, calc(1 - var(--bg_oacity))), rgba(250, 250, 248, calc(1 - var(--bg_oacity)))), 
+  background-image:
+    linear-gradient(rgba(250, 250, 248, calc(1 - var(--bg_oacity))), rgba(250, 250, 248, calc(1 - var(--bg_oacity)))),
     var(--preview-bg-image, none);
 }
 
 [data-theme="paper"] #preview {
   /* Overlays paper bg (#f4efe4) */
-  background-image: 
-    linear-gradient(rgba(244, 239, 228, calc(1 - var(--bg_oacity))), rgba(244, 239, 228, calc(1 - var(--bg_oacity)))), 
+  background-image:
+    linear-gradient(rgba(244, 239, 228, calc(1 - var(--bg_oacity))), rgba(244, 239, 228, calc(1 - var(--bg_oacity)))),
     var(--preview-bg-image, none);
 }
 
 [data-theme="forest"] #preview {
   /* Overlays forest bg (#0e1a11) */
-  background-image: 
-    linear-gradient(rgba(14, 26, 17, calc(1 - var(--bg_oacity))), rgba(14, 26, 17, calc(1 - var(--bg_oacity)))), 
+  background-image:
+    linear-gradient(rgba(14, 26, 17, calc(1 - var(--bg_oacity))), rgba(14, 26, 17, calc(1 - var(--bg_oacity)))),
     var(--preview-bg-image, none);
 }
 
@@ -1224,6 +1228,44 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   cursor: col-resize;
   position: relative;
   touch-action: none;
+}
+/* Desktop: the outline FLOATS over the preview's right edge instead of
+   being a flex sibling (mirrors the mobile dropdown pattern). It takes no
+   layout width, so toggling or resizing it never reflows the preview and
+   never re-fits the cover-sized background texture — the fix for the
+   texture visibly shifting on outline toggle. Semi-transparent (40%
+   panel color) so the texture shows through; opaque fallback for engines
+   without color-mix. Scoped to >820px: the mobile branch positions the
+   pane with viewport coordinates from JS, which need #workspace to stay
+   un-positioned there. (This block must come AFTER the base #outline-pane
+   and #outline-divider rules — equal specificity, source order decides.) */
+@media (min-width: 821px) {
+  #workspace { position: relative; } /* containing block for the overlay */
+  #outline-pane {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5; /* above pane content (z 1), below topbar/menus (z 10) */
+    background: var(--bg-panel);
+    background: color-mix(in srgb, var(--bg-panel) 40%, transparent);
+  }
+  #outline-divider {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: var(--outline-pane-w, 200px); /* kept in sync by the drag handler */
+    z-index: 5;
+  }
+  /* Inset the preview text past the overlay (old squeeze geometry: the
+     base 52px right padding now measured from the outline's left edge).
+     Padding changes the CONTENT area only — the border box that the
+     cover-fitted texture paints against never moves. Covers normal
+     preview and reader mode; the LP editor twin lives with the LP
+     padding-parity override further down (needs higher specificity). */
+  body.outline-open #preview {
+    padding-right: calc(var(--outline-pane-w, 200px) + 52px);
+  }
 }
 #outline-divider:hover, #outline-divider.dragging { background-color: var(--theme-divider-hover); }
 #outline-divider::after { content: ''; position: absolute; inset: 0 -12px; z-index: 10; }
@@ -2366,6 +2408,18 @@ body.live-preview-active #editor .cm-content {
 @media (max-width: 899px) {
   body.live-preview-active #editor .cm-content {
     padding: 28px 20px 80px !important;
+  }
+}
+/* Desktop outline overlay open: inset the LP text past the floating
+   panel (same geometry as body.outline-open #preview — see the outline
+   overlay block). The inset goes on the SCROLLER, not .cm-content:
+   .cm-content is border-box and capped by --reader-max-width, so extra
+   padding there would eat the text column from the inside. Shrinking
+   the scroller's content area re-centers the column in the strip left
+   of the outline, and .cm-content's own 52px padding keeps the gap.  */
+@media (min-width: 821px) {
+  body.outline-open.live-preview-active #editor .cm-scroller {
+    padding-right: var(--outline-pane-w, 200px) !important;
   }
 }
 

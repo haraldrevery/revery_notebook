@@ -33,7 +33,7 @@
     console.warn('[LivePreview] CM bundle lacks required exports — feature unavailable.');
     return;
   }
-  const { Decoration, WidgetType, syntaxTree, StateField, EditorView } = CM;
+  const { Decoration, WidgetType, syntaxTree, StateField, EditorView, keymap, Prec } = CM;
 
   /* End offset of a YAML frontmatter block at the very start of the doc,
      or 0. CommonMark would otherwise misparse it: the fences become
@@ -385,7 +385,50 @@
     provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
   });
 
+  /* ── Line-by-line vertical cursor motion across rendered blocks ─────
+     A multi-line rendered block is one replace widget: its raw lines have
+     no drawn geometry, so the default (visual-line) ArrowUp/Down skips
+     the whole block. Intercept ONLY when the default motion would land
+     more than one document line away — or can't move at all (widget at
+     the doc edge) — and step to the adjacent document line instead. The
+     selection touching that line flips the block to raw text via the
+     intersect rule in buildBlocks, in the same transaction. Motion inside
+     raw text (incl. visual rows of soft-wrapped lines) stays default.
+     Home/End/PageUp/PageDown are left alone on purpose: page keys as
+     fast block-wise travel is desirable.                              */
+  function moveByDocLine(view, forward, extend) {
+    const state = view.state;
+    const sel = state.selection.main;
+    const doc = state.doc;
+    const curLine = doc.lineAt(sel.head);
+    const targetNo = curLine.number + (forward ? 1 : -1);
+    if (targetNo < 1 || targetNo > doc.lines) return false;  // real doc edge
+
+    const def = view.moveVertically(sel, forward);
+    const defLine = doc.lineAt(def.head);
+    const skips = forward ? defLine.number > curLine.number + 1
+                          : defLine.number < curLine.number - 1;
+    const stuck = def.head === sel.head;
+    if (!skips && !stuck) return false;                      // default handles it
+
+    const target = doc.line(targetNo);
+    const head = target.from + Math.min(sel.head - curLine.from, target.length);
+    view.dispatch({
+      selection: extend ? { anchor: sel.anchor, head } : { anchor: head },
+      scrollIntoView: true,
+      userEvent: 'select',
+    });
+    return true;
+  }
+
   window.buildLivePreviewExtension = function () {
-    return [blockField];
+    if (!keymap || !Prec) return [blockField];
+    return [
+      blockField,
+      Prec.high(keymap.of([
+        { key: 'ArrowDown', run: (v) => moveByDocLine(v, true, false), shift: (v) => moveByDocLine(v, true, true) },
+        { key: 'ArrowUp', run: (v) => moveByDocLine(v, false, false), shift: (v) => moveByDocLine(v, false, true) },
+      ])),
+    ];
   };
 })();

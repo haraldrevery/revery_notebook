@@ -58,8 +58,22 @@
       newPageH1: false,          // \newpage before every # / H1
       newPageH2: false,          // \newpage before every ## / H2
       splitSections: 'none',     // 'none' | 'h1' | 'h2' — own .tex file per section
+      author: '',                // '' → frontmatter author at export time
+      paperSize: 'a4paper',      // geometry/class paper option (see LATEX_PAPER_SIZES)
+      language: 'none',          // babel option name; 'none' → no babel line
     },
   };
+
+  /* Whitelists for the two option values that are spliced verbatim into the
+     .tex source — a stale/hand-edited localStorage value must never be able
+     to inject arbitrary LaTeX. Unknown values fall back to the default.
+       Languages are babel option names (Latin-script only: Cyrillic needs
+       T2A fontenc plumbing and CJK needs xeCJK — out of scope). */
+  const LATEX_PAPER_SIZES = ['a4paper', 'a5paper', 'b5paper', 'letterpaper', 'legalpaper'];
+  const LATEX_LANGUAGES = [
+    'none', 'english', 'swedish', 'ngerman', 'french', 'spanish', 'italian',
+    'portuguese', 'dutch', 'norsk', 'danish', 'finnish', 'polish', 'czech',
+  ];
 
   function loadSettings() {
     try {
@@ -119,7 +133,9 @@
        engine: null → the user's pdflatex/xelatex choice is honored; a fixed
        value (the brand templates need fontspec) overrides it.
        preamble(meta, esc) / titlePage(meta, esc) receive
-       meta = { title, author, date } and esc = latexEsc (pure).
+       meta = { title, author, date, paper } and esc = latexEsc (pure).
+       classOptions may be a string or a (meta) => string function (the
+       paper-size option must reach the \documentclass line too).
      The classic article/report/book entries reproduce the original
      single-preamble output; the *-revery entries add the requested looks. */
   function classicPreamble(meta, esc) {
@@ -130,7 +146,7 @@
       `\\usepackage{hyperref}`,
       `\\usepackage{longtable}`,
       `\\usepackage[normalem]{ulem}`,
-      `\\usepackage[a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,marginparwidth=15mm,headheight=14pt]{geometry}`,
+      `\\usepackage[${meta.paper},top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,marginparwidth=15mm,headheight=14pt]{geometry}`,
       `\\usepackage[font=small,labelfont=bf]{subcaption}`,
       `\\renewcommand\\thesubfigure{(\\alph{subfigure})}`,
       `\\usepackage{multirow}`,
@@ -180,7 +196,8 @@
        Requires XeLaTeX (fontspec). Multi-file/bibliography/index machinery
        from the original template is dropped — the body is injected here. */
     'book-revery': {
-      label: 'Book (Revery)', documentclass: 'extbook', classOptions: '14pt,a4paper,twoside,openright',
+      label: 'Book (Revery)', documentclass: 'extbook',
+      classOptions: (meta) => `14pt,${meta.paper},twoside,openright`,
       engines: ['xelatex'], headings: 'chapter',
       bundleFonts: ['HaraldReveryTextFont.ttf', 'HaraldReveryMonoFont.ttf'],
       /* The Revery text font has tall natural leading and large glyphs, so it
@@ -225,7 +242,7 @@
         `\\usepackage[font=small,labelfont=bf]{subcaption}`,
         `\\renewcommand\\thesubfigure{(\\alph{subfigure})}`,
         ``,
-        `\\usepackage[a4paper,top=25mm,bottom=30mm,inner=25mm,outer=20mm,headheight=14pt,headsep=8mm,footskip=12mm]{geometry}`,
+        `\\usepackage[${meta.paper},top=25mm,bottom=30mm,inner=25mm,outer=20mm,headheight=14pt,headsep=8mm,footskip=12mm]{geometry}`,
         ``,
         `\\usepackage[dvipsnames,svgnames,x11names]{xcolor}`,
         `\\definecolor{AccentColor}{HTML}{2C3E50}`,
@@ -281,7 +298,8 @@
        Requires XeLaTeX (fontspec). unicode-math/listings from the original
        are dropped — the body converter emits amsmath math and verbatim. */
     'homework-revery': {
-      label: 'Homework (Revery)', documentclass: 'article', classOptions: 'a4paper,11pt',
+      label: 'Homework (Revery)', documentclass: 'article',
+      classOptions: (meta) => `${meta.paper},11pt`,
       engines: ['xelatex'], headings: 'section', bundleFonts: [],
       preamble: (meta, esc) => [
         `\\usepackage{amsmath, amsthm}`,
@@ -305,7 +323,7 @@
         `\\renewcommand\\thesubfigure{(\\alph{subfigure})}`,
         `\\usepackage{xcolor}`,
         ``,
-        `\\usepackage[a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,marginparwidth=15mm,headheight=14pt]{geometry}`,
+        `\\usepackage[${meta.paper},top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,marginparwidth=15mm,headheight=14pt]{geometry}`,
         `\\usepackage{microtype}`,
         `\\usepackage{setspace}`,
         `\\setstretch{1.15}`,
@@ -359,6 +377,11 @@
       if (ymlGet('author')) metaAuthor = ymlGet('author');
       raw = raw.slice(frontmatterMatch[0].length).replace(/^\r?\n/, '');
     }
+
+    /* Explicit fields from the export modal win over frontmatter; empty
+       fields keep the frontmatter/doc-title fallbacks above. */
+    if (opts.titleOverride && String(opts.titleOverride).trim()) metaTitle = String(opts.titleOverride).trim();
+    if (opts.author && String(opts.author).trim()) metaAuthor = String(opts.author).trim();
 
     /* ── 2. Collect footnote definitions  [^id]: text ── */
     const footnoteMap = {};
@@ -698,11 +721,25 @@
        Honor the user's engine when the template supports it; otherwise fall
        back to the template's first supported engine (a backstop so a stale
        combo never emits pdflatex for a fontspec-only template). */
-    const meta = { title: metaTitle, author: metaAuthor, date: metaDate };
+    const paper = LATEX_PAPER_SIZES.includes(opts.paperSize) ? opts.paperSize : 'a4paper';
+    const meta = { title: metaTitle, author: metaAuthor, date: metaDate, paper };
     const engine = desc.engines.includes(opts.engine) ? opts.engine : desc.engines[0];
     const engineLines = (engine === 'xelatex')
       ? [`% Compile with xelatex`, `\\usepackage{fontspec}`]
       : [`% Compile with pdflatex`, `\\usepackage[utf8]{inputenc}`, `\\usepackage[T1]{fontenc}`];
+    /* babel works under both engines; 'none' (the default) emits nothing so
+       default output stays identical to the pre-option exporter. Placed
+       before the template preamble so babel loads ahead of hyperref.
+       \babelprovide (ini-based locale loading) instead of the classic
+       \usepackage[<lang>]{babel}: the classic option needs the per-language
+       <lang>.ldf from a separate TeX package and dies with "Unknown option"
+       on minimal installs, while the locale ini files ship with babel core —
+       verified: all 14 dropdown languages compile on a TeX Live that fails
+       the classic syntax for swedish. */
+    const language = LATEX_LANGUAGES.includes(opts.language) ? opts.language : 'none';
+    const languageLines = language !== 'none'
+      ? [`\\usepackage{babel}`, `\\babelprovide[import, main]{${language}}`]
+      : [];
 
     /* Title page, then the TOC on its own fresh page (clearpage before it
        when both are on, and after it so body content starts clean). A
@@ -714,10 +751,12 @@
     if (opts.titlePage && opts.toc) front.push(`\\clearpage`);
     if (opts.toc) front.push(`\\tableofcontents\n\\clearpage`);
 
-    const clsOpt = desc.classOptions ? `[${desc.classOptions}]` : '';
+    const clsOptions = typeof desc.classOptions === 'function' ? desc.classOptions(meta) : desc.classOptions;
+    const clsOpt = clsOptions ? `[${clsOptions}]` : '';
     const docParts = [
       `\\documentclass${clsOpt}{${desc.documentclass}}`,
       ...engineLines,
+      ...languageLines,
       ...desc.preamble(meta, latexEsc),
       ``,
       `\\begin{document}`,
@@ -1128,9 +1167,11 @@ ${parts.bodyHtml}
       && window.NativeAPI.exportLatexZip;
     /* The web fallback is a single-.tex download — a browser download cannot
        carry a sections/ folder, so splitting only applies to the zip path. */
-    const built = buildLatexDocument(canZip
-      ? exportSettings.latex
-      : Object.assign({}, exportSettings.latex, { splitSections: 'none' }));
+    const built = buildLatexDocument(Object.assign(
+      {},
+      exportSettings.latex,
+      { titleOverride: latexRuntime.title },
+      canZip ? null : { splitSections: 'none' }));
     if (canZip) {
       try {
         const res = await window.NativeAPI.exportLatexZip(built.tex, built.images, built.baseName, built.fonts, built.sections);
@@ -1166,6 +1207,12 @@ ${parts.bodyHtml}
 
   let modal = null;
   let currentMode = 'pdf';
+
+  /* Per-document runtime state — deliberately NOT persisted. The LaTeX
+     title is a property of the document, not the user; persisting it would
+     silently stamp one document's title onto the next export. It is
+     re-seeded from the doc title every time the LaTeX modal opens. */
+  const latexRuntime = { title: '' };
 
   /* ── App-styled controls ────────────────────────────────────────────
      The popup uses the software's own dropdown-menu aesthetic instead of
@@ -1397,6 +1444,24 @@ ${parts.bodyHtml}
     wrap.appendChild(row('Template', dropdown(
       templateOpts, () => l.template, (v) => { l.template = v; })));
 
+    /* Title is prefilled with the doc title (clearing it falls back to the
+       YAML frontmatter title); author persists across sessions. */
+    wrap.appendChild(row('Title', textInput(latexRuntime.title, 'Document title', (v) => { latexRuntime.title = v; })));
+    wrap.appendChild(row('Author', textInput(l.author, 'Author name', (v) => { l.author = v; })));
+
+    wrap.appendChild(row('Page size', dropdown(
+      [['a4paper', 'A4'], ['a5paper', 'A5'], ['b5paper', 'B5'],
+       ['letterpaper', 'Letter (US)'], ['legalpaper', 'Legal (US)']],
+      () => l.paperSize, (v) => { l.paperSize = v; })));
+
+    wrap.appendChild(row('Language', dropdown(
+      [['none', 'Default'], ['english', 'English'], ['swedish', 'Swedish'],
+       ['ngerman', 'German'], ['french', 'French'], ['spanish', 'Spanish'],
+       ['italian', 'Italian'], ['portuguese', 'Portuguese'], ['dutch', 'Dutch'],
+       ['norsk', 'Norwegian'], ['danish', 'Danish'], ['finnish', 'Finnish'],
+       ['polish', 'Polish'], ['czech', 'Czech']],
+      () => l.language, (v) => { l.language = v; })));
+
     wrap.appendChild(toggleRow('Title page', () => l.titlePage, (v) => { l.titlePage = v; }));
     wrap.appendChild(toggleRow('Table of contents', () => l.toc, (v) => { l.toc = v; }));
     wrap.appendChild(toggleRow('New page before each H1', () => l.newPageH1, (v) => { l.newPageH1 = v; }));
@@ -1416,6 +1481,7 @@ ${parts.bodyHtml}
 
   function openExportModal(mode) {
     currentMode = mode === 'latex' ? 'latex' : 'pdf';
+    if (currentMode === 'latex') latexRuntime.title = (docTitle.value || '').trim();
     if (modal) modal.remove();
 
     modal = document.createElement('div');

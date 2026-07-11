@@ -131,6 +131,32 @@
     rendered: previewCS.backgroundImage.includes('data:image'),
     opacityBumped: settingsNow().backgroundOpacity === 0.35,
   };
+  /* THE outline-toggle bug: on desktop the outline is a floating OVERLAY
+     (position:absolute over the preview's right edge), so opening it must
+     not change #preview-pane's box at all — the cover-fitted texture on
+     #preview therefore can never re-fit or shift on toggle. The TEXT is
+     kept out from under the panel instead: body.outline-open pads the
+     preview content right by outline width + the base 52px (old squeeze
+     geometry), and back to 52px when closed.                           */
+  {
+    const pane = document.getElementById('preview-pane');
+    const outline = document.getElementById('outline-pane');
+    const paneBefore = pane.getBoundingClientRect().width;
+    toggleOutline();
+    await sleep(250);
+    const shown = getComputedStyle(outline).display !== 'none';
+    const overlaps = outline.getBoundingClientRect().left
+      < pane.getBoundingClientRect().right - 5;
+    const paneAfter = pane.getBoundingClientRect().width;
+    const insetOpen = previewCS.paddingRight;   // outline 200px wide → 252px
+    toggleOutline();
+    await sleep(250);
+    pipeline.textureStable = shown && overlaps
+      && Math.abs(paneAfter - paneBefore) < 1
+      && previewCS.backgroundImage.includes('data:image');
+    pipeline.outlineInsetsText = insetOpen === '252px'
+      && previewCS.paddingRight === '52px';
+  }
   window.removeCustomBackgroundImage();
   window.setBackgroundOpacity(null);
 
@@ -427,8 +453,16 @@
   await sleep(400);
   const selBefore2 = window.cmView.state.selection.main.head;
   const scrollBefore2 = window.cmView.scrollDOM.scrollTop;
-  scrollToHeading(0); // same function the outline buttons call
-  await sleep(400);
+  /* Same height-re-measurement race as the outlineSyncs probe below: a
+     single scrollIntoView dispatch can be absorbed while CM re-measures
+     widget heights (hidden harness windows settle bimodally) — re-issue
+     until the scroll lands. The INVARIANTS under test stay strict:
+     selection untouched, no block revealed.                            */
+  for (let i = 0; i < 6; i++) {
+    scrollToHeading(0); // same function the outline buttons call
+    await sleep(400);
+    if (window.cmView.scrollDOM.scrollTop < scrollBefore2) break;
+  }
   lpV2.outlineScrollOnly =
     window.cmView.state.selection.main.head === selBefore2
     && window.cmView.scrollDOM.scrollTop < scrollBefore2
@@ -512,6 +546,39 @@
   await sleep(200);
   lpV2.readerPaddingResets =
     getComputedStyle(document.querySelector('.cm-content')).maxWidth === 'none';
+
+  /* Vertical arrow keys walk the RAW document lines through rendered
+     multi-line blocks (they used to skip a whole widget per press); the
+     selection landing inside a block reveals it raw. Motion on plain
+     visible lines stays the default command. A synthetic keydown on
+     contentDOM exercises the LP keymap exactly like a real key press. */
+  {
+    replaceEditorContent('start line\n\n- alpha\n- beta\n- gamma\n\nend line');
+    editor.setSelectionRange(0, 0);
+    await sleep(400);
+    const pressArrow = async (key) => {
+      window.cmView.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {
+        key, bubbles: true, cancelable: true,
+      }));
+      await sleep(200);
+    };
+    const lineNo = () => window.cmView.state.doc.lineAt(window.cmView.state.selection.main.head).number;
+    await pressArrow('ArrowDown');                     // 1 → 2 (default, gap line)
+    const down1 = lineNo() === 2;
+    await pressArrow('ArrowDown');                     // 2 → 3 (INTO the widget → reveals raw)
+    const down2 = lineNo() === 3
+      && document.querySelector('.cm-content').textContent.includes('- alpha');
+    await pressArrow('ArrowDown');                     // 3 → 4 (default, inside raw block)
+    const down3 = lineNo() === 4;
+    lpV2.arrowDownByLine = down1 && down2 && down3;
+
+    editor.setSelectionRange(editor.value.length, editor.value.length); // line 7
+    await sleep(350);                                  // list re-renders as a widget
+    await pressArrow('ArrowUp');                       // 7 → 6 (default)
+    await pressArrow('ArrowUp');                       // 6 → 5 (into the widget from below)
+    lpV2.arrowUpByLine = lineNo() === 5
+      && document.querySelector('.cm-content').textContent.includes('- gamma');
+  }
 
   window.setLivePreviewMode(false);
   await sleep(200);
@@ -747,6 +814,40 @@
     && texHwR.tex.includes('\\section{Intro}') && !texHwR.tex.includes('\\chapter{');
   exportSuite.homeworkReveryXelatex = texHwR.tex.includes('fontspec')
     && !texHwR.tex.includes('inputenc') && (texHwR.fonts || []).length === 0;
+
+  /* 11c-2. LaTeX export options: paper size must reach \documentclass AND
+     geometry in every template; language emits one babel line between the
+     engine lines and the preamble; explicit title/author beat frontmatter
+     and empty fields fall back to it. Defaults (a4paper / 'none' / no
+     overrides) must keep the output identical to the pre-option exporter. */
+  const texDef = window.exporterBuildLatex({});
+  exportSuite.latexPaperDefault = texDef.tex.includes('a4paper') && !texDef.tex.includes('babel');
+  const texA5 = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', paperSize: 'a5paper' });
+  const texBookA5 = window.exporterBuildLatex({ template: 'book-revery', engine: 'xelatex', paperSize: 'a5paper' });
+  const texHwLtr = window.exporterBuildLatex({ template: 'homework-revery', engine: 'xelatex', paperSize: 'letterpaper' });
+  exportSuite.latexPaperOption = texA5.tex.includes('\\usepackage[a5paper,top=2.5cm')
+    && !texA5.tex.includes('a4paper')
+    && texBookA5.tex.includes('\\documentclass[14pt,a5paper,twoside,openright]{extbook}')
+    && texBookA5.tex.includes('\\usepackage[a5paper,top=25mm')
+    && texHwLtr.tex.includes('\\documentclass[letterpaper,11pt]{article}')
+    && texHwLtr.tex.includes('\\usepackage[letterpaper,top=2.5cm');
+  /* A stale/hand-edited stored value must fall back, never splice into tex. */
+  exportSuite.latexPaperSafe = window.exporterBuildLatex({ paperSize: 'evil]{x}' }).tex.includes('a4paper');
+  /* ini-based \babelprovide, NOT \usepackage[<lang>]{babel} — the classic
+     option form requires the per-language .ldf package and fails with
+     "Unknown option 'swedish'" on minimal TeX installs. */
+  const texSv = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', language: 'swedish' });
+  exportSuite.latexLanguage = /fontenc\}\s*\n\\usepackage\{babel\}\s*\n\\babelprovide\[import, main\]\{swedish\}/.test(texSv.tex)
+    && !texSv.tex.includes('[swedish]{babel}')
+    && texSv.tex.indexOf('{babel}') < texSv.tex.indexOf('{amsmath}')
+    && !window.exporterBuildLatex({ language: 'none' }).tex.includes('babel')
+    && !window.exporterBuildLatex({ language: 'klingon' }).tex.includes('babel');
+  const texMeta = window.exporterBuildLatex({ titleOverride: 'Override T', author: 'Override A' });
+  const texFall = window.exporterBuildLatex({ titleOverride: '  ', author: '' });
+  exportSuite.latexMetaOverride = texMeta.tex.includes('\\title{Override T}')
+    && texMeta.tex.includes('\\author{Override A}')
+    && texFall.tex.includes('\\title{My Doc}')
+    && texFall.tex.includes('\\author{Ada}');
 
   /* 11d. Bold treatment follows the preview font: Harald (brand default) →
      underlined regular weight; any other font → real bold, no underline.

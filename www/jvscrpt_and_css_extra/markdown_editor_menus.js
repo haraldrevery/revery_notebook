@@ -1055,6 +1055,9 @@ function applyLoadedStates() {
   const outlineDivider = document.getElementById('outline-divider');
   if (outlinePane) outlinePane.style.display = outlineVisible ? '' : 'none';
   if (outlineDivider) outlineDivider.style.display = outlineVisible ? '' : 'none';
+  /* Desktop overlay: CSS insets the preview/LP text past the floating
+     outline via this class (media-guarded to >820px in the stylesheet). */
+  document.body.classList.toggle('outline-open', outlineVisible);
   if (outlineVisible && typeof renderOutline === 'function') {
     renderOutline();
   }
@@ -2576,6 +2579,9 @@ function toggleOutline() {
   if (outlineDivider) {
     outlineDivider.style.display = outlineVisible ? '' : 'none';
   }
+  /* Desktop overlay: CSS insets the preview/LP text past the floating
+     outline via this class (media-guarded to >820px in the stylesheet). */
+  document.body.classList.toggle('outline-open', outlineVisible);
 
   /* Populate the outline right away so the user sees content immediately */
   if (outlineVisible && typeof renderOutline === 'function') {
