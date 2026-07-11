@@ -2539,6 +2539,15 @@ body.live-preview-active #editor .cm-content {
    (and hiding #workspace hides #preview via the ancestor anyway).      */
 #export-print-root { display: none; }
 @media print {
+  /* The app shell body is display:flex — which makes the injected export
+     root a FLEX ITEM, and forced page breaks inside flex containers are
+     broken in every engine (content laid out as one box, then sliced →
+     the TOC/content overlap bug). Print the export as normal block flow. */
+  body.exporting-pdf {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
   body.exporting-pdf > *:not(#export-print-root) { display: none !important; }
   body.exporting-pdf #export-print-root { display: block !important; }
 }

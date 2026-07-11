@@ -908,6 +908,18 @@ ${customFaces}`;
       (opts.newPageH2 ? `${P}main h2 { break-before: page; }\n` : '') +
       ((opts.newPageH1 || opts.newPageH2) ? `${P}main > *:first-child { break-before: avoid !important; }\n` : '');
 
+    /* Front-matter page breaks are forced with break-BEFORE on the element
+       that follows each block — never break-after on the block itself:
+       WebKitGTK's print fragmentation mishandles forced break-after on
+       arbitrary blocks (the TOC-overlapping-content bug), while
+       break-before is the reliable primitive everywhere (Chromium honors
+       both, so Electron's page structure is unchanged). The .toc rule is
+       gated on the front page so a leading TOC never opens with a blank
+       page; main breaks whenever any front matter precedes it. */
+    const frontBreaks =
+      (opts.frontPage ? `${P}.toc { page-break-before: always; break-before: page; }\n` : '') +
+      ((opts.frontPage || opts.toc) ? `${P}main { page-break-before: always; break-before: page; }\n` : '');
+
     return `${fontFace}
 @page { size: ${size}; margin: ${mm}mm; }
 ${fullBleed ? '@page cover { margin: 0; }' : ''}
@@ -939,7 +951,7 @@ ${P}th { background: #f3f4f6; }
 ${P}img { max-width: 100%; height: auto; display: block; margin: 1.3em auto; }
 ${P}hr { border: none; border-top: 1px solid #ccc; margin: 1.6em 0; }
 ${P}math { font-size: ${mathEm}em; }
-${P}.front-page { position: relative; height: ${coverH}mm; ${fullBleed ? 'page: cover; ' : ''}page-break-after: always; break-after: page; overflow: hidden; }
+${P}.front-page { position: relative; height: ${coverH}mm; ${fullBleed ? 'page: cover; ' : ''}overflow: hidden; }
 ${P}.fp-bg { position: absolute; inset: 0; background-position: center; background-size: cover; background-repeat: no-repeat; }
 ${P}.front-page .fp-title { font-size: 2.6em; font-weight: 700; letter-spacing: 0.02em; }
 ${P}.front-page .fp-author { font-size: 1.25em; color: #444; margin-top: 0.8em; }
@@ -947,7 +959,7 @@ ${P}.fp-center { display: flex; flex-direction: column; align-items: center; jus
 ${P}.fp-corners .fp-title { position: absolute; top: 10%; left: 8%; max-width: 70%; z-index: 1; }
 ${P}.fp-corners .fp-author { position: absolute; bottom: 8%; right: 8%; text-align: right; z-index: 1; }
 ${P}.fp-center .fp-title, ${P}.fp-center .fp-author { position: relative; z-index: 1; }
-${P}.toc { page-break-after: always; break-after: page; }
+${frontBreaks}
 ${P}.toc h2 { margin-top: 0.5em; }
 ${P}.toc ol { list-style: none; margin: 1em 0 0 0; }
 ${P}.toc li { margin-bottom: 0.35em; }

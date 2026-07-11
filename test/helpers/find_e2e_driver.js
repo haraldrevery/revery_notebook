@@ -639,6 +639,34 @@
     && !pdfWk.html.includes('100vh') && pdfWk.html.includes('height: 219.4mm')
     && pdfF.html.includes('height: 279.4mm') && !pdfF.html.includes('100vh');
 
+  /* 11b-2b. TOC page-breaking: forced breaks are break-BEFORE on the
+     FOLLOWING element (WebKit mishandles break-after on blocks — the
+     TOC-overlap bug), gated by the toggles so a leading TOC never opens
+     with a blank page; and the in-page path un-flexes the body (flex-item
+     fragmentation is what overlapped web exports in every browser). */
+  {
+    const both = window.exporterBuildPdfHtml({ frontPage: true, frontTitle: 'T', toc: true }, 'webkit').html;
+    const tocOnly = window.exporterBuildPdfHtml({ frontPage: false, toc: true }, 'webkit').html;
+    const neither = window.exporterBuildPdfHtml({ frontPage: false, toc: false }, 'webkit').html;
+    exportSuite.tocBreakBefore =
+      both.includes('.toc { page-break-before: always; break-before: page; }')
+      && both.includes('main { page-break-before: always; break-before: page; }')
+      && !both.includes('break-after: page')
+      && !tocOnly.includes('.toc { page-break-before')
+      && tocOnly.includes('main { page-break-before: always')
+      && !neither.includes('page-break-before');
+    let unflexed = false;
+    for (const sheet of document.styleSheets) {
+      let rules;
+      try { rules = sheet.cssRules; } catch (_) { continue; }
+      for (const r of rules) {
+        if (r.media && /print/.test(r.media.mediaText) && /body\.exporting-pdf\s*\{/.test(r.cssText)
+            && r.cssText.includes('display: block')) { unflexed = true; }
+      }
+    }
+    exportSuite.printBodyUnflexed = unflexed;
+  }
+
   /* 11b-3. Custom fonts in the PDF export: system-kind resolves by family,
      file-kind embeds its data-URL @font-face into the standalone document,
      the export modal's Font dropdown lists them, and a deleted font falls
