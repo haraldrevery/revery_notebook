@@ -238,7 +238,7 @@ export function runBoot() {
     function injectStarterText() {
       if (hasLoadedText) return;
       hasLoadedText = true;
-      const initialText = `# Revery Notebook\n\nA place to write digital notes, free from distractions and to keep the _thoughts-to-computer text_ process in one continuous flow. A markdown editor with the iconic ½ font.\n\n---\n\n## Quick Guide\n\nIn the upper right corner, settings can be personalized. You can adjust the various sizes for the interface elements and tune the performance for your hardware. Press \`CTRL+S\` to download your work as a \`.md\` file, using the name specified in the upper-left corner. In the settings you can also set how the file name prefix/suffix should be named.\n\nMore information, click the ½ logo in the center top of the screen.\n\n---\n###### - Harald Revery\n`;
+      const initialText = `# Revery Notebook\n\nA place to write digital notes, free from distractions and to keep the _thoughts-to-computer text_ process in one continuous flow. A markdown editor with the iconic ½ font.\n\n---\n\n## Quick Guide\n\nIn the upper right corner, settings can be personalized. You can adjust the various sizes for the interface elements and tune the performance for your hardware. Press \`CTRL+S\` to download your work as a \`.md\` file, using the name specified in the upper-left corner. In the settings you can also set how the file name prefix/suffix should be named.\n\nMore information, click the ½ logo in the center top of the screen.\n\n---\n\n\n###### - Harald Revery\n`;
       if (typeof window.replaceEditorContent === 'function') {
         window.replaceEditorContent(initialText);
       } else {

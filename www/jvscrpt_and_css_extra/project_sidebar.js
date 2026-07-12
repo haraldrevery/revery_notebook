@@ -378,7 +378,7 @@
         font-size: 0.6rem;
         line-height: 1.3;
         color: var(--text-muted, var(--text));
-        opacity: 0.55;
+        opacity: 0.72;
         overflow: hidden;
         /* Clamp to 3 lines */
         display: -webkit-box;
@@ -3759,6 +3759,8 @@ In the upper right corner, settings can be personalized. You can adjust the vari
 More information, click the \xBD logo in the center top of the screen.
 
 ---
+
+
 ###### - Harald Revery
 `;
         if (typeof window.replaceEditorContent === "function") {
