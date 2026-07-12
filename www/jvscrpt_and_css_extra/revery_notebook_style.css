@@ -1373,6 +1373,33 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   transition: max-width 0.25s ease;
 }
 
+/* ── Drag-the-edge affordance (Reader padding → "Drag to adjust") ────────
+   layout.js sets body.reader-edge-hover while the pointer is within ±6px
+   of the reading column's edge, and body.reader-edge-dragging during the
+   drag. The faint edge lines are BOX-SHADOW slivers (2px, offset past the
+   border box) so they never shift layout; opaque-divider fallback for
+   engines without color-mix. Desktop only — mirrors the drag layer's own
+   innerWidth gate.                                                      */
+@media (min-width: 821px) {
+  body.reader-edge-hover #preview .prose,
+  body.reader-edge-dragging #preview .prose,
+  body.reader-edge-hover.live-preview-active #editor .cm-content,
+  body.reader-edge-dragging.live-preview-active #editor .cm-content {
+    box-shadow: 2px 0 0 0 var(--theme-divider), -2px 0 0 0 var(--theme-divider);
+    box-shadow: 2px 0 0 0 color-mix(in srgb, var(--text) 25%, transparent),
+                -2px 0 0 0 color-mix(in srgb, var(--text) 25%, transparent);
+  }
+  body.reader-edge-hover #preview,
+  body.reader-edge-hover.live-preview-active #editor .cm-scroller,
+  body.reader-edge-hover.live-preview-active #editor .cm-content {
+    cursor: col-resize;
+  }
+  /* The preset transition would rubber-band behind the pointer. */
+  body.reader-edge-dragging #preview .prose {
+    transition: none;
+  }
+}
+
 /* ── Find / Replace Bar ─────────────────────────────────────────────────── */
 #find-bar {
   display: none; /* shown via JS — openFindBar() sets display:flex */

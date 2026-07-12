@@ -37,6 +37,8 @@ const CUSTOM_BG_KEY = 'revery_custom_bg'; // data: URL of an imported background
 window.slowHardwareMode = false; // Mirror read by core/sync/native_api/sidebar at call time
 let editorBgGradient = false;     // true = gradient fade, false = solid colour
 let logoPosition = 'center';      // top bar logo: 'center' | 'left' (Advanced Options)
+let readerDragEnabled = true;     // drag the reading-column edge to resize it (desktop)
+window.readerDragEnabled = true;  // Mirror read by layout.js at event time
 
 /* ── Background image options ─────────────────────────────────────────────
    To add a new background: append a new entry to this array.
@@ -72,7 +74,8 @@ window.saveEditorSettings = function() {
     slowHardwareMode,
     backgroundOpacity,
     livePreviewMode,
-    logoPosition
+    logoPosition,
+    readerDragEnabled
   };
 
   try {
@@ -146,10 +149,12 @@ function loadEditorSettings() {
     if (s.themeMode !== undefined) themeMode = s.themeMode;
     if (s.editorBgGradient !== undefined) editorBgGradient = s.editorBgGradient;
     if (s.logoPosition === 'left' || s.logoPosition === 'center') logoPosition = s.logoPosition;
+    if (s.readerDragEnabled !== undefined) readerDragEnabled = !!s.readerDragEnabled;
     }
   } catch (e) {}
 }
 loadEditorSettings();
+setReaderDragEnabled(readerDragEnabled); // sync mirror + body class with the loaded value
 
 
 
@@ -451,11 +456,38 @@ function applyReaderPadding() {
     '15': '15vw',
     '10': '10vw'
   };
-  
-  const val = map[readerPadding] || 'none';
+
+  /* 'custom:<n>' — a width the user set by DRAGGING the reading-column
+     edge (see readerEdgeDrag in markdown_editor_layout.js). Stored as a
+     vw fraction so it scales with the window like the presets. Unknown
+     tokens (incl. this one on an older build) fall through to 'none'. */
+  let val;
+  const custom = /^custom:(\d+(?:\.\d+)?)$/.exec(String(readerPadding));
+  if (custom) {
+    val = Math.min(Math.max(parseFloat(custom[1]), 5), 100) + 'vw';
+  } else {
+    val = map[readerPadding] || 'none';
+  }
   document.documentElement.style.setProperty('--reader-max-width', val);
 }
 applyReaderPadding(); // Apply the 50% default on load
+
+/* Toggle for the drag-the-edge width adjustment (desktop only). The body
+   class gates the CSS affordance (edge line, col-resize cursor); the
+   window mirror gates layout.js's event handlers at call time.         */
+function setReaderDragEnabled(on) {
+  readerDragEnabled = !!on;
+  window.readerDragEnabled = readerDragEnabled;
+  document.body.classList.toggle('reader-drag-enabled', readerDragEnabled);
+}
+/* Drag-end hook for layout.js: persist the dragged width as the active
+   Reader padding value and refresh the submenu checkmarks. */
+window.commitReaderDragWidth = function (vw) {
+  readerPadding = 'custom:' + vw;
+  applyReaderPadding();
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+  buildSettingsMenu();
+};
 
 
 function applyEditorPadding() {
@@ -1780,6 +1812,27 @@ const readerPaddingOptions = [
     };
     readerPadSub.appendChild(btn);
   });
+
+  /* Drag-the-edge toggle (desktop only — the drag layer itself is also
+     innerWidth-gated in layout.js). NOTE: the label must not contain the
+     substrings "50" or "100%" — the e2e clickSetting matcher selects the
+     preset options above by textContent.includes.                       */
+  if (window.innerWidth > 820) {
+    const dragBtn = document.createElement('button');
+    dragBtn.className = 'menu-item';
+    const dragCheck = document.createElement('span');
+    dragCheck.className = 'menu-item-check';
+    dragCheck.textContent = readerDragEnabled ? '■' : '□';
+    dragBtn.appendChild(dragCheck);
+    dragBtn.appendChild(document.createTextNode(window.t('Drag to adjust')));
+    dragBtn.onclick = (e) => {
+      e.stopPropagation();
+      setReaderDragEnabled(!readerDragEnabled);
+      buildSettingsMenu();
+      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+    };
+    readerPadSub.appendChild(dragBtn);
+  }
 
   readerPadWrapper.appendChild(readerPadSub);
   attachSubmenuHandlers(readerPadWrapper, readerPadSub);

@@ -542,6 +542,56 @@
   await sleep(300);
   const cmMaxW = getComputedStyle(document.querySelector('.cm-content')).maxWidth;
   lpV2.readerPadding = rpClicked && Math.abs(parseFloat(cmMaxW) - window.innerWidth * 0.5) < 3;
+
+  /* Drag-the-edge (Reader padding → "Drag to adjust", ON by default):
+     a capture-phase mousedown within ±6px of the column edge starts a
+     symmetric resize and swallows the click (CM selection untouched);
+     with the toggle off the same gesture must be completely inert.   */
+  {
+    const rdVar = () => getComputedStyle(document.documentElement)
+      .getPropertyValue('--reader-max-width').trim();
+    const col = document.querySelector('#editor .cm-content');
+    const r = col.getBoundingClientRect();
+    /* y must be inside the VISIBLE scroller (the doc is scrolled at this
+       point, so cm-content's own rect.top is far above the viewport). */
+    const scrRect = document.querySelector('#editor .cm-scroller').getBoundingClientRect();
+    const yMid = scrRect.top + Math.min(120, scrRect.height / 2);
+    const selBefore = window.cmView.state.selection.main.head;
+    const md = (x) => col.dispatchEvent(new MouseEvent('mousedown',
+      { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: yMid }));
+    const mm = (x) => document.dispatchEvent(new MouseEvent('mousemove',
+      { bubbles: true, cancelable: true, clientX: x, clientY: yMid }));
+    const mu = (x) => document.dispatchEvent(new MouseEvent('mouseup',
+      { bubbles: true, clientX: x, clientY: yMid }));
+
+    md(r.right - 2);
+    const startedDrag = document.body.classList.contains('reader-edge-dragging');
+    mm(r.right - 42); await sleep(80);
+    mm(r.right - 82); await sleep(80);
+    mu(r.right - 82);
+    await sleep(250);
+    const persisted = (() => {
+      try { return JSON.parse(localStorage.getItem('revery_md_settings')).readerPadding; }
+      catch (_) { return null; }
+    })();
+    lpV2.readerDragResizes = startedDrag
+      && /vw$/.test(rdVar()) && rdVar() !== '50vw'
+      && /^custom:\d/.test(String(persisted))
+      && window.cmView.state.selection.main.head === selBefore;
+
+    clickSetting('Reader padding', 'drag to adjust'); // toggle OFF
+    await sleep(150);
+    const varBefore2 = rdVar();
+    const r2 = document.querySelector('#editor .cm-content').getBoundingClientRect();
+    md(r2.right - 2); mm(r2.right - 60); await sleep(80); mu(r2.right - 60);
+    await sleep(150);
+    lpV2.readerDragToggleOff = window.readerDragEnabled === false
+      && !document.body.classList.contains('reader-edge-dragging')
+      && rdVar() === varBefore2;
+    clickSetting('Reader padding', 'drag to adjust'); // restore the default ON
+    await sleep(100);
+  }
+
   clickSetting('Reader padding', '100%'); // label of the val:'default' option
   await sleep(200);
   lpV2.readerPaddingResets =

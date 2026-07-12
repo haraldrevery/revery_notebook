@@ -21,8 +21,8 @@ divider.addEventListener('mousedown', onDividerStart);
 divider.addEventListener('touchstart', onDividerStart, { passive: false });
 
 const onDocumentMove = e => {
-  if (!dragging && !outlineDragging) return;
-  
+  if (!dragging && !outlineDragging && !readerDragging) return;
+
   // Prevent the browser from hijacking the drag gesture to scroll the page
   if (e.cancelable) e.preventDefault();
 
@@ -45,7 +45,34 @@ const onDocumentMove = e => {
        at `right: var(--outline-pane-w)` — keep it glued to the pane edge */
     document.documentElement.style.setProperty('--outline-pane-w', newWidth + 'px');
   }
+
+  if (readerDragging) {
+    /* Symmetric resize around the column's center. LIVE feedback is
+       applied at most once per frame: every --reader-max-width change
+       reflows the reading column (and makes CodeMirror re-measure in
+       live preview), so unthrottled mousemove writes would jank large
+       documents. The FINAL width is computed synchronously on mouseup
+       from the last pointer position — never from the throttled value,
+       which can be a frame stale on a fast flick.                    */
+    readerDragSawMove = true;
+    readerDragPendingX = currentX;
+    if (!readerDragRaf) {
+      readerDragRaf = requestAnimationFrame(() => {
+        readerDragRaf = null;
+        document.documentElement.style.setProperty(
+          '--reader-max-width', readerDragWidthAt(readerDragPendingX) + 'px');
+      });
+    }
+  }
 };
+
+/* Clamped column width for a pointer position (reader edge drag). */
+function readerDragWidthAt(x) {
+  return Math.round(Math.min(
+    Math.max(2 * Math.abs(x - readerDragCenterX), 240),
+    readerDragMaxW
+  ));
+}
 
 document.addEventListener('mousemove', onDocumentMove);
 document.addEventListener('touchmove', onDocumentMove, { passive: false });
@@ -66,6 +93,26 @@ const onDocumentEnd = () => {
     if (outlineDivider) outlineDivider.classList.remove('dragging');
     document.body.style.userSelect = '';
     document.body.style.cursor = '';
+  }
+  if (readerDragging) {
+    readerDragging = false;
+    if (readerDragRaf) { cancelAnimationFrame(readerDragRaf); readerDragRaf = null; }
+    document.body.classList.remove('reader-edge-dragging');
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    /* Disarm the click swallower AFTER the click that follows this mouseup
+       has been dispatched (it fires synchronously before timers run). */
+    setTimeout(() => document.removeEventListener('click', swallowReaderClick, true), 0);
+    /* Persist as a proportional token — but only if the pointer actually
+       moved. A mere edge-click must not commit anything (the active value
+       could still be a preset like '50vw' or 'none'). The final width is
+       computed here, synchronously, from the last pointer position.     */
+    if (readerDragSawMove && typeof window.commitReaderDragWidth === 'function') {
+      const finalPx = readerDragWidthAt(readerDragPendingX);
+      const vw = Math.min(Math.max((finalPx / window.innerWidth) * 100, 5), 100);
+      window.commitReaderDragWidth(Math.round(vw * 10) / 10);
+    }
+    readerDragSawMove = false;
   }
 };
 
@@ -92,6 +139,100 @@ if (outlineDivider) {
   outlineDivider.addEventListener('mousedown', onOutlineDividerStart);
   outlineDivider.addEventListener('touchstart', onOutlineDividerStart, { passive: false });
 }
+
+/* ── Drag the reading-column edge (Reader padding → "Drag to adjust") ────
+   Hovering within ±6px of the centered reading column's edge shows a faint
+   line (CSS keyed on body.reader-edge-hover) and a col-resize cursor;
+   dragging resizes the column symmetrically by writing the same
+   --reader-max-width variable the Reader padding presets use. Desktop
+   mouse only. The drag START is a document CAPTURE-phase mousedown scoped
+   strictly to the edge band, so interior clicks reach CodeMirror, the
+   live-preview widgets and the preview's [data-sl] sync untouched; the
+   click that trails a completed drag is swallowed for the same reason. */
+let readerDragging  = false;
+let readerDragCenterX = 0;
+let readerDragMaxW  = 0;
+let readerDragSawMove = false;
+let readerDragPendingX = 0;
+let readerDragRaf   = null;
+
+const READER_EDGE_BAND = 6;
+
+const swallowReaderClick = (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+};
+
+/* The visible reading column + its scroll container, or null when the
+   feature does not apply right now. Mirrors the surface logic used by
+   scrollToHeading: live preview edits in the CM editor unless reader
+   mode / the mobile preview view has taken over.                      */
+function readerDragSurface() {
+  if (!window.readerDragEnabled || window.innerWidth <= 820) return null;
+  const body = document.body;
+  if (body.classList.contains('live-preview-active')
+      && !body.classList.contains('reader-mode-active')
+      && body.dataset.view !== 'preview') {
+    const col = document.querySelector('#editor .cm-content');
+    const container = document.querySelector('#editor .cm-scroller');
+    return (col && container) ? { col, container } : null;
+  }
+  const pane = document.getElementById('preview-pane');
+  if (!pane || getComputedStyle(pane).display === 'none') return null;
+  if (pane.classList.contains('mobile-preview')) return null; // phone frame
+  const col = document.querySelector('#preview .prose');
+  const container = document.getElementById('preview');
+  return (col && container) ? { col, container } : null;
+}
+
+/* Hit-test: pointer within the vertical extent of the container and
+   within ±6px of either column edge. */
+function readerEdgeHit(x, y) {
+  const surface = readerDragSurface();
+  if (!surface) return null;
+  const colRect = surface.col.getBoundingClientRect();
+  if (colRect.width === 0) return null;
+  const boxRect = surface.container.getBoundingClientRect();
+  if (y < boxRect.top || y > boxRect.bottom || x < boxRect.left || x > boxRect.right) return null;
+  if (Math.abs(x - colRect.left) > READER_EDGE_BAND
+      && Math.abs(x - colRect.right) > READER_EDGE_BAND) return null;
+  return surface;
+}
+
+document.addEventListener('mousemove', (e) => {
+  if (dragging || outlineDragging || readerDragging) return;
+  if (e.buttons !== 0) return; // mid-selection / other button held
+  const inBand = !!readerEdgeHit(e.clientX, e.clientY);
+  document.body.classList.toggle('reader-edge-hover', inBand);
+});
+
+document.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  if (dragging || outlineDragging || readerDragging) return;
+  const hit = readerEdgeHit(e.clientX, e.clientY);
+  if (!hit) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+  readerDragging = true;
+  readerDragSawMove = false;
+
+  const colRect = hit.col.getBoundingClientRect();
+  readerDragCenterX = (colRect.left + colRect.right) / 2;
+  /* Cap at the container's CONTENT width so the column can never exceed
+     the pane (the outline-overlay inset arrives as container padding and
+     is therefore respected automatically). */
+  const cs = getComputedStyle(hit.container);
+  readerDragMaxW = Math.max(
+    240,
+    hit.container.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+  );
+
+  document.body.classList.add('reader-edge-dragging');
+  document.body.style.userSelect = 'none';
+  document.body.style.cursor = 'col-resize';
+  document.addEventListener('click', swallowReaderClick, { capture: true, once: true });
+}, true);
 
 
 
