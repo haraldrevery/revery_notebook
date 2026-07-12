@@ -30,16 +30,21 @@ const onDocumentMove = e => {
 
   if (dragging) {
     const total = workspace.getBoundingClientRect().width;
-    const newLeft = Math.min(Math.max(startLeft + (currentX - startX), 200), total - 200);
+    /* Mirrored layout puts the editor on the divider's OTHER side, so the
+       same pointer movement must change its width in the other direction. */
+    const dir = window.flipLayout ? -1 : 1;
+    const newLeft = Math.min(Math.max(startLeft + dir * (currentX - startX), 200), total - 200);
     edPane.style.width = newLeft + 'px';
     edPane.style.flex = 'none';
   }
 
   if (outlineDragging) {
-    /* Dragging left widens the outline; dragging right narrows it */
+    /* Dragging left widens the outline; dragging right narrows it —
+       inverted when the layout is mirrored (outline sits far LEFT). */
     const total = workspace.getBoundingClientRect().width;
     const outlinePane = document.getElementById('outline-pane');
-    const newWidth = Math.min(Math.max(outlineStartWidth - (currentX - outlineStartX), 140), Math.min(420, total - 400));
+    const outlineDir = window.flipLayout ? 1 : -1;
+    const newWidth = Math.min(Math.max(outlineStartWidth + outlineDir * (currentX - outlineStartX), 140), Math.min(420, total - 400));
     outlinePane.style.width = newWidth + 'px';
     /* Desktop overlay mode: the divider is position:absolute and anchors
        at `right: var(--outline-pane-w)` — keep it glued to the pane edge */
@@ -113,7 +118,9 @@ const onDocumentEnd = () => {
     if (readerDragSawMove && typeof window.commitReaderDragWidth === 'function') {
       const finalPx = readerDragWidthAt(readerDragPendingX);
       const vw = Math.min(Math.max((finalPx / window.innerWidth) * 100, 5), 100);
-      window.commitReaderDragWidth(Math.round(vw * 10) / 10);
+      /* px passed alongside: fixed-width mode stores the drag's exact
+         pixel result instead of roundtripping through vw. */
+      window.commitReaderDragWidth(Math.round(vw * 10) / 10, finalPx);
     }
     readerDragSawMove = false;
   }

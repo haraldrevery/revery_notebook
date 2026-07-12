@@ -69,7 +69,11 @@ if (btnSidebar) btnSidebar.addEventListener('click', () => {
 
   document.addEventListener('mousemove', (e) => {
     if (!sbDragging) return;
-    const newW = Math.min(MAX_SIDEBAR_W, Math.max(MIN_SIDEBAR_W, sbStartW + (e.clientX - sbStartX)));
+    /* Mirrored layout (body.flip-layout) puts the sidebar far RIGHT with
+       its divider on the left — the same pointer movement must change the
+       width in the other direction. Read at event time. */
+    const dir = window.flipLayout ? -1 : 1;
+    const newW = Math.min(MAX_SIDEBAR_W, Math.max(MIN_SIDEBAR_W, sbStartW + dir * (e.clientX - sbStartX)));
     sidebarPanel.style.width = newW + 'px';
   });
 

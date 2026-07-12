@@ -18,7 +18,7 @@ const path = require('node:path');
 
 const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY || process.platform !== 'linux');
 
-test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000 }, async () => {
+test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 90000 }, async () => {
   const electronBin = require('electron'); // path string under plain node
   const mainScript  = path.join(__dirname, 'helpers', 'find_e2e_main.js');
 
@@ -113,6 +113,8 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     readerPadding: true, readerPaddingResets: true,
     readerDragResizes: true, readerDragToggleOff: true, readerDragCustomRow: true,
     readerDragCustomPersists: true,
+    readerFixedWidth: true, editorFixedWidth: true,
+    flipLayoutMirrors: true, flipLayoutDrag: true, flipLayoutRestores: true,
     arrowDownByLine: true, arrowUpByLine: true,
   }, 'v2 blocks must render through the preview pipeline with computed-style parity: headers, code font+colors, hidden fences, image sizing, tables, multi-line math; vertical arrows must walk raw doc lines through rendered blocks');
 

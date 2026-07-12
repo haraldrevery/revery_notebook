@@ -633,6 +633,54 @@
     await sleep(200);
   }
 
+  /* Fixed width mode: freezes the chosen width in px (captured once at
+     selection/toggle time, persisted); toggling off restores the exact
+     relative value. Reader asserts the shared --reader-max-width var;
+     editor asserts the min(px, 45%) clamp emission.                    */
+  {
+    const rdVar = () => getComputedStyle(document.documentElement)
+      .getPropertyValue('--reader-max-width').trim();
+    clickSetting('Reader padding', '50');
+    await sleep(200);
+    clickSetting('Reader padding', 'fixed width');       // ON — captures 50vw as px
+    await sleep(200);
+    const pxVal = rdVar();
+    const fixedIsPx = /px$/.test(pxVal)
+      && Math.abs(parseFloat(pxVal) - window.innerWidth * 0.5) < 3;
+    clickSetting('Reader padding', '30');                // preset while fixed → recapture
+    await sleep(200);
+    const px30 = rdVar();
+    const recaptured = /px$/.test(px30)
+      && Math.abs(parseFloat(px30) - window.innerWidth * 0.3) < 3;
+    const blob = (() => {
+      try { return JSON.parse(localStorage.getItem('revery_md_settings')); }
+      catch (_) { return {}; }
+    })();
+    const persisted = blob.readerPaddingFixed === true
+      && Math.abs(blob.readerPaddingFixedPx - window.innerWidth * 0.3) < 3;
+    clickSetting('Reader padding', 'fixed width');       // OFF — relative returns
+    await sleep(200);
+    lpV2.readerFixedWidth = fixedIsPx && recaptured && persisted && rdVar() === '30vw';
+
+    const edVar = () => getComputedStyle(document.documentElement)
+      .getPropertyValue('--editor-padding').trim();
+    clickSetting('Editor padding', '60%');
+    await sleep(150);
+    const edRelative = edVar() === '24px 20%';
+    clickSetting('Editor padding', 'fixed width');       // ON — 20% of the pane, frozen
+    await sleep(150);
+    const em = /^24px min\((\d+)px, 45%\)$/.exec(edVar());
+    const paneW = document.getElementById('editor-pane').clientWidth;
+    const edFixed = !!em && Math.abs(parseInt(em[1], 10) - paneW * 0.2) < 3;
+    clickSetting('Editor padding', 'fixed width');       // OFF
+    await sleep(150);
+    lpV2.editorFixedWidth = edRelative && edFixed && edVar() === '24px 20%';
+
+    clickSetting('Reader padding', '100%');              // restore defaults
+    clickSetting('Editor padding', '100%');
+    await sleep(200);
+  }
+
   /* Vertical arrow keys walk the RAW document lines through rendered
      multi-line blocks (they used to skip a whole widget per press); the
      selection landing inside a block reveals it raw. Motion on plain
@@ -673,6 +721,52 @@
     paneBack:        getComputedStyle(document.getElementById('preview-pane')).display !== 'none',
     persistedOff:    settingsNow().livePreviewMode === false,
   };
+
+  /* Flipped panel order (Advanced Options → Panel order: Mirrored): pure
+     CSS `order` mirror + event-time drag-direction flips. Everything above
+     ran with the flip OFF — that is the regression proof for the default. */
+  {
+    const paneRect = (id) => document.getElementById(id).getBoundingClientRect();
+    window.setFlipLayout(true);
+    await sleep(250);
+    const mirrored = paneRect('preview-pane').left < paneRect('editor-pane').left;
+
+    /* Divider drag: in the mirrored order the editor sits RIGHT of its
+       divider, so dragging 60px LEFT (toward the preview) must WIDEN it. */
+    const edW0 = paneRect('editor-pane').width;
+    const dv = paneRect('divider');
+    const dy = dv.top + 100;
+    document.getElementById('divider').dispatchEvent(new MouseEvent('mousedown',
+      { bubbles: true, cancelable: true, clientX: dv.left + 0.5, clientY: dy }));
+    document.dispatchEvent(new MouseEvent('mousemove',
+      { bubbles: true, cancelable: true, clientX: dv.left - 60, clientY: dy }));
+    await sleep(100);
+    document.dispatchEvent(new MouseEvent('mouseup',
+      { bubbles: true, clientX: dv.left - 60, clientY: dy }));
+    await sleep(150);
+    const dragFlipped = paneRect('editor-pane').width > edW0 + 40;
+
+    /* Outline overlay + inset land on the LEFT edge. */
+    toggleOutline();
+    await sleep(250);
+    const ws = paneRect('workspace');
+    const overlayLeft = Math.abs(paneRect('outline-pane').left - ws.left) < 2;
+    const pvCS = getComputedStyle(document.getElementById('preview'));
+    const insetFlipped = pvCS.paddingLeft === '252px' && pvCS.paddingRight === '52px';
+    toggleOutline();
+    await sleep(200);
+
+    /* Off restores the original order and drag direction. */
+    window.setFlipLayout(false);
+    edPane.style.width = '33.33%'; // undo the probe's divider drag
+    await sleep(250);
+    const backNormal = paneRect('editor-pane').left < paneRect('preview-pane').left
+      && getComputedStyle(document.getElementById('preview')).paddingRight === '52px';
+
+    lpV2.flipLayoutMirrors = mirrored && overlayLeft && insetFlipped;
+    lpV2.flipLayoutDrag = dragFlipped;
+    lpV2.flipLayoutRestores = backNormal;
+  }
 
   /* 11b. Export suite builders (web mode: pure builders, no dialogs).
      LaTeX templates/engines/TOC + PDF front-page/TOC/@page options. */

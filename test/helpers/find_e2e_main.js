@@ -20,11 +20,15 @@ const os   = require('os');
 app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'revery-e2e-')));
 
 /* The renderer freezing is the exact failure mode under test; the main
-   process stays responsive, so a global deadline can always fire. */
+   process stays responsive, so a global deadline can always fire. The
+   budget tracks the driver's total fixed sleeps — a healthy run currently
+   takes ~46s, so 75s means "hung", not "slow machine". Keep it below the
+   node:test timeout in find_e2e.test.js (90s) so this message, not a bare
+   test timeout, is what a hang reports. */
 setTimeout(() => {
   console.error('E2E-FAIL: global deadline reached (renderer hung?)');
   app.exit(1);
-}, 45000);
+}, 75000);
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 1100, height: 700 });

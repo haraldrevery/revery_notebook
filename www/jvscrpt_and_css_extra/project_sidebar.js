@@ -1585,7 +1585,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
     document.addEventListener("mousemove", (e) => {
       if (!sbDragging) return;
-      const newW = Math.min(MAX_SIDEBAR_W, Math.max(MIN_SIDEBAR_W, sbStartW + (e.clientX - sbStartX)));
+      const dir = window.flipLayout ? -1 : 1;
+      const newW = Math.min(MAX_SIDEBAR_W, Math.max(MIN_SIDEBAR_W, sbStartW + dir * (e.clientX - sbStartX)));
       sidebarPanel.style.width = newW + "px";
     });
     document.addEventListener("mouseup", () => {

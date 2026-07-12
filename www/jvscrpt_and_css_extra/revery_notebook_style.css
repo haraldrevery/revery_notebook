@@ -2642,3 +2642,49 @@ body.live-preview-active #editor .cm-content {
   body.exporting-pdf > *:not(#export-print-root) { display: none !important; }
   body.exporting-pdf #export-print-root { display: block !important; }
 }
+
+/* ── Flipped panel order (Advanced Options → Panel order: Mirrored) ─────
+   Full horizontal mirror: outline | preview | editor | files. Implemented
+   as CSS `order` on the flex children — the DOM never moves, so tab order
+   and assistive tech are untouched. The drag handlers (editor/outline
+   dividers in markdown_editor_layout.js, sidebar divider in
+   src/sidebar/panel.js) read window.flipLayout at event time and invert
+   their direction. This block must stay LAST in the stylesheet: the
+   flipped LP inset below out-!importants the unflipped rule by class
+   count AND source order. Desktop only — the single-pane mobile views
+   never render horizontal order.                                       */
+@media (min-width: 821px) {
+  body.flip-layout #outline-pane    { order: 1; }
+  body.flip-layout #outline-divider { order: 2; }
+  body.flip-layout #preview-pane    { order: 3; }
+  body.flip-layout #divider         { order: 4; }
+  body.flip-layout #editor-pane     { order: 5; }
+  body.flip-layout #sidebar-divider { order: 6; }
+  body.flip-layout #project-sidebar { order: 7; }
+
+  /* The outline overlay + its divider anchor to the LEFT edge. */
+  body.flip-layout #outline-pane {
+    right: auto;
+    left: 0;
+  }
+  body.flip-layout #outline-divider {
+    right: auto;
+    left: var(--outline-pane-w, 200px); /* kept in sync by the drag handler */
+  }
+  /* Text insets move to the left side with the overlay (base horizontal
+     padding is 52px each side — both set explicitly to override the
+     unflipped rules). */
+  body.flip-layout.outline-open #preview {
+    padding-right: 52px;
+    padding-left: calc(var(--outline-pane-w, 200px) + 52px);
+  }
+  body.flip-layout.outline-open.live-preview-active #editor .cm-scroller {
+    padding-right: 0 !important;
+    padding-left: var(--outline-pane-w, 200px) !important;
+  }
+  /* The sidebar's separating border faces the workspace. */
+  body.flip-layout #project-sidebar {
+    border-right: none;
+    border-left: 1px solid var(--border-md, rgba(128,128,128,0.18));
+  }
+}

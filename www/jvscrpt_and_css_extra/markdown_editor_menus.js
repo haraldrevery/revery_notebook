@@ -40,6 +40,17 @@ let logoPosition = 'center';      // top bar logo: 'center' | 'left' (Advanced O
 let readerDragEnabled = true;     // drag the reading-column edge to resize it (desktop)
 window.readerDragEnabled = true;  // Mirror read by layout.js at event time
 let readerPaddingCustom = null;   // last dragged width in vw — stays selectable after preset clicks
+/* Fixed-width mode: freeze the chosen width in PIXELS so half-screen ↔
+   full-screen keeps the same column (max-width/min() clamp still shrink
+   it when the viewport is smaller). The px is captured ONCE at selection
+   or toggle-on time and persisted — never recomputed at boot or resize,
+   or the frozen width would drift with whatever window size boots first. */
+let readerPaddingFixed   = false; // Reader padding: apply as frozen px instead of vw
+let readerPaddingFixedPx = null;  // the frozen reader column width (px)
+let editorPaddingFixed   = false; // Editor padding: freeze the horizontal padding in px
+let editorPaddingFixedPx = null;  // the frozen per-side horizontal editor padding (px)
+let flipLayout = false;           // mirror the desktop panel order (Advanced Options)
+window.flipLayout = false;        // Mirror read by the drag handlers at event time
 
 /* ── Background image options ─────────────────────────────────────────────
    To add a new background: append a new entry to this array.
@@ -77,7 +88,12 @@ window.saveEditorSettings = function() {
     livePreviewMode,
     logoPosition,
     readerDragEnabled,
-    readerPaddingCustom
+    readerPaddingCustom,
+    readerPaddingFixed,
+    readerPaddingFixedPx,
+    editorPaddingFixed,
+    editorPaddingFixedPx,
+    flipLayout
   };
 
   try {
@@ -155,6 +171,15 @@ function loadEditorSettings() {
     if (typeof s.readerPaddingCustom === 'number' && isFinite(s.readerPaddingCustom)) {
       readerPaddingCustom = s.readerPaddingCustom;
     }
+    if (s.readerPaddingFixed !== undefined) readerPaddingFixed = !!s.readerPaddingFixed;
+    if (typeof s.readerPaddingFixedPx === 'number' && isFinite(s.readerPaddingFixedPx) && s.readerPaddingFixedPx > 0) {
+      readerPaddingFixedPx = s.readerPaddingFixedPx;
+    }
+    if (s.editorPaddingFixed !== undefined) editorPaddingFixed = !!s.editorPaddingFixed;
+    if (typeof s.editorPaddingFixedPx === 'number' && isFinite(s.editorPaddingFixedPx) && s.editorPaddingFixedPx >= 0) {
+      editorPaddingFixedPx = s.editorPaddingFixedPx;
+    }
+    if (s.flipLayout !== undefined) flipLayout = !!s.flipLayout;
     /* Settings written before readerPaddingCustom existed can still carry
        an ACTIVE custom token — derive the remembered value from it. */
     if (readerPaddingCustom === null) {
@@ -166,6 +191,7 @@ function loadEditorSettings() {
 }
 loadEditorSettings();
 setReaderDragEnabled(readerDragEnabled); // sync mirror + body class with the loaded value
+applyFlipLayout(); // sync mirror + body class with the loaded value (no save)
 
 
 
@@ -452,36 +478,48 @@ function applyUiSizeProseCompensation() {
 /* Apply reader mode padding: constrains the prose content width so text
    doesn't stretch edge-to-edge on large monitors in reader mode.
    Uses a CSS custom property (--reader-max-width) defined in :root.     */
-function applyReaderPadding() {
-  const map = {
-    'default': 'none',
-    '90': '90vw',
-    '80': '80vw',
-    '70': '70vw',
-    '60': '60vw',
-    '50': '50vw',
-    '40': '40vw',
-    '30': '30vw',
-    '25': '25vw',
-    '20': '20vw',
-    '15': '15vw',
-    '10': '10vw'
+/* The active reader token as a vw number, or null for 'default'/unknown.
+   Shared by the relative apply path and the fixed-px capture. */
+function readerTokenToVw() {
+  const presets = {
+    '90': 90, '80': 80, '70': 70, '60': 60, '50': 50, '40': 40,
+    '30': 30, '25': 25, '20': 20, '15': 15, '10': 10,
   };
-
-  /* 'custom:<n>' — a width the user set by DRAGGING the reading-column
-     edge (see readerEdgeDrag in markdown_editor_layout.js). Stored as a
-     vw fraction so it scales with the window like the presets. Unknown
-     tokens (incl. this one on an older build) fall through to 'none'. */
-  let val;
   const custom = /^custom:(\d+(?:\.\d+)?)$/.exec(String(readerPadding));
-  if (custom) {
-    val = Math.min(Math.max(parseFloat(custom[1]), 5), 100) + 'vw';
-  } else {
-    val = map[readerPadding] || 'none';
+  if (custom) return Math.min(Math.max(parseFloat(custom[1]), 5), 100);
+  return presets[readerPadding] !== undefined ? presets[readerPadding] : null;
+}
+
+function applyReaderPadding() {
+  /* Fixed-width mode: the frozen px wins. max-width self-clamps when the
+     pane is narrower, so no explicit min() is needed here. A missing px
+     (never captured) falls through to the relative behavior below.     */
+  if (readerPaddingFixed && typeof readerPaddingFixedPx === 'number'
+      && isFinite(readerPaddingFixedPx) && readerPaddingFixedPx > 0) {
+    document.documentElement.style.setProperty('--reader-max-width', Math.round(readerPaddingFixedPx) + 'px');
+    return;
   }
+  /* Relative mode (the original logic): presets and the dragged
+     'custom:<n>' token scale with the window as vw. Unknown tokens
+     (incl. on an older build) fall through to 'none'.                  */
+  const vw = readerTokenToVw();
+  const val = vw === null ? 'none' : vw + 'vw';
   document.documentElement.style.setProperty('--reader-max-width', val);
 }
 applyReaderPadding(); // Apply the 50% default on load
+
+/* Freeze the CURRENT reader selection into px. Preset/custom tokens use
+   exact math; 'default' (uncapped) freezes the column as rendered. Null
+   when nothing sensible can be captured — fixed mode then behaves like
+   relative until a preset/drag provides a value.                       */
+function captureReaderFixedPx() {
+  const vw = readerTokenToVw();
+  if (vw !== null) return Math.round(window.innerWidth * vw / 100);
+  const col = document.querySelector('#preview .prose')
+    || document.querySelector('#editor .cm-content');
+  const w = col ? col.getBoundingClientRect().width : 0;
+  return w > 50 ? Math.round(w) : null;
+}
 
 /* Toggle for the drag-the-edge width adjustment (desktop only). The body
    class gates the CSS affordance (edge line, col-resize cursor); the
@@ -493,32 +531,44 @@ function setReaderDragEnabled(on) {
 }
 /* Drag-end hook for layout.js: persist the dragged width as the active
    Reader padding value and refresh the submenu checkmarks. */
-window.commitReaderDragWidth = function (vw) {
+window.commitReaderDragWidth = function (vw, px) {
   readerPaddingCustom = vw;          // remembered even after picking a preset
   readerPadding = 'custom:' + vw;    // and active right now
+  if (readerPaddingFixed) {
+    /* Fixed mode: keep the drag's EXACT pixel result (no vw roundtrip);
+       fall back to token math if the caller didn't pass one. */
+    readerPaddingFixedPx = (typeof px === 'number' && isFinite(px) && px > 0)
+      ? Math.round(px)
+      : captureReaderFixedPx();
+  }
   applyReaderPadding();
   if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
   buildSettingsMenu();
 };
 
 
+/* Single source for the desktop editor-padding presets — the fixed-width
+   capture derives its horizontal component from the SAME table, so the
+   two can never drift apart. */
+const EDITOR_PADDING_MAP = {
+  'default': '24px 28px',
+  '95%': '24px 2.5%',
+  '90%': '24px 5%',
+  '85%': '24px 7.5%',
+  '80%': '24px 10%',
+  '75%': '24px 12.5%',
+  '70%': '24px 15%',
+  '60%': '24px 20%',
+  '50%': '24px 25%',
+  '40%': '24px 30%',
+  '30%': '24px 35%',
+  '25%': '24px 40%',
+  '20%': '24px 42%',
+  '15%': '24px 45%'
+};
+
 function applyEditorPadding() {
-  const map = {
-    'default': '24px 28px',
-    '95%': '24px 2.5%',
-    '90%': '24px 5%',
-    '85%': '24px 7.5%',
-    '80%': '24px 10%',
-    '75%': '24px 12.5%',
-    '70%': '24px 15%',
-    '60%': '24px 20%',
-    '50%': '24px 25%',
-    '40%': '24px 30%',
-    '30%': '24px 35%',
-    '25%': '24px 40%',
-    '20%': '24px 42%',
-    '15%': '24px 45%'
-  };
+  const map = EDITOR_PADDING_MAP;
   const mapMobile = {
     'default': '24px 20px 40vh',
     '95%': '24px 2.5% 40vh',
@@ -535,12 +585,37 @@ function applyEditorPadding() {
     '20%': '24px 20% 40vh',
     '15%': '24px 15% 40vh'
   };
-  const val = map[editorPadding] || '24px 28px';
+  let val = map[editorPadding] || '24px 28px';
+  /* Fixed-width mode: freeze the HORIZONTAL padding in px. Unlike the
+     reader's max-width, padding does not self-clamp — a frozen 300px on
+     a pane dragged narrow would crush the text — so the px is emitted
+     inside min() capped at 45% per side (the '15%' preset's geometry,
+     the narrowest the relative presets allow). Desktop var only: the
+     mobile variant always stays relative.                              */
+  if (editorPaddingFixed && typeof editorPaddingFixedPx === 'number'
+      && isFinite(editorPaddingFixedPx) && editorPaddingFixedPx >= 0) {
+    val = '24px min(' + Math.round(editorPaddingFixedPx) + 'px, 45%)';
+  }
   const valMobile = mapMobile[editorPadding] || '24px 20px 40vh';
   document.documentElement.style.setProperty('--editor-padding', val);
   document.documentElement.style.setProperty('--editor-padding-mobile', valMobile);
 }
 applyEditorPadding();
+
+/* Freeze the CURRENT editor selection's horizontal padding into px.
+   Percentages resolve against the editor PANE (that is what CSS % padding
+   resolves against), so the frozen value also survives divider drags. */
+function captureEditorFixedPx() {
+  const shorthand = EDITOR_PADDING_MAP[editorPadding] || EDITOR_PADDING_MAP['default'];
+  const h = shorthand.split(/\s+/)[1] || '28px';
+  if (h.endsWith('%')) {
+    const pane = document.getElementById('editor-pane');
+    const paneW = pane ? pane.clientWidth : 0;
+    if (paneW <= 0) return null;
+    return Math.round(paneW * parseFloat(h) / 100);
+  }
+  return Math.round(parseFloat(h));
+}
 
 
 
@@ -932,12 +1007,37 @@ window.setLogoPosition = function (pos) {
   window.saveEditorSettings();
 };
 
+/* Mirrored panel order (outline | preview | editor | files). Pure CSS
+   `order` keyed on the body class — the DOM never moves, so tab order and
+   assistive tech are untouched; the drag handlers read window.flipLayout
+   at event time for their direction. No effect ≤820px (single-pane views
+   never render horizontal order).                                       */
+function applyFlipLayout() {
+  window.flipLayout = flipLayout;
+  document.body.classList.toggle('flip-layout', flipLayout);
+}
+
+window.setFlipLayout = function (on) {
+  flipLayout = !!on;
+  applyFlipLayout();
+  window.saveEditorSettings();
+};
+
 const advancedOptions = [
   {
     label: 'Top bar logo position',
     choices: [['center', 'Centered'], ['left', 'Left corner']],
     get: () => logoPosition,
     set: (v) => window.setLogoPosition(v),
+  },
+  {
+    label: 'Panel order',
+    choices: [['normal', 'Normal'], ['flipped', 'Mirrored']],
+    get: () => (flipLayout ? 'flipped' : 'normal'),
+    set: (v) => window.setFlipLayout(v === 'flipped'),
+    /* Desktop only: mirroring has no effect in the single-pane mobile
+       views — hiding the row avoids a silent no-op control. */
+    visible: () => window.innerWidth > 820,
   },
   /* Future advanced settings: append entries here. */
 ];
@@ -963,6 +1063,7 @@ function openAdvancedOptions() {
     content.querySelectorAll('.export-dd-menu.open').forEach((m) => m.classList.remove('open'));
 
   advancedOptions.forEach((opt) => {
+    if (typeof opt.visible === 'function' && !opt.visible()) return;
     const row = document.createElement('div');
     row.className = 'export-row';
     const label = document.createElement('label');
@@ -1818,9 +1919,12 @@ const readerPaddingOptions = [
     btn.onclick = (e) => {
       e.stopPropagation();
       readerPadding = opt.val;
+      /* Fixed-width mode freezes THIS choice in px, right now. */
+      if (readerPaddingFixed) readerPaddingFixedPx = captureReaderFixedPx();
       applyReaderPadding();
       settingsDropdown.classList.remove('show');
       buildSettingsMenu();
+      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
     };
     readerPadSub.appendChild(btn);
   });
@@ -1842,6 +1946,7 @@ const readerPaddingOptions = [
     customBtn.onclick = (e) => {
       e.stopPropagation();
       readerPadding = 'custom:' + readerPaddingCustom;
+      if (readerPaddingFixed) readerPaddingFixedPx = captureReaderFixedPx();
       applyReaderPadding();
       settingsDropdown.classList.remove('show');
       buildSettingsMenu();
@@ -1869,6 +1974,29 @@ const readerPaddingOptions = [
       if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
     };
     readerPadSub.appendChild(dragBtn);
+  }
+
+  /* Fixed width: freeze the current reader width in px so half-screen ↔
+     full-screen keeps the same column (it still shrinks when the pane is
+     narrower — max-width clamps natively). Off = the original relative
+     (vw) behavior. Desktop only, like the drag toggle above.           */
+  if (window.innerWidth > 820) {
+    const fixBtn = document.createElement('button');
+    fixBtn.className = 'menu-item';
+    const fixCheck = document.createElement('span');
+    fixCheck.className = 'menu-item-check';
+    fixCheck.textContent = readerPaddingFixed ? '■' : '□';
+    fixBtn.appendChild(fixCheck);
+    fixBtn.appendChild(document.createTextNode(window.t('Fixed width')));
+    fixBtn.onclick = (e) => {
+      e.stopPropagation();
+      readerPaddingFixed = !readerPaddingFixed;
+      if (readerPaddingFixed) readerPaddingFixedPx = captureReaderFixedPx();
+      applyReaderPadding();
+      buildSettingsMenu();
+      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+    };
+    readerPadSub.appendChild(fixBtn);
   }
 
   readerPadWrapper.appendChild(readerPadSub);
@@ -1914,6 +2042,8 @@ const editorPaddingOptions = [
     btn.onclick = (e) => {
       e.stopPropagation();
       editorPadding = opt.val;
+      /* Fixed-width mode freezes THIS choice in px, right now. */
+      if (editorPaddingFixed) editorPaddingFixedPx = captureEditorFixedPx();
       applyEditorPadding();
       settingsDropdown.classList.remove('show');
       buildSettingsMenu();
@@ -1921,6 +2051,29 @@ const editorPaddingOptions = [
     };
     editorPadSub.appendChild(btn);
   });
+
+  /* Fixed width: freeze the current horizontal editor padding in px
+     (emitted inside min(px, 45%) so a narrow pane degrades gracefully
+     instead of crushing the text). Off = the original relative behavior.
+     Desktop only; the mobile padding variant always stays relative.    */
+  if (window.innerWidth > 820) {
+    const eFixBtn = document.createElement('button');
+    eFixBtn.className = 'menu-item';
+    const eFixCheck = document.createElement('span');
+    eFixCheck.className = 'menu-item-check';
+    eFixCheck.textContent = editorPaddingFixed ? '■' : '□';
+    eFixBtn.appendChild(eFixCheck);
+    eFixBtn.appendChild(document.createTextNode(window.t('Fixed width')));
+    eFixBtn.onclick = (e) => {
+      e.stopPropagation();
+      editorPaddingFixed = !editorPaddingFixed;
+      if (editorPaddingFixed) editorPaddingFixedPx = captureEditorFixedPx();
+      applyEditorPadding();
+      buildSettingsMenu();
+      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+    };
+    editorPadSub.appendChild(eFixBtn);
+  }
 
   editorPadWrapper.appendChild(editorPadSub);
   attachSubmenuHandlers(editorPadWrapper, editorPadSub);
