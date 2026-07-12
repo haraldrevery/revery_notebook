@@ -66,10 +66,13 @@ const onDocumentMove = e => {
   }
 };
 
-/* Clamped column width for a pointer position (reader edge drag). */
+/* Clamped column width for a pointer position (reader edge drag).
+   Floor 120px: below every Reader padding preset at realistic window
+   sizes (10% of 1200 = 120), so nudging the edge from a narrow preset
+   never JUMPS the column wider than the preset was. */
 function readerDragWidthAt(x) {
   return Math.round(Math.min(
-    Math.max(2 * Math.abs(x - readerDragCenterX), 240),
+    Math.max(2 * Math.abs(x - readerDragCenterX), 120),
     readerDragMaxW
   ));
 }
@@ -206,6 +209,16 @@ document.addEventListener('mousemove', (e) => {
   document.body.classList.toggle('reader-edge-hover', inBand);
 });
 
+/* The hover affordance is otherwise cleared by the NEXT mousemove — which
+   never comes if the pointer leaves the window (or the app loses focus)
+   from inside the band. Both handlers only remove a cosmetic class.    */
+document.addEventListener('mouseleave', () => {
+  if (!readerDragging) document.body.classList.remove('reader-edge-hover');
+});
+window.addEventListener('blur', () => {
+  if (!readerDragging) document.body.classList.remove('reader-edge-hover');
+});
+
 document.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   if (dragging || outlineDragging || readerDragging) return;
@@ -224,7 +237,7 @@ document.addEventListener('mousedown', (e) => {
      is therefore respected automatically). */
   const cs = getComputedStyle(hit.container);
   readerDragMaxW = Math.max(
-    240,
+    120,
     hit.container.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
   );
 

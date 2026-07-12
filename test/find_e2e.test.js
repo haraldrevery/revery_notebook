@@ -111,7 +111,8 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 60000
     clickUnderPointer: true, outlineScrollOnly: true, readerOutlineScrolls: true,
     edgeClickNoSteal: true, outlineSyncs: true, paddingParity: true,
     readerPadding: true, readerPaddingResets: true,
-    readerDragResizes: true, readerDragToggleOff: true,
+    readerDragResizes: true, readerDragToggleOff: true, readerDragCustomRow: true,
+    readerDragCustomPersists: true,
     arrowDownByLine: true, arrowUpByLine: true,
   }, 'v2 blocks must render through the preview pipeline with computed-style parity: headers, code font+colors, hidden fences, image sizing, tables, multi-line math; vertical arrows must walk raw doc lines through rendered blocks');
 

@@ -39,6 +39,7 @@ let editorBgGradient = false;     // true = gradient fade, false = solid colour
 let logoPosition = 'center';      // top bar logo: 'center' | 'left' (Advanced Options)
 let readerDragEnabled = true;     // drag the reading-column edge to resize it (desktop)
 window.readerDragEnabled = true;  // Mirror read by layout.js at event time
+let readerPaddingCustom = null;   // last dragged width in vw — stays selectable after preset clicks
 
 /* ── Background image options ─────────────────────────────────────────────
    To add a new background: append a new entry to this array.
@@ -75,7 +76,8 @@ window.saveEditorSettings = function() {
     backgroundOpacity,
     livePreviewMode,
     logoPosition,
-    readerDragEnabled
+    readerDragEnabled,
+    readerPaddingCustom
   };
 
   try {
@@ -150,6 +152,15 @@ function loadEditorSettings() {
     if (s.editorBgGradient !== undefined) editorBgGradient = s.editorBgGradient;
     if (s.logoPosition === 'left' || s.logoPosition === 'center') logoPosition = s.logoPosition;
     if (s.readerDragEnabled !== undefined) readerDragEnabled = !!s.readerDragEnabled;
+    if (typeof s.readerPaddingCustom === 'number' && isFinite(s.readerPaddingCustom)) {
+      readerPaddingCustom = s.readerPaddingCustom;
+    }
+    /* Settings written before readerPaddingCustom existed can still carry
+       an ACTIVE custom token — derive the remembered value from it. */
+    if (readerPaddingCustom === null) {
+      const m = /^custom:(\d+(?:\.\d+)?)$/.exec(String(readerPadding));
+      if (m) readerPaddingCustom = parseFloat(m[1]);
+    }
     }
   } catch (e) {}
 }
@@ -483,7 +494,8 @@ function setReaderDragEnabled(on) {
 /* Drag-end hook for layout.js: persist the dragged width as the active
    Reader padding value and refresh the submenu checkmarks. */
 window.commitReaderDragWidth = function (vw) {
-  readerPadding = 'custom:' + vw;
+  readerPaddingCustom = vw;          // remembered even after picking a preset
+  readerPadding = 'custom:' + vw;    // and active right now
   applyReaderPadding();
   if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
   buildSettingsMenu();
@@ -1812,6 +1824,31 @@ const readerPaddingOptions = [
     };
     readerPadSub.appendChild(btn);
   });
+
+  /* The last width set by DRAGGING the column edge, remembered as its own
+     selectable option (readerPaddingCustom): it keeps its place after the
+     user picks a preset, so they can flip back to their dragged width —
+     and it survives restarts via the settings blob. Behaves exactly like
+     a preset row (■ when active, closes the menu on click). Placed AFTER
+     the presets: the e2e clickSetting matcher takes the FIRST textContent
+     match, so preset labels must win even when the percentage contains
+     their digits.                                                       */
+  if (typeof readerPaddingCustom === 'number' && isFinite(readerPaddingCustom)) {
+    const customActive = /^custom:/.test(String(readerPadding));
+    const customBtn = document.createElement('button');
+    customBtn.className = 'menu-item';
+    customBtn.textContent = (customActive ? '■ ' : '  ')
+      + window.t('Custom') + ' (' + Math.round(readerPaddingCustom) + '%)';
+    customBtn.onclick = (e) => {
+      e.stopPropagation();
+      readerPadding = 'custom:' + readerPaddingCustom;
+      applyReaderPadding();
+      settingsDropdown.classList.remove('show');
+      buildSettingsMenu();
+      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+    };
+    readerPadSub.appendChild(customBtn);
+  }
 
   /* Drag-the-edge toggle (desktop only — the drag layer itself is also
      innerWidth-gated in layout.js). NOTE: the label must not contain the

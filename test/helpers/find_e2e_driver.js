@@ -579,6 +579,20 @@
       && /^custom:\d/.test(String(persisted))
       && window.cmView.state.selection.main.head === selBefore;
 
+    /* The submenu must show a checked "Custom (n%)" row while a dragged
+       width is active — placed AFTER the presets so clickSetting's
+       first-match-wins lookup still lands on preset labels. */
+    {
+      const rpWrapper = Array.from(document.querySelectorAll('#settings-dropdown .menu-item'))
+        .find(el => el.textContent.includes('Reader padding'));
+      const rows = rpWrapper ? Array.from(rpWrapper.querySelectorAll('.submenu button')) : [];
+      const customIdx = rows.findIndex(b => b.textContent.includes('Custom ('));
+      const preset50Idx = rows.findIndex(b => b.textContent.includes('50'));
+      lpV2.readerDragCustomRow = customIdx > -1
+        && rows[customIdx].textContent.includes('■')
+        && preset50Idx > -1 && preset50Idx < customIdx;
+    }
+
     clickSetting('Reader padding', 'drag to adjust'); // toggle OFF
     await sleep(150);
     const varBefore2 = rdVar();
@@ -596,6 +610,28 @@
   await sleep(200);
   lpV2.readerPaddingResets =
     getComputedStyle(document.querySelector('.cm-content')).maxWidth === 'none';
+
+  /* The Custom row PERSISTS after picking a preset — unchecked, still
+     showing the last dragged width — and clicking it re-applies it. */
+  {
+    const rdVar = () => getComputedStyle(document.documentElement)
+      .getPropertyValue('--reader-max-width').trim();
+    const findCustom = () => {
+      const wrapper = Array.from(document.querySelectorAll('#settings-dropdown .menu-item'))
+        .find(el => el.textContent.includes('Reader padding'));
+      return wrapper && Array.from(wrapper.querySelectorAll('.submenu button'))
+        .find(b => b.textContent.includes('Custom ('));
+    };
+    const row = findCustom();
+    const persistedUnchecked = !!row && !row.textContent.includes('■');
+    if (row) row.click();
+    await sleep(200);
+    const reappliedVw = /vw$/.test(rdVar()) && rdVar() !== 'none';
+    const rowChecked = (() => { const r2 = findCustom(); return !!r2 && r2.textContent.includes('■'); })();
+    lpV2.readerDragCustomPersists = persistedUnchecked && reappliedVw && rowChecked;
+    clickSetting('Reader padding', '100%'); // restore for the probes below
+    await sleep(200);
+  }
 
   /* Vertical arrow keys walk the RAW document lines through rendered
      multi-line blocks (they used to skip a whole widget per press); the
