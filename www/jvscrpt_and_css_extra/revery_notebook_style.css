@@ -1248,7 +1248,7 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
     bottom: 0;
     z-index: 5; /* above pane content (z 1), below topbar/menus (z 10) */
     background: var(--bg-panel);
-    background: color-mix(in srgb, var(--bg-panel) 54%, transparent);
+    background: color-mix(in srgb, var(--bg-panel) 47%, transparent);
   }
   #outline-divider {
     position: absolute;
