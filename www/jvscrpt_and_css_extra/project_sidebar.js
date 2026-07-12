@@ -908,7 +908,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         }
       } finally {
         S._externalChangeInProgress = false;
-        if (S.isDirty) S._conflictHoldPath = filePath;
+        if (S.isDirty) {
+          S._conflictHoldPath = filePath;
+          writeDurableSnapshot(filePath, editor.value);
+        }
       }
     });
     _watchedPath = filePath;
@@ -1159,6 +1162,31 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   var _autoSaveCooldownUntil = 0;
   var _scratchpadFailureWarned = false;
   var _autoCreatingFile = false;
+  var DURABLE_MIRROR_MS = 5e3;
+  var _durableMirrorLast = 0;
+  var _durableMirrorTimer = null;
+  function _durableExposed() {
+    return !!S.activeFilePath && (S._conflictHoldPath && S._conflictHoldPath === S.activeFilePath || Date.now() < _autoSaveCooldownUntil);
+  }
+  function writeDurableSnapshot(path, content) {
+    if (typeof window.NativeAPI.setDurableBackup !== "function") return;
+    _durableMirrorLast = Date.now();
+    window.NativeAPI.setDurableBackup(path, content).catch((e) => console.warn("[Sidebar] durable backup failed (non-fatal):", e));
+  }
+  function _fireDurableMirror() {
+    if (!_durableExposed() || !S.isDirty) return;
+    writeDurableSnapshot(S.activeFilePath, editor.value);
+  }
+  function mirrorDurableWhileExposed() {
+    if (!_durableExposed()) return;
+    clearTimeout(_durableMirrorTimer);
+    const since = Date.now() - _durableMirrorLast;
+    if (since >= DURABLE_MIRROR_MS) {
+      _fireDurableMirror();
+    } else {
+      _durableMirrorTimer = setTimeout(_fireDurableMirror, DURABLE_MIRROR_MS - since);
+    }
+  }
   function markDirty() {
     if (S.isDirty) return;
     S.isDirty = true;
@@ -1272,6 +1300,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       } catch (err) {
         console.error("[Sidebar] saveActiveFile failed:", err);
         _autoSaveCooldownUntil = Date.now() + AUTOSAVE_FAILURE_COOLDOWN_MS;
+        writeDurableSnapshot(pathToSave, contentToSave);
         _firstDirtyTime = 0;
         await window.NativeAPI.showMessageBox({
           type: "error",
@@ -1471,6 +1500,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         markDirty();
         scheduleAutoSave();
         window.NativeAPI.setVolatileContent(S.activeFilePath, editor.value);
+        mirrorDurableWhileExposed();
       }
     });
     document.addEventListener("keydown", async (e) => {
@@ -3879,20 +3909,57 @@ More information, click the \xBD logo in the center top of the screen.
                     const backupLen = backup.content.length;
                     const diskLen = diskContent.length;
                     const suspicious = backupLen === 0 && diskLen > 0 || diskLen > 200 && backupLen < diskLen * 0.1;
-                    const choice = await window.NativeAPI.showMessageBox({
-                      type: suspicious ? "warning" : "question",
-                      title: "Recover unsaved changes?",
-                      message: suspicious ? "A crash backup was found, but it looks incomplete." : "Unsaved changes from a previous session were found.",
-                      detail: suspicious ? `Last edited: ${ts}
+                    let fileMtime = 0;
+                    try {
+                      const dirPath = lastFile.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+                      const entries = await window.NativeAPI.readDirectory(dirPath);
+                      const norm2 = (p) => String(p).replace(/\\/g, "/");
+                      const me = (entries || []).find((e) => norm2(e.path) === norm2(lastFile));
+                      if (me && typeof me.mtime === "number") fileMtime = me.mtime;
+                    } catch (_) {
+                    }
+                    const stale = !suspicious && fileMtime > 0 && backup.ts > 0 && backup.ts < fileMtime;
+                    let dialogOpts;
+                    if (suspicious) {
+                      dialogOpts = {
+                        type: "warning",
+                        message: "A crash backup was found, but it looks incomplete.",
+                        detail: `Last edited: ${ts}
 
 The backup is ${backupLen === 0 ? "empty" : "much shorter than the saved file"} (${backupLen} vs ${diskLen} characters) \u2014 it was likely damaged by the crash itself. Restoring it would REPLACE your saved file with this incomplete content.
 
-Recommended: keep the saved version.` : `Last edited: ${ts}
+Recommended: keep the saved version.`,
+                        buttons: ["Restore incomplete backup", "Keep saved version"],
+                        defaultId: 1
+                      };
+                    } else if (stale) {
+                      dialogOpts = {
+                        type: "warning",
+                        message: "A crash backup was found, but the file has been saved more recently.",
+                        detail: `Backup from: ${ts}
+File last saved: ${new Date(fileMtime).toLocaleString()}
+
+The saved file is NEWER than this backup \u2014 restoring would replace the newer saved content with this older backup.
+
+Recommended: keep the saved version.`,
+                        buttons: ["Restore older backup", "Keep saved version"],
+                        defaultId: 1
+                      };
+                    } else {
+                      dialogOpts = {
+                        type: "question",
+                        message: "Unsaved changes from a previous session were found.",
+                        detail: `Last edited: ${ts}
 
 Restore these changes, or discard and keep the saved version.`,
-                      buttons: suspicious ? ["Restore incomplete backup", "Keep saved version"] : ["Restore", "Discard"],
-                      defaultId: suspicious ? 1 : 0,
-                      cancelId: 1
+                        buttons: ["Restore", "Discard"],
+                        defaultId: 0
+                      };
+                    }
+                    const choice = await window.NativeAPI.showMessageBox({
+                      title: "Recover unsaved changes?",
+                      cancelId: 1,
+                      ...dialogOpts
                     });
                     if (choice.response === 0) {
                       if (typeof window.replaceEditorContent === "function") {

@@ -1,6 +1,6 @@
 /* watcher.js — external-change watcher for the active file. */
 import { S, SUPPRESS_MS } from './state.js';
-import { _enqueueDiskOp, cancelPendingAutoSave, markClean } from './save.js';
+import { _enqueueDiskOp, cancelPendingAutoSave, markClean, writeDurableSnapshot } from './save.js';
 import { uniquePath } from './helpers.js';
 import { renderTree } from './tree.js';
 
@@ -256,7 +256,14 @@ function startWatchingFile(filePath) {
            disk holds content the editor does not, and background autosave
            would silently destroy it (the exact behavior the dialog promised
            NOT to do). Hold autosave for this file; explicit saves lift it. */
-        if (S.isDirty) S._conflictHoldPath = filePath;
+        if (S.isDirty) {
+          S._conflictHoldPath = filePath;
+          /* With autosave suspended, the temp-dir crash backup (RAM-backed
+             tmpfs on modern Linux) is the only copy of the user's version —
+             snapshot it to the durable, reboot-safe slot as well. The save
+             engine keeps mirroring there while the hold lasts. */
+          writeDurableSnapshot(filePath, editor.value);
+        }
       } });
            
 

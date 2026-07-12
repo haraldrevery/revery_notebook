@@ -418,20 +418,60 @@ try {
                     (backupLen === 0 && diskLen > 0) ||
                     (diskLen > 200 && backupLen < diskLen * 0.1);
 
+                  /* ── Staleness guard ────────────────────────────────────
+                     A backup OLDER than the file's last save means the disk
+                     moved on after the backup was written — e.g. the user
+                     accepted an external "Reload from disk", never edited
+                     again, and a durable snapshot of the abandoned version
+                     survived (those outlive reboots by design). A default
+                     of "Restore" would replace the NEWER saved content on
+                     a reflexive Enter. Keep offering the backup (never
+                     destroy data on a guess) but flip the safe default.
+                     mtime and backup.ts are both ms since epoch on both
+                     platforms; either being unavailable (0) disables the
+                     guard — when unsure, keep today's behavior.          */
+                  let fileMtime = 0;
+                  try {
+                    const dirPath = lastFile.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+                    const entries = await window.NativeAPI.readDirectory(dirPath);
+                    const norm = (p) => String(p).replace(/\\/g, '/');
+                    const me = (entries || []).find((e) => norm(e.path) === norm(lastFile));
+                    if (me && typeof me.mtime === 'number') fileMtime = me.mtime;
+                  } catch (_) { /* stat failed — content-only heuristics below */ }
+                  const stale = !suspicious
+                    && fileMtime > 0 && backup.ts > 0 && backup.ts < fileMtime;
+
+                  let dialogOpts;
+                  if (suspicious) {
+                    dialogOpts = {
+                      type:    'warning',
+                      message: 'A crash backup was found, but it looks incomplete.',
+                      detail:  `Last edited: ${ts}\n\nThe backup is ${backupLen === 0 ? 'empty' : 'much shorter than the saved file'} (${backupLen} vs ${diskLen} characters) — it was likely damaged by the crash itself. Restoring it would REPLACE your saved file with this incomplete content.\n\nRecommended: keep the saved version.`,
+                      buttons: ['Restore incomplete backup', 'Keep saved version'],
+                      defaultId: 1,
+                    };
+                  } else if (stale) {
+                    dialogOpts = {
+                      type:    'warning',
+                      message: 'A crash backup was found, but the file has been saved more recently.',
+                      detail:  `Backup from: ${ts}\nFile last saved: ${new Date(fileMtime).toLocaleString()}\n\nThe saved file is NEWER than this backup — restoring would replace the newer saved content with this older backup.\n\nRecommended: keep the saved version.`,
+                      buttons: ['Restore older backup', 'Keep saved version'],
+                      defaultId: 1,
+                    };
+                  } else {
+                    dialogOpts = {
+                      type:    'question',
+                      message: 'Unsaved changes from a previous session were found.',
+                      detail:  `Last edited: ${ts}\n\nRestore these changes, or discard and keep the saved version.`,
+                      buttons: ['Restore', 'Discard'],
+                      defaultId: 0,
+                    };
+                  }
+
                   const choice = await window.NativeAPI.showMessageBox({
-                    type:      suspicious ? 'warning' : 'question',
-                    title:     'Recover unsaved changes?',
-                    message:   suspicious
-                      ? 'A crash backup was found, but it looks incomplete.'
-                      : 'Unsaved changes from a previous session were found.',
-                    detail:    suspicious
-                      ? `Last edited: ${ts}\n\nThe backup is ${backupLen === 0 ? 'empty' : 'much shorter than the saved file'} (${backupLen} vs ${diskLen} characters) — it was likely damaged by the crash itself. Restoring it would REPLACE your saved file with this incomplete content.\n\nRecommended: keep the saved version.`
-                      : `Last edited: ${ts}\n\nRestore these changes, or discard and keep the saved version.`,
-                    buttons:   suspicious
-                      ? ['Restore incomplete backup', 'Keep saved version']
-                      : ['Restore', 'Discard'],
-                    defaultId: suspicious ? 1 : 0,
-                    cancelId:  1,
+                    title: 'Recover unsaved changes?',
+                    cancelId: 1,
+                    ...dialogOpts,
                   });
                   if (choice.response === 0) {
                     // Restore the backup content

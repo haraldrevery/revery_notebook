@@ -39,6 +39,49 @@ let _autoSaveCooldownUntil   = 0;
 let _scratchpadFailureWarned = false;
 let _autoCreatingFile        = false;  // Guard to prevent duplicate file creation during rapid typing
 
+/* ── Durable (reboot-safe) backup mirror ─────────────────────────────
+   The regular crash backup lives in the OS temp dir — RAM-backed tmpfs
+   on modern Linux, gone after a reboot. That is fine while autosave
+   bounds the exposure to seconds, but in the two states where autosave
+   is SUSPENDED (external-change conflict hold, save-failure cooldown)
+   the temp backup is the ONLY copy of everything typed since — so those
+   states also mirror to a durable slot under userData. Throttled to one
+   write per DURABLE_MIRROR_MS so the disk-wear cost stays negligible;
+   recovery transparently picks whichever backup location is newest.  */
+const DURABLE_MIRROR_MS = 5000;
+let _durableMirrorLast  = 0;
+let _durableMirrorTimer = null;
+
+function _durableExposed() {
+  return !!S.activeFilePath
+    && ((S._conflictHoldPath && S._conflictHoldPath === S.activeFilePath)
+        || Date.now() < _autoSaveCooldownUntil);
+}
+
+export function writeDurableSnapshot(path, content) {
+  if (typeof window.NativeAPI.setDurableBackup !== 'function') return;
+  _durableMirrorLast = Date.now();
+  window.NativeAPI.setDurableBackup(path, content).catch((e) =>
+    console.warn('[Sidebar] durable backup failed (non-fatal):', e));
+}
+
+function _fireDurableMirror() {
+  if (!_durableExposed() || !S.isDirty) return; // state ended or buffer saved
+  writeDurableSnapshot(S.activeFilePath, editor.value);
+}
+
+function mirrorDurableWhileExposed() {
+  if (!_durableExposed()) return;
+  clearTimeout(_durableMirrorTimer);
+  const since = Date.now() - _durableMirrorLast;
+  if (since >= DURABLE_MIRROR_MS) {
+    _fireDurableMirror();
+  } else {
+    // Trailing write so the final keystrokes of a burst are captured too.
+    _durableMirrorTimer = setTimeout(_fireDurableMirror, DURABLE_MIRROR_MS - since);
+  }
+}
+
 /* ══════════════════════════════════════════════════════════════════
      DIRTY INDICATOR
   ══════════════════════════════════════════════════════════════════ */
@@ -216,6 +259,12 @@ try {
   // Real disk error from writeFile (or unexpected throw).
   console.error('[Sidebar] saveActiveFile failed:', err);
   _autoSaveCooldownUntil = Date.now() + AUTOSAVE_FAILURE_COOLDOWN_MS;
+  // Autosave is now suspended for 30s and the primary disk just refused a
+  // write — snapshot the exact content that failed to save to the durable
+  // (reboot-safe, different location) backup slot immediately. contentToSave,
+  // not editor.value: it is guaranteed to belong to pathToSave, and the
+  // mirror keeps refreshing with newer keystrokes while the cooldown lasts.
+  writeDurableSnapshot(pathToSave, contentToSave);
   _firstDirtyTime = 0;
   await window.NativeAPI.showMessageBox({
     type: 'error', title: window.t('Save Failed'),
@@ -512,6 +561,8 @@ export function initSaveEngine() {
       scheduleAutoSave();
       /* Volatile crash backup (separate from the debounced disk auto-save) */
       window.NativeAPI.setVolatileContent(S.activeFilePath, editor.value);
+      /* Reboot-safe mirror — only active while autosave is suspended */
+      mirrorDurableWhileExposed();
     }
   });
 

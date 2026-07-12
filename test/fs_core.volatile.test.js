@@ -166,3 +166,63 @@ describe('volatile backup lifecycle', () => {
     purgeOldVolatileFiles(path.join(dir, 'does-not-exist'), WEEK_MS);
   });
 });
+
+/* ── Multi-location recovery (volatile temp dir + durable userData dir) ──
+   The temp-dir backup is RAM-backed tmpfs on modern Linux and does not
+   survive a reboot; the autosave-suspended states additionally snapshot
+   to a durable dir. Recovery must consult BOTH and prefer the newest. */
+describe('merged multi-directory recovery', () => {
+  const { getNewestVolatileContent, listVolatileBackupsMerged } = require('../electron/fs_core.js');
+
+  let base, volDir, durDir;
+  const note = '/home/user/notes/todo.md';
+
+  beforeEach(() => {
+    base = fs.mkdtempSync(path.join(os.tmpdir(), 'revery-merged-'));
+    volDir = path.join(base, 'volatile');
+    durDir = path.join(base, 'durable');
+    ensureVolatileDir(volDir);
+    ensureVolatileDir(durDir);
+  });
+
+  afterEach(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  test('newest snapshot wins regardless of which directory holds it', () => {
+    setVolatileContent(volDir, note, 'volatile older');
+    setVolatileContent(durDir, note, 'durable newer');
+    setMetaTs(volDir, note, 1000);
+    setMetaTs(durDir, note, 2000);
+    assert.equal(getNewestVolatileContent([volDir, durDir], note).content, 'durable newer');
+
+    setMetaTs(volDir, note, 3000); // volatile becomes the newer one
+    assert.equal(getNewestVolatileContent([volDir, durDir], note).content, 'volatile older');
+  });
+
+  test('a snapshot present in only one directory is still found', () => {
+    setVolatileContent(durDir, note, 'only durable');
+    assert.equal(getNewestVolatileContent([volDir, durDir], note).content, 'only durable');
+    assert.equal(getNewestVolatileContent([volDir], note), null);
+  });
+
+  test('missing/empty directory list degrades to null, not a throw', () => {
+    assert.equal(getNewestVolatileContent([], note), null);
+    assert.equal(getNewestVolatileContent([path.join(base, 'nope')], note), null);
+  });
+
+  test('merged listing dedupes by originalPath keeping the newest ts', () => {
+    const other = '/home/user/notes/other.md';
+    setVolatileContent(volDir, note, 'v');
+    setVolatileContent(durDir, note, 'd');
+    setVolatileContent(durDir, other, 'o');
+    setMetaTs(volDir, note, 1000);
+    setMetaTs(durDir, note, 2000);
+    setMetaTs(durDir, other, 1500);
+
+    const merged = listVolatileBackupsMerged([volDir, durDir], '/home/user');
+    assert.equal(merged.length, 2, 'one entry per originalPath');
+    assert.deepEqual(merged.map((b) => b.ts), [2000, 1500], 'newest first');
+    assert.equal(merged[0].originalPath, note);
+  });
+});

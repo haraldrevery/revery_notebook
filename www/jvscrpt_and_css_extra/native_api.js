@@ -309,6 +309,12 @@ _writeVolatileNow(path, content) {
 writeVolatileNow(path, content) {
   return _enqueueVolatileOp(() => window.electronAPI.setVolatileContent(path, content));
 },
+/* Durable (reboot-safe) snapshot under userData — written by the save
+   engine only for the autosave-suspended states. Recovery reads it
+   through the same getVolatileContent (backend merges locations). */
+setDurableBackup(path, content) {
+  return _enqueueVolatileOp(() => window.electronAPI.setDurableBackup(path, content));
+},
 
     getVolatileContent(path) {
       return window.electronAPI.getVolatileContent(path);
@@ -560,6 +566,12 @@ _writeVolatileNow(path, content) {
 /* Immediate volatile write (bypass debounce, but NOT the ordering chain) */
 writeVolatileNow(path, content) {
   return _enqueueVolatileOp(() => this._invoke('set_volatile_content', { path, content }));
+},
+/* Durable (reboot-safe) snapshot under the app data dir — written by the
+   save engine only for the autosave-suspended states. Recovery reads it
+   through the same getVolatileContent (backend merges locations). */
+setDurableBackup(path, content) {
+  return _enqueueVolatileOp(() => this._invoke('set_durable_backup', { path, content }));
 },
 
 getVolatileContent(path) {
@@ -952,6 +964,9 @@ getVolatileContent(path) {
       } catch (e) { /* ignore */ }
       return Promise.resolve();
     },
+
+    /* Web has no reboot-safe location beyond localStorage itself — no-op. */
+    setDurableBackup(_path, _content) { return Promise.resolve(); },
 
     getVolatileContent(_path) {
       try {

@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setVolatileContent: (originalPath, content) =>
     ipcRenderer.invoke('fs:set-volatile-content', originalPath, content),
 
+  setDurableBackup: (originalPath, content) =>
+    ipcRenderer.invoke('fs:set-durable-backup', originalPath, content),
+
   getVolatileContent: (originalPath) =>
     ipcRenderer.invoke('fs:get-volatile-content', originalPath),
 

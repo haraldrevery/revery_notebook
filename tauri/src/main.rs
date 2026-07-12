@@ -185,6 +185,138 @@ fn nix_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   DURABLE (REBOOT-SAFE) BACKUP DIRECTORY
+   ══════════════════════════════════════════════════════════════════════════
+   The volatile dir above lives in the OS temp dir — RAM-backed tmpfs on
+   modern Linux, which keeps the high-frequency crash backup wear-free but
+   means it does NOT survive a reboot. The rare autosave-suspended states
+   (external-change conflict hold, save-failure cooldown) additionally
+   snapshot to this directory under the app data dir: real disk, written at
+   a throttled cadence by the renderer. Unlike /tmp this is not a shared
+   namespace, so the ownership/symlink ceremony above is unnecessary —
+   create-with-tight-perms is enough. Same once-per-process caching.      */
+static DURABLE_DIR_STATE: std::sync::OnceLock<Result<std::path::PathBuf, String>>
+    = std::sync::OnceLock::new();
+
+fn prepare_durable_dir(app: &AppHandle) -> Result<&'static std::path::PathBuf, &'static str> {
+    let result = DURABLE_DIR_STATE.get_or_init(|| {
+        let base = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Cannot resolve app data dir: {e}"))?;
+        let dir = base.join("crash-backups");
+        fs::create_dir_all(&dir).map_err(|e| format!("Cannot create durable backup dir: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+        }
+        Ok(dir)
+    });
+    result.as_ref().map_err(|s| s.as_str())
+}
+
+/* ── Backup primitives, parameterized by directory ──────────────────────
+   Both the volatile (temp) and durable (app data) locations use the SAME
+   on-disk format: <fnv1a(path)>.revery_volatile + <key>.meta.json. Keep
+   the key and file naming stable — existing users' backups must remain
+   readable across updates. Callers hold VOLATILE_LOCK.                  */
+fn backup_key(path: &str) -> String {
+    // Deterministic FNV-1a hash of the original path.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in path.bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}", hash)
+}
+
+fn write_backup_to(dir: &Path, path: &str, content: &str) -> Result<(), String> {
+    let key = backup_key(path);
+    let data_file = dir.join(format!("{key}.revery_volatile"));
+    let meta_file = dir.join(format!("{key}.meta.json"));
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+
+    let data_tmp = dir.join(format!("{key}.{now}.revery_volatile.tmp"));
+    atomic_write_file(&data_tmp, &data_file, content.as_bytes())?;
+
+    let meta = serde_json::json!({
+        "originalPath": path,
+        "ts": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0u64),
+    });
+    let meta_tmp = dir.join(format!("{key}.{now}.meta.json.tmp"));
+    atomic_write_file(&meta_tmp, &meta_file, meta.to_string().as_bytes())
+}
+
+/// Returns (content, ts) for the backup of `path` in `dir`, if present.
+fn read_backup_from(dir: &Path, path: &str) -> Option<(String, u64)> {
+    let key = backup_key(path);
+    let data_file = dir.join(format!("{key}.revery_volatile"));
+    let meta_file = dir.join(format!("{key}.meta.json"));
+
+    let content = fs::read_to_string(&data_file).ok()?;
+    let meta: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&meta_file).ok()?).ok()?;
+    let ts = meta["ts"].as_u64().unwrap_or(0);
+    Some((content, ts))
+}
+
+fn delete_backup_from(dir: &Path, path: &str) {
+    let key = backup_key(path);
+    let _ = fs::remove_file(dir.join(format!("{key}.revery_volatile")));
+    let _ = fs::remove_file(dir.join(format!("{key}.meta.json")));
+}
+
+fn list_backups_from(dir: &Path, prefix: &str) -> Vec<VolatileBackupInfo> {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<VolatileBackupInfo> = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".meta.json") {
+            continue;
+        }
+        let meta: serde_json::Value = match fs::read_to_string(entry.path())
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+        {
+            Some(v) => v,
+            None => continue, // unreadable meta — skip, never guess
+        };
+        if let Some(op) = meta["originalPath"].as_str() {
+            if op.starts_with(prefix) {
+                out.push(VolatileBackupInfo {
+                    original_path: op.to_string(),
+                    ts: meta["ts"].as_u64().unwrap_or(0),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Every backup location that passed its safety check, volatile first.
+fn backup_dirs(app: &AppHandle) -> Vec<&'static std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(d) = prepare_volatile_dir() {
+        dirs.push(d);
+    }
+    if let Ok(d) = prepare_durable_dir(app) {
+        dirs.push(d);
+    }
+    dirs
+}
+
 impl Default for WatcherState {
     fn default() -> Self {
         Self {
@@ -1222,91 +1354,53 @@ fn delete_node(path: String, root_state: State<'_, RootPath>) -> Result<(), Stri
 #[tauri::command]
 fn set_volatile_content(path: String, content: String) -> Result<(), String> {
     let volatile_dir = prepare_volatile_dir().map_err(|s| s.to_string())?;
-
     let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    write_backup_to(volatile_dir, &path, &content)
+}
 
-    // Encode the original path using a deterministic FNV-1a hash
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for b in path.bytes() {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    let key = format!("{:016x}", hash);
-    let data_file = volatile_dir.join(format!("{key}.revery_volatile"));
-    let meta_file = volatile_dir.join(format!("{key}.meta.json"));
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-
-    let data_tmp = volatile_dir.join(format!("{key}.{now}.revery_volatile.tmp"));
-    atomic_write_file(&data_tmp, &data_file, content.as_bytes())?;
-
-    let meta = serde_json::json!({
-        "originalPath": path,
-        "ts": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0u64),
-    });
-    let meta_tmp = volatile_dir.join(format!("{key}.{now}.meta.json.tmp"));
-    atomic_write_file(&meta_tmp, &meta_file, meta.to_string().as_bytes())
+/// Durable (reboot-safe) snapshot under the app data dir. Written by the
+/// renderer only for the autosave-suspended states (conflict hold, save-
+/// failure cooldown) — see prepare_durable_dir(). Same on-disk format as
+/// the volatile slot; recovery reads both via get_volatile_content.
+#[tauri::command]
+fn set_durable_backup(app: AppHandle, path: String, content: String) -> Result<(), String> {
+    let durable_dir = prepare_durable_dir(&app).map_err(|s| s.to_string())?;
+    let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    write_backup_to(durable_dir, &path, &content)
 }
 
 #[tauri::command]
-fn get_volatile_content(path: String) -> Option<serde_json::Value> {
-    // If the dir failed its safety check, treat as "no backup" — same outcome
-    // as the file simply not existing. Mirrors Electron's volatileDirReady=false
-    // path which returns null. Callers see a clean None and proceed without
-    // crash recovery (the badge has already informed the user).
-    let volatile_dir = prepare_volatile_dir().ok()?;
-
+fn get_volatile_content(app: AppHandle, path: String) -> Option<serde_json::Value> {
+    // Consult every backup location that passed its safety check and return
+    // the NEWEST snapshot (the durable slot can outlive a reboot that wiped
+    // the tmpfs-backed volatile one). An unavailable dir is treated as "no
+    // backup there" — mirrors Electron's volatileDirReady=false path.
     // Hold the same lock as writers so we never observe a "data file already
     // renamed in, meta file still in temp" half-state.
     let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for b in path.bytes() {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+    let mut best: Option<(String, u64)> = None;
+    for dir in backup_dirs(&app) {
+        if let Some((content, ts)) = read_backup_from(dir, &path) {
+            if best.as_ref().map_or(true, |(_, best_ts)| ts > *best_ts) {
+                best = Some((content, ts));
+            }
+        }
     }
-    let key = format!("{:016x}", hash);
-
-    let tmp_file  = volatile_dir.join(format!("{key}.revery_volatile"));
-    let meta_file = volatile_dir.join(format!("{key}.meta.json"));
-
-    let content = fs::read_to_string(&tmp_file).ok()?;
-    let meta: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&meta_file).ok()?).ok()?;
-    let ts = meta["ts"].as_u64().unwrap_or(0);
-    Some(serde_json::json!({ "content": content, "ts": ts, "originalPath": path }))
+    best.map(|(content, ts)| {
+        serde_json::json!({ "content": content, "ts": ts, "originalPath": path })
+    })
 }
 
 
 
 #[tauri::command]
-fn delete_volatile_content(path: String) -> Result<(), String> {
-    // If the dir is unsafe, there's nothing of ours to delete — succeed silently.
-    let volatile_dir = match prepare_volatile_dir() {
-        Ok(d)  => d,
-        Err(_) => return Ok(()),
-    };
-
+fn delete_volatile_content(app: AppHandle, path: String) -> Result<(), String> {
+    // Clear ALL backup locations; an unavailable dir has nothing of ours.
     let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for b in path.bytes() {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+    for dir in backup_dirs(&app) {
+        delete_backup_from(dir, &path);
     }
-    let key = format!("{:016x}", hash);
-
-    let tmp_file  = volatile_dir.join(format!("{key}.revery_volatile"));
-    let meta_file = volatile_dir.join(format!("{key}.meta.json"));
-
-    let _ = fs::remove_file(&tmp_file);  // ignore error — may already be gone
-    let _ = fs::remove_file(&meta_file);
     Ok(())
 }
 
@@ -2623,15 +2717,16 @@ fn needs_webkit_sandbox_disable() -> bool {
 /// Mirrors Electron's `purgeOldVolatileFiles()` in main.js.
 /// Called once at startup (deferred 5 s) so the renderer's crash-recovery
 /// check has time to consume recent backups before this runs.
-fn purge_old_volatile_files() {
-    // If the dir failed its safety check, do not enumerate or delete anything.
-    // We don't own it — leave whatever's there alone.
-    let volatile_dir = match prepare_volatile_dir() {
-        Ok(d)  => d,
-        Err(_) => return,
-    };
+fn purge_old_volatile_files(app: &AppHandle) {
+    // backup_dirs() only returns directories that passed their safety check —
+    // never enumerate or delete inside a dir we don't own.
+    for dir in backup_dirs(app) {
+        purge_backups_in(dir);
+    }
+}
 
-    let entries = match fs::read_dir(&volatile_dir) {
+fn purge_backups_in(volatile_dir: &Path) {
+    let entries = match fs::read_dir(volatile_dir) {
         Ok(e)  => e,
         Err(_) => return,
     };
@@ -2708,43 +2803,27 @@ struct VolatileBackupInfo {
 
 
 #[tauri::command]
-fn list_volatile_backups(prefix: String) -> Vec<VolatileBackupInfo> {
+fn list_volatile_backups(app: AppHandle, prefix: String) -> Vec<VolatileBackupInfo> {
     if prefix.is_empty() {
         return Vec::new();
     }
-    let volatile_dir = match prepare_volatile_dir() {
-        Ok(d)  => d,
-        Err(_) => return Vec::new(),
-    };
     let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    let entries = match fs::read_dir(volatile_dir) {
-        Ok(e)  => e,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut out: Vec<VolatileBackupInfo> = Vec::new();
-    for entry in entries.filter_map(|e| e.ok()) {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".meta.json") {
-            continue;
-        }
-        let meta: serde_json::Value = match fs::read_to_string(entry.path())
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-        {
-            Some(v) => v,
-            None    => continue, // unreadable meta — skip, never guess
-        };
-        if let Some(op) = meta["originalPath"].as_str() {
-            if op.starts_with(prefix.as_str()) {
-                out.push(VolatileBackupInfo {
-                    original_path: op.to_string(),
-                    ts: meta["ts"].as_u64().unwrap_or(0),
-                });
+    // Merge every backup location, keeping only the newest entry per
+    // originalPath (a file can have both a volatile and a durable snapshot).
+    let mut by_path: HashMap<String, u64> = HashMap::new();
+    for dir in backup_dirs(&app) {
+        for info in list_backups_from(dir, &prefix) {
+            let e = by_path.entry(info.original_path).or_insert(0);
+            if info.ts > *e {
+                *e = info.ts;
             }
         }
     }
+    let mut out: Vec<VolatileBackupInfo> = by_path
+        .into_iter()
+        .map(|(original_path, ts)| VolatileBackupInfo { original_path, ts })
+        .collect();
     out.sort_by(|a, b| b.ts.cmp(&a.ts)); // newest first
     out
 }
@@ -2852,6 +2931,7 @@ tauri::Builder::default()
             copy_into_folder,
             copy_path_into_folder,
             set_volatile_content,
+            set_durable_backup,
             get_volatile_content,
             delete_volatile_content,
             get_volatile_status,
@@ -2894,12 +2974,13 @@ tauri::Builder::default()
                 let _ = window.set_decorations(false);
             }
 
-            // Purge volatile crash-backups older than 7 days.
-            tauri::async_runtime::spawn(async {
+            // Purge crash-backups (volatile AND durable) older than 7 days.
+            let purge_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 // Offload the synchronous file I/O to a blocking thread
-                tokio::task::spawn_blocking(|| {
-                    purge_old_volatile_files();
+                tokio::task::spawn_blocking(move || {
+                    purge_old_volatile_files(&purge_handle);
                 }).await.unwrap();
             });
 
@@ -3199,6 +3280,43 @@ mod tests {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let dt = archive.by_name("main.tex").unwrap().last_modified().unwrap();
         assert!(dt.year() >= 2024, "entries zip stamped {}", dt.year());
+    }
+
+    /* ── crash-backup primitives (shared by volatile + durable dirs) ── */
+
+    #[test]
+    fn backup_roundtrip_and_key_stability() {
+        let dir = test_dir("backup-roundtrip");
+        // The key must stay FNV-1a of the path — existing users' backups
+        // (written by older builds with the inline hash) must stay readable.
+        assert_eq!(backup_key("/home/u/note.md").len(), 16);
+
+        write_backup_to(&dir, "/home/u/note.md", "hello world").unwrap();
+        let (content, ts) = read_backup_from(&dir, "/home/u/note.md").unwrap();
+        assert_eq!(content, "hello world");
+        assert!(ts > 0);
+
+        // Listing sees it; a non-matching prefix filters it out.
+        assert_eq!(list_backups_from(&dir, "/home/u").len(), 1);
+        assert_eq!(list_backups_from(&dir, "/elsewhere").len(), 0);
+
+        delete_backup_from(&dir, "/home/u/note.md");
+        assert!(read_backup_from(&dir, "/home/u/note.md").is_none());
+    }
+
+    #[test]
+    fn backup_dirs_are_independent() {
+        // Same original path in two locations (volatile + durable in prod):
+        // each dir holds its own snapshot; newest-wins merging happens in
+        // the command layer on top of these primitives.
+        let a = test_dir("backup-dir-a");
+        let b = test_dir("backup-dir-b");
+        write_backup_to(&a, "/n.md", "older").unwrap();
+        write_backup_to(&b, "/n.md", "newer").unwrap();
+        assert_eq!(read_backup_from(&a, "/n.md").unwrap().0, "older");
+        assert_eq!(read_backup_from(&b, "/n.md").unwrap().0, "newer");
+        delete_backup_from(&a, "/n.md");
+        assert!(read_backup_from(&b, "/n.md").is_some(), "delete must be per-dir");
     }
 
     #[test]

@@ -339,6 +339,35 @@ function listVolatileBackups(dir, prefix) {
   return out;
 }
 
+/* ── Multi-location recovery ────────────────────────────────────────────
+   The high-frequency crash backup lives in the OS temp dir — RAM-backed
+   tmpfs on modern Linux, which is wear-free but erased by a reboot. The
+   rare autosave-suspended states (external-change conflict hold, save-
+   failure cooldown) additionally mirror to a durable directory under
+   userData. Recovery must therefore consult BOTH locations and prefer
+   the newest snapshot; deletion must clear both. */
+function getNewestVolatileContent(dirs, originalPath) {
+  let best = null;
+  for (const dir of dirs) {
+    const hit = getVolatileContent(dir, originalPath);
+    if (hit && (!best || (hit.ts || 0) > (best.ts || 0))) best = hit;
+  }
+  return best;
+}
+
+/* Merge per-directory listings, keeping only the newest entry per
+   originalPath, newest-first overall. */
+function listVolatileBackupsMerged(dirs, prefix) {
+  const byPath = new Map();
+  for (const dir of dirs) {
+    for (const b of listVolatileBackups(dir, prefix)) {
+      const prev = byPath.get(b.originalPath);
+      if (!prev || b.ts > prev.ts) byPath.set(b.originalPath, b);
+    }
+  }
+  return [...byPath.values()].sort((a, b) => b.ts - a.ts);
+}
+
 /* Delete backup pairs older than maxAgeMs. Unreadable or malformed meta
    files are skipped, never deleted — when in doubt, keep the user's data. */
 function purgeOldVolatileFiles(dir, maxAgeMs, now = Date.now()) {
@@ -524,8 +553,10 @@ module.exports = {
   volatilePaths,
   setVolatileContent,
   getVolatileContent,
+  getNewestVolatileContent,
   deleteVolatileContent,
   listVolatileBackups,
+  listVolatileBackupsMerged,
   purgeOldVolatileFiles,
   createSettingsStore,
 };

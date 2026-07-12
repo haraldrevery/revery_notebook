@@ -44,9 +44,9 @@ const {
   sanitizeDropFilename,
   ensureVolatileDir,
   setVolatileContent,
-  getVolatileContent,
+  getNewestVolatileContent,
   deleteVolatileContent,
-  listVolatileBackups,
+  listVolatileBackupsMerged,
   purgeOldVolatileFiles: purgeVolatileDir,
   createSettingsStore,
 } = require('./fs_core');
@@ -105,6 +105,39 @@ try {
 } catch (err) {
   volatileDirError = err.message;
   console.error('[revery] Volatile directory check failed — crash recovery disabled this run:', err.message);
+}
+
+/* ── Durable (reboot-safe) crash-backup slot ────────────────────────────
+   VOLATILE_DIR sits in the OS temp dir — RAM-backed tmpfs on modern Linux
+   (wear-free, which is why the high-frequency backup lives there) but
+   erased by a reboot. The rare states where autosave is SUSPENDED
+   (external-change conflict hold, save-failure cooldown) can accumulate
+   unbounded unsaved work, so those additionally snapshot here, on real
+   disk under userData. Write cadence in those states is throttled by the
+   renderer, so SSD wear stays negligible. Lazy: app.getPath('userData')
+   is not available until the app is ready. */
+const getDurableDir = () => path.join(app.getPath('userData'), 'crash-backups');
+let _durableChecked = false;
+let _durableDirReady = false;
+function ensureDurableReady() {
+  if (!_durableChecked) {
+    _durableChecked = true;
+    try {
+      ensureVolatileDir(getDurableDir()); // same hardening checks; userData passes trivially
+      _durableDirReady = true;
+    } catch (err) {
+      console.error('[revery] Durable backup dir failed its safety check — reboot-safe snapshots off:', err.message);
+    }
+  }
+  return _durableDirReady;
+}
+
+/* Recovery-facing reads/deletes consult every verified backup location. */
+function backupDirs() {
+  const dirs = [];
+  if (volatileDirReady) dirs.push(VOLATILE_DIR);
+  if (ensureDurableReady()) dirs.push(getDurableDir());
+  return dirs;
 }
 
 /* ── Persistent settings (thin layer on top of the JSON settings file) ── */
@@ -272,12 +305,13 @@ app.whenReady().then(() => {
 const VOLATILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function purgeOldVolatileFiles() {
-  // If the dir failed its startup safety check, do not enumerate or delete
-  // anything — we don't own it. A planted symlink would otherwise let this
-  // purge walk into (and delete matching files from) a directory the
-  // attacker chose. Mirrors the guard in Rust's purge_old_volatile_files().
-  if (!volatileDirReady) return;
-  purgeVolatileDir(VOLATILE_DIR, VOLATILE_MAX_AGE_MS);
+  // backupDirs() only returns directories that passed their safety check —
+  // never enumerate or delete inside a dir we don't own (a planted symlink
+  // would otherwise let this purge walk into an attacker-chosen directory).
+  // Mirrors the guard in Rust's purge_old_volatile_files().
+  for (const dir of backupDirs()) {
+    purgeVolatileDir(dir, VOLATILE_MAX_AGE_MS);
+  }
 }
 
 
@@ -614,23 +648,32 @@ ipcMain.handle('fs:get-volatile-status', () => {
 
 ipcMain.handle('fs:list-volatile-backups', (_event, prefix) => {
   if (typeof prefix !== 'string' || prefix.length === 0) return [];
-  if (!volatileDirReady) return [];
-  return listVolatileBackups(VOLATILE_DIR, prefix);
+  return listVolatileBackupsMerged(backupDirs(), prefix);
 });
 
-/* ── Volatile (crash backup) read ────────────────────────────────────── */
+/* ── Volatile (crash backup) read — newest across ALL backup locations ── */
 ipcMain.handle('fs:get-volatile-content', (_event, originalPath) => {
   if (typeof originalPath !== 'string') return null;
-  if (!volatileDirReady) return null;   // dir not safe → treat as "no backup"
-  return getVolatileContent(VOLATILE_DIR, originalPath);
+  return getNewestVolatileContent(backupDirs(), originalPath);
 });
 
+/* ── Durable (reboot-safe) backup write ─────────────────────────────────
+   Same file format as the volatile slot, different location (userData).
+   The renderer calls this only for the autosave-suspended states; the
+   recovery read/delete paths above already cover both locations. */
+ipcMain.handle('fs:set-durable-backup', (_event, originalPath, content) => {
+  if (typeof originalPath !== 'string') return;
+  if (typeof content !== 'string') throw new Error('Content must be a string');
+  if (!ensureDurableReady()) return;    // graceful no-op, same policy as volatile
+  setVolatileContent(getDurableDir(), originalPath, content);
+});
 
-/* ── Volatile (crash backup) delete ─────────────────────────────────── */
+/* ── Volatile (crash backup) delete — clears ALL backup locations ────── */
 ipcMain.handle('fs:delete-volatile-content', (_event, originalPath) => {
   if (typeof originalPath !== 'string') return;
-  if (!volatileDirReady) return;        // nothing of ours to delete
-  deleteVolatileContent(VOLATILE_DIR, originalPath);
+  for (const dir of backupDirs()) {
+    deleteVolatileContent(dir, originalPath);
+  }
 });
 
 /* ── Native message box ───────────────────────────────────────────────── */
