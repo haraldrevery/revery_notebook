@@ -519,6 +519,11 @@ body:has(.menu-container.show) #outline-divider::after {
   background: var(--bg-panel);
   background: color-mix(in srgb, var(--bg-panel) 40%, transparent);
 }
+/* Settings → Theme → "Pane label bars" off: hide the editor/preview bars.
+   Direct-child only — the outline pane's label (hosts its font-size
+   buttons) is deliberately unaffected. */
+body.pane-labels-hidden #editor-pane > .pane-label,
+body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
 #editor {
   flex: 1;
   resize: none;

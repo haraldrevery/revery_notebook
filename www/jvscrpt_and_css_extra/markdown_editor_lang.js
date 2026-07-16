@@ -169,6 +169,7 @@ window.uiTranslations = {
   "Crash backup unavailable": { "Swedish": "Kraschsäkerhetskopiering otillgänglig" },
   "Custom image…": { "Swedish": "Egen bild…" },
   "Editor gradient bg": { "Swedish": "Gradient-bakgrund i redigeraren" },
+  "Pane label bars": { "Swedish": "Panelrubriker" },
   "For older machines: fewer disk writes, calmer rendering, no background image. Saves keep full crash-safety.": { "Swedish": "För äldre datorer: färre diskskrivningar, lugnare rendering, ingen bakgrundsbild. Sparandet behåller full kraschsäkerhet." },
   "Live Preview (experimental)": { "Swedish": "Live Preview (experimentell)" },
   "Name": { "Swedish": "Namn" },

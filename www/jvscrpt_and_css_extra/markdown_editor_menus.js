@@ -51,6 +51,7 @@ let editorPaddingFixed   = false; // Editor padding: freeze the horizontal paddi
 let editorPaddingFixedPx = null;  // the frozen per-side horizontal editor padding (px)
 let flipLayout = false;           // mirror the desktop panel order (Advanced Options)
 window.flipLayout = false;        // Mirror read by the drag handlers at event time
+let paneLabelsHidden = false;     // hide the editor/preview pane label bars (Theme submenu)
 
 /* ── Background image options ─────────────────────────────────────────────
    To add a new background: append a new entry to this array.
@@ -93,7 +94,8 @@ window.saveEditorSettings = function() {
     readerPaddingFixedPx,
     editorPaddingFixed,
     editorPaddingFixedPx,
-    flipLayout
+    flipLayout,
+    paneLabelsHidden
   };
 
   try {
@@ -180,6 +182,7 @@ function loadEditorSettings() {
       editorPaddingFixedPx = s.editorPaddingFixedPx;
     }
     if (s.flipLayout !== undefined) flipLayout = !!s.flipLayout;
+    if (s.paneLabelsHidden !== undefined) paneLabelsHidden = !!s.paneLabelsHidden;
     /* Settings written before readerPaddingCustom existed can still carry
        an ACTIVE custom token — derive the remembered value from it. */
     if (readerPaddingCustom === null) {
@@ -1142,6 +1145,13 @@ function applyEditorBgStyle() {
   }
 }
 
+/* Hide/show the editor & preview pane label bars (CSS keys on the class;
+   the outline pane's label is deliberately untouched — it hosts the
+   outline font-size buttons). */
+function applyPaneLabelsVisibility() {
+  document.body.classList.toggle('pane-labels-hidden', paneLabelsHidden);
+}
+
 /* Apply heading centering via class toggle */
 function applyCenterHeaders() {
   if (window.centerHeaders) {
@@ -1163,6 +1173,7 @@ applyLogoPosition(); // Restore the saved logo position on boot
 applyCenterHeaders(); // <-- ADD THIS LINE to apply the saved setting on page load
 applyBackground();
 applyEditorBgStyle();
+applyPaneLabelsVisibility();
 if (backgroundOpacity !== null) {
   document.documentElement.style.setProperty('--bg_oacity', String(backgroundOpacity));
 }
@@ -2394,6 +2405,23 @@ const themeOptions = [
     if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
   };
   themeSub.appendChild(bgStyleBtn);
+
+  // ── Pane label bars toggle (■ = bars visible), right under the gradient row
+  const paneLabelsBtn = document.createElement('button');
+  paneLabelsBtn.className = 'menu-item';
+  const paneLabelsCheck = document.createElement('span');
+  paneLabelsCheck.className = 'menu-item-check';
+  paneLabelsCheck.textContent = paneLabelsHidden ? '□' : '■';
+  paneLabelsBtn.appendChild(paneLabelsCheck);
+  paneLabelsBtn.appendChild(document.createTextNode(window.t('Pane label bars')));
+  paneLabelsBtn.onclick = (e) => {
+    e.stopPropagation();
+    paneLabelsHidden = !paneLabelsHidden;
+    applyPaneLabelsVisibility();
+    buildSettingsMenu();
+    if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+  };
+  themeSub.appendChild(paneLabelsBtn);
 
   themeWrapper.appendChild(themeSub);
   attachSubmenuHandlers(themeWrapper, themeSub);
