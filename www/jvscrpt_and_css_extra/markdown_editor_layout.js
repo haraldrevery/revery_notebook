@@ -196,10 +196,17 @@ function readerDragSurface() {
 }
 
 /* Hit-test: pointer within the vertical extent of the container and
-   within ±6px of either column edge. */
-function readerEdgeHit(x, y) {
+   within ±6px of either column edge. `target` (the event's real deepest
+   target — capture phase still sees it) must live INSIDE the drag
+   container: floating layers (menus, submenus, modals/date picker,
+   export dropdowns, find bar, CM tooltips) are never descendants of
+   #preview / .cm-scroller, so anything stacked over the band keeps its
+   clicks instead of starting a drag. The container itself (scrollbar
+   hits) counts as inside. */
+function readerEdgeHit(x, y, target) {
   const surface = readerDragSurface();
   if (!surface) return null;
+  if (target && !surface.container.contains(target)) return null;
   const colRect = surface.col.getBoundingClientRect();
   if (colRect.width === 0) return null;
   const boxRect = surface.container.getBoundingClientRect();
@@ -212,7 +219,7 @@ function readerEdgeHit(x, y) {
 document.addEventListener('mousemove', (e) => {
   if (dragging || outlineDragging || readerDragging) return;
   if (e.buttons !== 0) return; // mid-selection / other button held
-  const inBand = !!readerEdgeHit(e.clientX, e.clientY);
+  const inBand = !!readerEdgeHit(e.clientX, e.clientY, e.target);
   document.body.classList.toggle('reader-edge-hover', inBand);
 });
 
@@ -229,7 +236,7 @@ window.addEventListener('blur', () => {
 document.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   if (dragging || outlineDragging || readerDragging) return;
-  const hit = readerEdgeHit(e.clientX, e.clientY);
+  const hit = readerEdgeHit(e.clientX, e.clientY, e.target);
   if (!hit) return;
 
   e.preventDefault();
