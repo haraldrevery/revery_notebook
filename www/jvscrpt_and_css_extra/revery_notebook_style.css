@@ -1276,6 +1276,14 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   body.outline-open #preview {
     padding-right: calc(var(--outline-pane-w, 200px) + 52px);
   }
+  /* Keep the pane-bar title/−/+ buttons clear of the outline overlay
+     (they float:right, so they'd sit under it). LP hides #preview-pane
+     and the editor bar's buttons drive preview size — inset that bar
+     too. 20px = the label's base right padding. */
+  body.outline-open #preview-pane > .pane-label,
+  body.outline-open.live-preview-active #editor-pane > .pane-label {
+    padding-right: calc(var(--outline-pane-w, 200px) + 20px);
+  }
 }
 #outline-divider:hover, #outline-divider.dragging { background-color: var(--theme-divider-hover); }
 #outline-divider::after { content: ''; position: absolute; inset: 0 -12px; z-index: 10; }
@@ -2743,6 +2751,12 @@ body.live-preview-active #editor .cm-content {
   body.flip-layout.outline-open.live-preview-active #editor .cm-scroller {
     padding-right: 0 !important;
     padding-left: var(--outline-pane-w, 200px) !important;
+  }
+  /* Flipped: the overlay covers the pane's LEFT edge (title side). */
+  body.flip-layout.outline-open #preview-pane > .pane-label,
+  body.flip-layout.outline-open.live-preview-active #editor-pane > .pane-label {
+    padding-right: 20px;
+    padding-left: calc(var(--outline-pane-w, 200px) + 20px);
   }
   /* The sidebar's separating border faces the workspace. */
   body.flip-layout #project-sidebar {

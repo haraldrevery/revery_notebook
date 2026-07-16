@@ -20,7 +20,7 @@ Users can pick an installer that is either an Electron or a Tauri wrapper, eithe
 - Messy legacy code?, must clean up without breaking anything for future easier maintenance (modular and but not too refracted so the web version loads too many js files). 
 
 
-## Must fix
+## Must Evaluate
 
 - Better save/load logic. No risk of file corruptions and no race condition (right now I have no idea how safe it is). Risk of users losing data and hardware failure because of this app, must be investigated before anything happens. (First thing to address after code clean up, making it modular to reduce bug risks when working and easier to read etc)
 
@@ -29,18 +29,8 @@ Users can pick an installer that is either an Electron or a Tauri wrapper, eithe
 
 ## Future features (when the app is safe and in good code condition)
 
-- Adjust the bg texture opacity in the settings and allow the user to import a custom background too? 
-
-- Obsidian-style Live Preview, instead of a raw text and a live preview side by side, they can be in the same panel. This mode can be toggled on/off in the settings for users who prefer the old (current) way.
 
 - About, legal and user guide text update (so it's up to date and accurate).
 
 - Maybe a search bar for the project folder? Might be too difficult to get it right (don't want to clutter the UI even more).
 
-- Quality of life user experience, check how importing and drag and drop images work. Make it easier for users to work with images in their documents (a little vaguely defined). 
-
-- In Obsidian, when clicking on the rendered YAML part in the text, a drop menu (scrollable) with all existing tags of the project is shown, in that way user doesn't have to type every single time they want to use a standard YAML data for something. This would be a nice feature, but I have no idea if it can be implemented without conflicting with codemirror.
-
-- Zip export of the project, in the file menu, a new option "zip project export" where the whole project is exported as a zip file do desired folder on their PC. Extra: password protection? 
-
-- Pdf export

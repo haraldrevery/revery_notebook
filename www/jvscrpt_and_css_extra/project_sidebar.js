@@ -3093,6 +3093,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (!dirPath) return;
     const generation = ++_cardGeneration;
     treeEl.innerHTML = "";
+    treeEl.scrollTop = 0;
     treeEl.classList.add("sidebar-card-view");
     const navEl = document.createElement("div");
     navEl.className = "sidebar-card-nav";
@@ -3149,6 +3150,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       gridEl.appendChild(buildCard(entry, generation));
     }
     treeEl.appendChild(gridEl);
+    treeEl.scrollTop = 0;
     applyCardSize();
     highlightActiveFileCards(S.activeFilePath);
     updateMultiSelectHighlight();

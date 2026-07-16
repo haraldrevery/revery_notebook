@@ -245,6 +245,7 @@ let _cardGeneration = 0;
     const generation = ++_cardGeneration;
 
     treeEl.innerHTML = '';
+    treeEl.scrollTop = 0;
     treeEl.classList.add('sidebar-card-view');
 
     /* ── Navigation bar ── */
@@ -319,6 +320,11 @@ let _cardGeneration = 0;
     }
 
 treeEl.appendChild(gridEl);
+    /* Re-assert top scroll after the async gap: scrollTop is only clamped
+       at a layout flush, so if readDirectory resolved before the next
+       paint a stale offset from the previous view could survive into the
+       fresh grid, hiding the nav bar under the sidebar header. */
+    treeEl.scrollTop = 0;
     /* Apply the user's saved card size to the freshly-built grid */
     applyCardSize();
     /* Highlight active file */
