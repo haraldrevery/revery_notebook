@@ -1052,15 +1052,6 @@
   hyphens: auto;
   max-width: none;
 }
-@media (prefers-color-scheme: dark) {
-  .prose {
-    --tw-prose-body: var(--color-white);
-    --tw-prose-headings: var(--color-white);
-    --tw-prose-bold: var(--color-white);
-    --tw-prose-links: var(--color-white);
-    --tw-prose-bullets: var(--color-white);
-  }
-}
 .prose :is(h1, h2, h3, h4) {
   text-transform: uppercase;
   letter-spacing: var(--tracking-wider);
@@ -1089,11 +1080,8 @@
   text-align: justify;
   line-height: var(--text-line-row-space);
   margin-bottom: 1.5rem;
-}
-.prose p {
   font-family: var(--font-brand) !important;
   font-size: var(--text-body-mobile);
-  line-height: var(--text-line-row-space);
   letter-spacing: var(--tracking-body);
 }
 .prose table {
