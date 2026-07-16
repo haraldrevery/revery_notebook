@@ -146,6 +146,7 @@ html :is(#preview, .lp-render) .prose b {
   --outline-font-size: 0.76rem;
   /* ── Reader mode content max-width (set via Settings → Reader padding) ── */
   --reader-max-width: none;
+  --editor-max-width: none; /* classic editor column cap (Editor padding fixed/drag) */
 }
 /* ── Editor UI Themes ── */
 [data-theme="dark"] {
@@ -1407,6 +1408,21 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   body.reader-edge-dragging #preview .prose {
     transition: none;
   }
+
+  /* Same affordance for the CLASSIC editor column (Editor padding →
+     "Drag to adjust"; layout.js sets body.editor-edge-hover/-dragging).
+     Scoped :not(.live-preview-active) — in LP the reader rules above
+     own the CM column. */
+  body.editor-edge-hover:not(.live-preview-active) #editor .cm-content,
+  body.editor-edge-dragging:not(.live-preview-active) #editor .cm-content {
+    box-shadow: 2px 0 0 0 var(--theme-divider), -2px 0 0 0 var(--theme-divider);
+    box-shadow: 2px 0 0 0 color-mix(in srgb, var(--text) 25%, transparent),
+                -2px 0 0 0 color-mix(in srgb, var(--text) 25%, transparent);
+  }
+  body.editor-edge-hover:not(.live-preview-active) #editor .cm-scroller,
+  body.editor-edge-hover:not(.live-preview-active) #editor .cm-content {
+    cursor: col-resize;
+  }
 }
 
 /* ── Find / Replace Bar ─────────────────────────────────────────────────── */
@@ -1783,6 +1799,23 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   color:          var(--text);
   tab-size:       2;
   min-height:     100%;
+}
+
+/* Classic-editor column width — Editor padding's Fixed width / dragged
+   custom values (--editor-max-width stays 'none' for the presets, which
+   keep their original padding emission). Same centered-column mechanism
+   the live preview uses with --reader-max-width; :not() keeps the two
+   modes disjoint. Desktop only: the mobile editor always stays
+   relative (matching --editor-padding-mobile). */
+@media (min-width: 821px) {
+  body:not(.live-preview-active) #editor .cm-content {
+    max-width: var(--editor-max-width, none);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  body:not(.live-preview-active) #editor .cm-scroller {
+    justify-content: center;
+  }
 }
 
 /* 4. Mobile padding — mirrors the old mobile #editor rule */

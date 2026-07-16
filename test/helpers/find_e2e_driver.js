@@ -636,7 +636,9 @@
   /* Fixed width mode: freezes the chosen width in px (captured once at
      selection/toggle time, persisted); toggling off restores the exact
      relative value. Reader asserts the shared --reader-max-width var;
-     editor asserts the min(px, 45%) clamp emission.                    */
+     editor asserts the column-px emission on --editor-max-width (the
+     presets keep the original --editor-padding output, so relative mode
+     is asserted on both vars).                                         */
   {
     const rdVar = () => getComputedStyle(document.documentElement)
       .getPropertyValue('--reader-max-width').trim();
@@ -664,17 +666,30 @@
 
     const edVar = () => getComputedStyle(document.documentElement)
       .getPropertyValue('--editor-padding').trim();
+    const edMaxVar = () => getComputedStyle(document.documentElement)
+      .getPropertyValue('--editor-max-width').trim();
     clickSetting('Editor padding', '60%');
     await sleep(150);
-    const edRelative = edVar() === '24px 20%';
-    clickSetting('Editor padding', 'fixed width');       // ON — 20% of the pane, frozen
+    const edRelative = edVar() === '24px 20%' && edMaxVar() === 'none';
+    clickSetting('Editor padding', 'fixed width');       // ON — freezes the COLUMN in px
     await sleep(150);
-    const em = /^24px min\((\d+)px, 45%\)$/.exec(edVar());
+    /* 60% preset = 20% gutters/side → column = paneW·0.6 + 2×28px base
+       padding (the capped element carries the base padding instead of
+       the preset gutters). Padding drops to the base while capped. */
     const paneW = document.getElementById('editor-pane').clientWidth;
-    const edFixed = !!em && Math.abs(parseInt(em[1], 10) - paneW * 0.2) < 3;
+    const edFixed = edVar() === '24px 28px'
+      && /px$/.test(edMaxVar())
+      && Math.abs(parseFloat(edMaxVar()) - (paneW * 0.6 + 56)) < 3;
+    const edBlob = (() => {
+      try { return JSON.parse(localStorage.getItem('revery_md_settings')); }
+      catch (_) { return {}; }
+    })();
+    const edPersisted = edBlob.editorPaddingFixed === true
+      && Math.abs(edBlob.editorPaddingFixedColPx - (paneW * 0.6 + 56)) < 3;
     clickSetting('Editor padding', 'fixed width');       // OFF
     await sleep(150);
-    lpV2.editorFixedWidth = edRelative && edFixed && edVar() === '24px 20%';
+    lpV2.editorFixedWidth = edRelative && edFixed && edPersisted
+      && edVar() === '24px 20%' && edMaxVar() === 'none';
 
     clickSetting('Reader padding', '100%');              // restore defaults
     clickSetting('Editor padding', '100%');
