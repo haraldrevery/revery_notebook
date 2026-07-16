@@ -456,13 +456,14 @@ window.uiTemplates = {
 
       <section class="mod-mb-20">
         <h4 class="mod-h4">Local Data Storage</h4>
-        <p class="mod-p">Revery Notebook stores data <strong>exclusively on your own device</strong> using your browser's <code class="mod-mono-sm">localStorage</code> API. The following data is stored locally:</p>
+        <p class="mod-p">Revery Notebook stores data <strong>exclusively on your own device</strong>. What is stored depends on which version you use:</p>
         <ul class="mod-ul">
-          <li><strong>Document content</strong> — the markdown text you are currently editing (key: <code class="mod-mono-sm">revery_md_autosave</code>).</li>
-          <li><strong>Editor preferences</strong> — UI settings such as theme, layout, and font sizes (key: <code class="mod-mono-sm">revery_md_settings</code>).</li>
+          <li><strong>Web version — document content</strong> — the markdown text you are currently editing, kept in your browser's <code class="mod-mono-sm">localStorage</code> (key: <code class="mod-mono-sm">revery_md_autosave</code>).</li>
+          <li><strong>Desktop app — your notes</strong> — ordinary <code class="mod-mono-sm">.md</code> files in the project folder you choose, written with crash-safe atomic saves. While you type, a temporary crash backup of unsaved text is kept in the app's data folder and removed once it is no longer needed.</li>
+          <li><strong>Editor preferences</strong> — UI settings such as theme, layout, and font sizes (key: <code class="mod-mono-sm">revery_md_settings</code>); the desktop app additionally keeps a small <code class="mod-mono-sm">revery_settings.json</code> in the operating system's app-data folder (recently opened folders and window state).</li>
         </ul>
         <p class="mod-p"><strong>No data is ever transmitted to any server.</strong> Harald Mark Thirslund has no access to, and does not collect, any content you write in this editor.</p>
-        <p class="mod-p-0">You can delete all locally stored data at any time by clearing your browser's site data for this domain, or by using the "Total Reset" option in the File menu.</p>
+        <p class="mod-p-0">You can delete all locally stored data at any time: your notes are your own files and can be deleted like any other, and the "Total Reset" option in the quit dialog clears every stored setting (in the browser, clearing this domain's site data does the same).</p>
       </section>
       <hr class="mod-hr">
 
@@ -511,7 +512,7 @@ window.uiTemplates = {
           </div>
           <div class="mod-lib-card">
             <p class="mod-p-4"><strong>CodeMirror</strong> v6 &nbsp;·&nbsp; <span class="mod-mono-08">MIT Licence</span></p>
-            <p class="mod-p-0-082">Copyright © 2018–2024 Marijn Haverbeke and contributors. Used packages: @codemirror/view, @codemirror/state, @codemirror/commands, @codemirror/lang-markdown, @codemirror/language. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, subject to the following condition: the above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. Source: codemirror.net.</p>
+            <p class="mod-p-0-082">Copyright © 2018–2024 Marijn Haverbeke and contributors. Used packages: @codemirror/view, @codemirror/state, @codemirror/commands, @codemirror/lang-markdown, @codemirror/language, @codemirror/autocomplete, @codemirror/legacy-modes, @lezer/markdown. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, subject to the following condition: the above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. Source: codemirror.net.</p>
           </div>
           <div class="mod-lib-card">
             <p class="mod-p-4"><strong>DOMPurify</strong> &nbsp;·&nbsp; <span class="mod-mono-08">Apache Licence 2.0</span></p>
@@ -688,14 +689,14 @@ END OF TERMS AND CONDITIONS</pre>
         <h4 class="mod-h4">Disclaimer of Liability</h4>
         <p class="mod-p">REVERY NOTEBOOK IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.</p>
         <p class="mod-p">TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, HARALD MARK THIRSLUND SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING WITHOUT LIMITATION ANY LOSS OF DATA, LOSS OF PROFITS, OR BUSINESS INTERRUPTION, HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT, ARISING IN ANY WAY OUT OF THE USE OF OR INABILITY TO USE THIS APPLICATION.</p>
-        <p class="mod-p-0"><strong>Important:</strong> Because your documents are stored solely in your browser's localStorage, data may be lost if you clear your browser data, switch browsers, use private/incognito mode, or if your browser storage quota is exceeded. <strong>Always export your work regularly.</strong></p>
+        <p class="mod-p-0"><strong>Important:</strong> In the <strong>web version</strong> your document is stored solely in your browser's localStorage — data may be lost if you clear your browser data, switch browsers, use private/incognito mode, or if your browser storage quota is exceeded. In the <strong>desktop app</strong> your notes are ordinary files on your own disk and are only as safe as that disk. <strong>Always keep regular backups of work you care about</strong> (the desktop app's Zip Project Export makes this easy).</p>
       </section>
       <hr class="mod-hr">
 
       <section class="mod-mb-4">
         <h4 class="mod-h4">Changes to This Notice</h4>
         <p class="mod-p">Harald Mark Thirslund may update this legal notice from time to time. Material changes will be indicated by an updated date in the application. Continued use of Revery Notebook after any changes constitutes acceptance of the revised notice.</p>
-        <p class="mod-p-last">Last updated: April 2026 &nbsp;·&nbsp; Harald Mark Thirslund, Göteborg, Sweden</p>
+        <p class="mod-p-last">Last updated: July 2026 &nbsp;·&nbsp; Harald Mark Thirslund, Göteborg, Sweden</p>
       </section>
     `,
     Swedish: `
@@ -728,13 +729,14 @@ END OF TERMS AND CONDITIONS</pre>
 
       <section class="mod-mb-20">
         <h4 class="mod-h4">Lokal datalagring</h4>
-        <p class="mod-p">Revery Notebook lagrar data <strong>uteslutande på din egen enhet</strong> med hjälp av webbläsarens <code class="mod-mono-sm">localStorage</code>-API. Följande data lagras lokalt:</p>
+        <p class="mod-p">Revery Notebook lagrar data <strong>uteslutande på din egen enhet</strong>. Vad som lagras beror på vilken version du använder:</p>
         <ul class="mod-ul">
-          <li><strong>Dokumentinnehåll</strong> — markdowntexten du redigerar (nyckel: <code class="mod-mono-sm">revery_md_autosave</code>).</li>
-          <li><strong>Editorinställningar</strong> — gränssnittsinställningar som tema, layout och teckenstorlekar (nyckel: <code class="mod-mono-sm">revery_md_settings</code>).</li>
+          <li><strong>Webbversionen — dokumentinnehåll</strong> — markdowntexten du redigerar, i webbläsarens <code class="mod-mono-sm">localStorage</code> (nyckel: <code class="mod-mono-sm">revery_md_autosave</code>).</li>
+          <li><strong>Skrivbordsappen — dina anteckningar</strong> — vanliga <code class="mod-mono-sm">.md</code>-filer i den projektmapp du väljer, skrivna med kraschsäkra atomära sparningar. Medan du skriver hålls en tillfällig kraschsäkerhetskopia av osparad text i appens datamapp och tas bort när den inte längre behövs.</li>
+          <li><strong>Editorinställningar</strong> — gränssnittsinställningar som tema, layout och teckenstorlekar (nyckel: <code class="mod-mono-sm">revery_md_settings</code>); skrivbordsappen har dessutom en liten <code class="mod-mono-sm">revery_settings.json</code> i operativsystemets appdatamapp (senast öppnade mappar och fönsterläge).</li>
         </ul>
         <p class="mod-p"><strong>Ingen data skickas någonsin till någon server.</strong> Harald Mark Thirslund har inte tillgång till, och samlar inte in, något innehåll du skriver i denna editor.</p>
-        <p class="mod-p-0">Du kan radera all lokalt lagrad data när som helst genom att rensa webbläsarens webbplatsdata för denna domän, eller genom att använda alternativet "Total återställning" i Fil-menyn.</p>
+        <p class="mod-p-0">Du kan radera all lokalt lagrad data när som helst: dina anteckningar är dina egna filer och kan raderas som vilka filer som helst, och alternativet "Total återställning" i avsluta-dialogen rensar alla sparade inställningar (i webbläsaren gör en rensning av domänens webbplatsdata samma sak).</p>
       </section>
       <hr class="mod-hr">
 
@@ -783,7 +785,7 @@ END OF TERMS AND CONDITIONS</pre>
           </div>
           <div class="mod-lib-card">
             <p class="mod-p-4"><strong>CodeMirror</strong> v6 &nbsp;·&nbsp; <span class="mod-mono-08">MIT-licens</span></p>
-            <p class="mod-p-0-082">Copyright © 2018–2024 Marijn Haverbeke och bidragsgivare. Använda paket: @codemirror/view, @codemirror/state, @codemirror/commands, @codemirror/lang-markdown, @codemirror/language. Samma MIT-licensvillkor som ovan gäller. Källa: codemirror.net.</p>
+            <p class="mod-p-0-082">Copyright © 2018–2024 Marijn Haverbeke och bidragsgivare. Använda paket: @codemirror/view, @codemirror/state, @codemirror/commands, @codemirror/lang-markdown, @codemirror/language, @codemirror/autocomplete, @codemirror/legacy-modes, @lezer/markdown. Samma MIT-licensvillkor som ovan gäller. Källa: codemirror.net.</p>
           </div>
           <div class="mod-lib-card">
             <p class="mod-p-4"><strong>DOMPurify</strong> &nbsp;·&nbsp; <span class="mod-mono-08">Apache-licens 2.0</span></p>
@@ -960,14 +962,14 @@ END OF TERMS AND CONDITIONS</pre>
         <h4 class="mod-h4">Ansvarsbegränsning</h4>
         <p class="mod-p">REVERY NOTEBOOK TILLHANDAHÅLLS "I BEFINTLIGT SKICK" OCH "TILLGÄNGLIGT SOM DET ÄR", UTAN GARANTI AV NÅGOT SLAG, UTTRYCKLIG ELLER UNDERFÖRSTÅDD, INKLUSIVE MEN INTE BEGRÄNSAT TILL GARANTIER OM SÄLJBARHET, LÄMPLIGHET FÖR ETT VISST ÄNDAMÅL OCH ICKE-INTRÅNG.</p>
         <p class="mod-p">I DEN UTSTRÄCKNING SOM TILLÄMPLIG LAG TILLÅTER SKALL HARALD MARK THIRSLUND INTE VARA ANSVARIG FÖR INDIREKTA, OAVSIKTLIGA, SÄRSKILDA, FÖLJDRIKTIGA ELLER STRAFFBARA SKADOR, INKLUSIVE UTAN BEGRÄNSNING DATAFÖRLUST, UTEBLIVEN VINST ELLER AFFÄRSAVBROTT.</p>
-        <p class="mod-p-0"><strong>Viktigt:</strong> Eftersom dina dokument lagras uteslutande i webbläsarens localStorage kan data gå förlorad om du rensar webbläsardata, byter webbläsare, använder privat/incognito-läge eller om webbläsarens lagringskvot överskrids. <strong>Exportera alltid ditt arbete regelbundet.</strong></p>
+        <p class="mod-p-0"><strong>Viktigt:</strong> I <strong>webbversionen</strong> lagras ditt dokument enbart i webbläsarens localStorage — data kan gå förlorad om du rensar webbläsardata, byter webbläsare, använder privat/incognito-läge eller om webbläsarens lagringskvot överskrids. I <strong>skrivbordsappen</strong> är dina anteckningar vanliga filer på din egen disk och är bara så säkra som den disken. <strong>Håll alltid regelbundna säkerhetskopior av arbete du bryr dig om</strong> (skrivbordsappens Zip-export av projekt gör det enkelt).</p>
       </section>
       <hr class="mod-hr">
 
       <section class="mod-mb-4">
         <h4 class="mod-h4">Ändringar av detta meddelande</h4>
         <p class="mod-p">Harald Mark Thirslund kan komma att uppdatera detta juridiska meddelande från tid till annan. Väsentliga ändringar indikeras av ett uppdaterat datum i applikationen. Fortsatt användning av Revery Notebook efter eventuella ändringar innebär att du godkänner det reviderade meddelandet.</p>
-        <p class="mod-p-last">Senast uppdaterad: april 2026 &nbsp;·&nbsp; Harald Mark Thirslund, Göteborg, Sverige</p>
+        <p class="mod-p-last">Senast uppdaterad: juli 2026 &nbsp;·&nbsp; Harald Mark Thirslund, Göteborg, Sverige</p>
       </section>
     `
   },

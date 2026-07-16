@@ -26,6 +26,7 @@ crash-safe saving. Runs three ways from one codebase:
 - [Adding a Language](#adding-a-language)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Settings & Persistence](#settings--persistence)
+- [Changing the Version Number](#changing-the-version-number)
 - [Security Notes](#security-notes)
 - [Known Limitations](#known-limitations)
 - [Deployment Checklist (web version)](#deployment-checklist-web-version)
@@ -96,6 +97,11 @@ the browser (a live demo of the software before you install it).
   computer (Settings → font menus → "Custom font…").
 - Backgrounds (built-in or imported image) with adjustable opacity, dark/light
   theme, per-pane text sizes, **Slow Hardware Mode** for older machines.
+- **Text column width**: drag the edge of the text column (editor or reader),
+  pick a preset, or freeze it in pixels with the *Fixed width* toggles
+  (Settings → Editor/Reader padding).
+- **Panel order: Mirrored** (Settings → Advanced Options) swaps the
+  editor/preview sides; the pane label bars can be hidden (Settings → Theme).
 - Interface languages: **English** and **Swedish**.
 
 ---
@@ -163,12 +169,16 @@ variable that confuses Electron).
 - The shipped app is `www/` — plain classic `<script>` files, no framework, no
   build step for day-to-day work. Serve it from any static host or open it via
   `file://`.
-- Two files in `www/jvscrpt_and_css_extra/` are **generated bundles** — never
-  edit them directly:
-  - `codemirror-bundle.js` ← built from `build_tools/cm_entry_slim.js`
-    (`cd build_tools && npm install && node build_cm.js`, then copy the output over).
-  - `project_sidebar.js` ← built from the ES modules in `src/sidebar/` with
-    `npm run build:sidebar` (run from the repo root).
+- Three shipped artifacts are **generated** — never edit them directly:
+  - `www/jvscrpt_and_css_extra/codemirror-bundle.js` ← built from
+    `build_tools/cm_entry_slim.js` (`cd build_tools && npm install &&
+    node build_cm.js`, then copy the output over).
+  - `www/jvscrpt_and_css_extra/project_sidebar.js` ← built from the ES modules
+    in `src/sidebar/` with `npm run build:sidebar` (run from the repo root).
+  - `www/main_rn.css` + `www/prose_rn.css` ← built from the sources in
+    `www/css_aesthetics/` with `npm run build:css` (needs the Tailwind binary
+    in `build_tools/` — the script prints the download URL if it is missing).
+    Commit sources and outputs together.
 - Script loading order in `index.html` matters — the classic scripts
   communicate through globals. See the `<script>` tags in `index.html`
   (theme → native_api → templates → renderer libs → lang → CodeMirror →
@@ -288,6 +298,34 @@ Main keys: `revery_md_settings` (all Settings-menu state), `revery_md_autosave`
 
 **To reset everything** use the in-app option (logo menu → Quit → Total Reset),
 or clear the keys above from the browser console.
+
+---
+
+## Changing the Version Number
+
+The version is written in **five places** (plus two "last updated" dates).
+There is no sync script — update them all by hand before a release.
+Line numbers are as of v1.0.0; if a file has drifted, search for the quoted string.
+
+| # | File | Line | What to change |
+|---|---|---|---|
+| 1 | `package.json` | 3 | `"version": "1.0.0"` — Electron app + installers |
+| 2 | `tauri/tauri.conf.json` | 4 | `"version": "1.0.0"` — Tauri app + installers |
+| 3 | `tauri/Cargo.toml` | 3 | `version = "1.0.0"` — Rust crate (Cargo.lock updates itself on the next build; commit it) |
+| 4 | `www/jvscrpt_and_css_extra/markdown_editor_lang.js` | 987–988 | About page, English: `v1.0.0` + `Build:` month |
+| 5 | `www/jvscrpt_and_css_extra/markdown_editor_lang.js` | 1018–1019 | About page, Swedish: `v1.0.0` + `Bygg:` month |
+
+Also bump when the legal text changes (not on every release):
+
+| File | Line | What to change |
+|---|---|---|
+| `www/jvscrpt_and_css_extra/markdown_editor_lang.js` | 699 | Legal page, English: `Last updated: July 2026` |
+| `www/jvscrpt_and_css_extra/markdown_editor_lang.js` | 972 | Legal page, Swedish: `Senast uppdaterad: juli 2026` |
+
+Afterwards: check with `grep -rn "1\.0\.0" package.json tauri/tauri.conf.json
+tauri/Cargo.toml` and `grep -n "v1\.0\.0" www/jvscrpt_and_css_extra/markdown_editor_lang.js`
+(replace with the old version) — zero hits means you got them all. Then tag the
+release commit: `git tag vX.Y.Z`.
 
 ---
 
