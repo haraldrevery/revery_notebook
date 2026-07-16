@@ -954,6 +954,10 @@ body[data-view="editor"] #topbar-left #wordcount {
 /* ── Reader Mode Topbar Adjustments ── */
 body.reader-mode-active #topbar-left { visibility: hidden !important; }
 body.reader-mode-active #topbar-left #btn-sidebar { visibility: visible !important; }
+/* The logo lives inside #topbar-left when positioned Left (applyLogoPosition
+   moves the wrapper) — keep it and its dropdown usable in reader mode. */
+body.reader-mode-active #topbar-left #btn-logo { visibility: visible !important; }
+body.reader-mode-active #topbar-left #logo-dropdown { visibility: visible !important; }
 body.reader-mode-active #topbar-right > div:not(#win-controls) { display: none !important; }
 body.reader-mode-active #btn-export,
 body.reader-mode-active #btn-reader-mode,
