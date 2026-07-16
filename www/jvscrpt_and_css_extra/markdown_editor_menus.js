@@ -222,10 +222,14 @@ window.applyDOMTranslations = function() {
   updateTxt('#btn-reader-outline', 'Outline');
   updateTxt('#btn-export .btn-label-desktop', 'Export .md');
   updateTxt('#btn-export .btn-label-mobile', 'Export');
-  updateTxt('#editor-pane .pane-label', 'Markdown');
-  updateTxt('#preview-pane .pane-label', 'Preview');
-  // Target the title span only — the pane label also hosts the +/- font buttons.
+  // Target the title spans only — the pane labels also host +/- font buttons.
+  updateTxt('#editor-pane-title', 'Markdown');
+  updateTxt('#preview-pane-title', 'Preview');
   updateTxt('#outline-pane-title', 'Outline');
+  updateTitle('#editor-font-minus', 'Smaller editor text');
+  updateTitle('#editor-font-plus', 'Larger editor text');
+  updateTitle('#preview-font-minus', 'Smaller preview text');
+  updateTitle('#preview-font-plus', 'Larger preview text');
   updateTxt('#preview-empty span', 'Nothing here yet');
   
   updateTitle('#btn-logo', 'Harald Revery — Menu');
@@ -449,6 +453,62 @@ window.getOutlineFontSize = function () { return outlineFontSize; };
   const minus = document.getElementById('outline-font-minus');
   if (plus)  plus.addEventListener('click',  (e) => { e.stopPropagation(); window.setOutlineFontSize(outlineFontSize + 10); });
   if (minus) minus.addEventListener('click', (e) => { e.stopPropagation(); window.setOutlineFontSize(outlineFontSize - 10); });
+})();
+
+/* The Editor/Preview text-size scale — single source for the Settings
+   submenus AND the +/- pane-bar buttons, so the ■ mark always lands on a
+   real row (note the 270 → 290 gap: step by index, never ±10).          */
+const TEXT_SIZE_OPTIONS = [70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 290];
+function snapTextSize(pct) {
+  let best = TEXT_SIZE_OPTIONS[0];
+  for (const v of TEXT_SIZE_OPTIONS) {
+    if (Math.abs(v - pct) < Math.abs(best - pct)) best = v;
+  }
+  return best;
+}
+function stepTextSize(current, dir) {
+  const i = TEXT_SIZE_OPTIONS.indexOf(snapTextSize(current))
+    + (dir < 0 ? -1 : 1);
+  return TEXT_SIZE_OPTIONS[Math.max(0, Math.min(TEXT_SIZE_OPTIONS.length - 1, i))];
+}
+
+/* Canonical setters — shared by the Settings submenus and the +/- buttons
+   on the pane label bars. Same contract as setOutlineFontSize: snap,
+   apply, persist, re-sync the Settings checkmark. */
+window.setEditorTextSize = function (pct) {
+  editorTextSize = snapTextSize(pct);
+  applyTextSize();
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+  if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
+};
+window.setPreviewTextSize = function (pct) {
+  previewTextSize = snapTextSize(pct);
+  applyTextSize();
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+  if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
+};
+
+/* The +/- buttons on the editor and preview pane label bars. In Live
+   Preview the editor surface renders with the PREVIEW text size (raw
+   lines and widgets both — the editor size is inert there), so the
+   editor-bar buttons drive the size the user is actually looking at. */
+(function initPaneTextSizeButtons() {
+  const wirePair = (minusId, plusId, step) => {
+    const minus = document.getElementById(minusId);
+    const plus  = document.getElementById(plusId);
+    if (minus) minus.addEventListener('click', (e) => { e.stopPropagation(); step(-1); });
+    if (plus)  plus.addEventListener('click',  (e) => { e.stopPropagation(); step(1); });
+  };
+  wirePair('editor-font-minus', 'editor-font-plus', (dir) => {
+    if (document.body.classList.contains('live-preview-active')) {
+      window.setPreviewTextSize(stepTextSize(previewTextSize, dir));
+    } else {
+      window.setEditorTextSize(stepTextSize(editorTextSize, dir));
+    }
+  });
+  wirePair('preview-font-minus', 'preview-font-plus', (dir) => {
+    window.setPreviewTextSize(stepTextSize(previewTextSize, dir));
+  });
 })();
 
 /* Apply UI size: injects a <style> override that counteracts the root
@@ -2164,8 +2224,8 @@ const editorPaddingOptions = [
   attachSubmenuHandlers(fnFmtWrapper, fnFmtSub);
   settingsDropdown.appendChild(fnFmtWrapper);
 
-  // ── Text Size submenu
-  const sizeOptions = [70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 290];
+  // ── Text Size submenu (options shared with the pane-bar +/- buttons)
+  const sizeOptions = TEXT_SIZE_OPTIONS;
 
   // ── Editor Text Size submenu
   const editorSizeWrapper = document.createElement('div');
@@ -2185,10 +2245,8 @@ const editorPaddingOptions = [
     btn.textContent = (editorTextSize === pct ? '■ ' : '\u00a0\u00a0') + pct + '%';
     btn.onclick = (e) => {
       e.stopPropagation();
-      editorTextSize = pct;
-      applyTextSize();
       settingsDropdown.classList.remove('show');
-      buildSettingsMenu();
+      window.setEditorTextSize(pct); // applies, persists, rebuilds the menu
     };
     editorSizeSub.appendChild(btn);
   });
@@ -2290,10 +2348,8 @@ const editorPaddingOptions = [
     btn.textContent = (previewTextSize === pct ? '■ ' : '\u00a0\u00a0') + pct + '%';
     btn.onclick = (e) => {
       e.stopPropagation();
-      previewTextSize = pct;
-      applyTextSize();
       settingsDropdown.classList.remove('show');
-      buildSettingsMenu();
+      window.setPreviewTextSize(pct); // applies, persists, rebuilds the menu
     };
     previewSizeSub.appendChild(btn);
   });

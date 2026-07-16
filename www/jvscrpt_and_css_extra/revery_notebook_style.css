@@ -2479,6 +2479,26 @@ body.live-preview-active #editor .cm-content {
 }
 #outline-size-controls button:hover { color: var(--text); }
 
+/* Editor/Preview pane-bar font-size buttons — same recipe as the outline's
+   (kept as a separate class so the outline block stays untouched). */
+.pane-size-controls {
+  float: right;
+  display: inline-flex;
+  gap: 2px;
+}
+.pane-size-controls button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0 5px;
+  touch-action: manipulation;
+}
+.pane-size-controls button:hover { color: var(--text); }
+
 /* ── Export options popup (markdown_editor_export.js) ──────────────────
    Reuses .modal-overlay/.modal-content; these style the option rows and
    the modal buttons in the app's own aesthetic (all four themes via
