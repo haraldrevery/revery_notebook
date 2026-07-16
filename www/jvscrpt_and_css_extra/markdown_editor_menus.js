@@ -436,7 +436,7 @@ function applyTextSize() {
   // Scale the editor textarea font directly (hardcoded 0.96rem baseline)
   document.getElementById('editor').style.fontSize = ((0.96 * editorScale) / uiScale).toFixed(3) + 'rem';
   // Keep headings and code-block sizes in sync with the new text scale.
-  // These use hardcoded rem values in prose.css so they need the same
+  // These use hardcoded rem values in prose_rn.css so they need the same
   // combined UI-compensation + text-scale treatment applied here.
   applyUiSizeProseCompensation();
 }
@@ -532,7 +532,7 @@ window.setPreviewTextSize = function (pct) {
 
 /* Apply UI size: injects a <style> override that counteracts the root
    font-size change for prose headings, which use hardcoded rem values in
-   prose.css (h1=3rem, h2=1.875rem) and the prose-lg base (1.125rem) that
+   prose_rn.css (h1=3rem, h2=1.875rem) and the prose-lg base (1.125rem) that
    drives h3/h4 via em. Without this, UI menu size bleeds into the preview.
    The outline items are already covered by --outline-font-size above, and
    prose p/li are already covered by --text-body/--text-body-mobile.
@@ -1097,7 +1097,7 @@ function applyFontTypes() {
     document.documentElement.style.setProperty('--katex-font-size', '0.7em');
   }
 
-  /* The Harald face has no real bold, so prose.css renders bold text as
+  /* The Harald face has no real bold, so prose_rn.css renders bold text as
      underlined regular weight — but ONLY under this class. Any other preview
      font falls through to normal bold (Tailwind's own strong weights).
      Same branch condition as above, so the class always tracks the var. */

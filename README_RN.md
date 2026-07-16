@@ -187,7 +187,7 @@ revery_notebook/
 ├── www/                          ← Everything the app ships (web + both wrappers)
 │   ├── index.html                ← THE app. The web version opens this directly.
 │   ├── pdf_print.html            ← Dedicated PDF print page (Tauri export)
-│   ├── main.css / prose.css      ← Shipped styles (hand-maintained)
+│   ├── main_rn.css / prose_rn.css ← Shipped styles (generated: npm run build:css)
 │   ├── fonts/ image_assets/      ← Brand fonts, background images
 │   └── jvscrpt_and_css_extra/
 │       ├── revery_notebook_style.css     ← App UI styles

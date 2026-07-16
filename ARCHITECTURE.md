@@ -24,9 +24,9 @@ revery_notebook/
 │   ├── index.html                    ← The ONLY app shell (web, Electron and Tauri)
 │   ├── pdf_print.html                ← Dedicated PDF print page (Tauri export path)
 │   ├── revery_notebook.html          ← Legacy redirect stub for old web bookmarks
-│   ├── main.css / prose.css          ← Shipped styles. Historically Tailwind output;
-│   │                                    the Tailwind pipeline is dead — these are
-│   │                                    HAND-MAINTAINED now (css_aesthetics/ is archival)
+│   ├── main_rn.css / prose_rn.css    ← Shipped styles, GENERATED — never edit these.
+│   │                                    Source of truth: css_aesthetics/ inputs;
+│   │                                    rebuild with `npm run build:css`
 │   ├── fonts/ image_assets/          ← Brand fonts (woff2/ttf/otf), background images
 │   └── jvscrpt_and_css_extra/
 │       ├── native_api.js             ← Unified NativeAPI abstraction (Electron/Tauri/web)
