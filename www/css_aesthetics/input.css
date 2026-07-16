@@ -1,4 +1,14 @@
-@import "tailwindcss";
+/* source(none) disables Tailwind v4's automatic source detection (which
+   would otherwise scan ALL of www/ — including vendor *.min.js — and
+   scavenge random tokens into the output, nondeterministically). The
+   @source lines below are the ONLY files scanned for class names.
+   Paths are relative to this file. */
+@import "tailwindcss" source(none);
+@source "../index.html";
+@source "../pdf_print.html";
+@source "../jvscrpt_and_css_extra/markdown_editor_*.js";
+@source "../jvscrpt_and_css_extra/project_sidebar.js";
+@source "../jvscrpt_and_css_extra/native_api.js";
 
 @import "./theme.css";
 

@@ -1,4 +1,16 @@
-@import "tailwindcss";
+/* source(none) disables Tailwind v4's automatic source detection (which
+   would otherwise scan ALL of www/ — including vendor *.min.js — and
+   scavenge random tokens into the output, nondeterministically). The
+   @source lines below are the ONLY files scanned for class names; the
+   `prose prose-lg max-w-none mx-auto` string lives in
+   markdown_editor_core_cm.js / markdown_editor_livepreview.js, so the
+   JS globs are what make the typography plugin emit .prose at all. */
+@import "tailwindcss" source(none);
+@source "../index.html";
+@source "../pdf_print.html";
+@source "../jvscrpt_and_css_extra/markdown_editor_*.js";
+@source "../jvscrpt_and_css_extra/project_sidebar.js";
+@source "../jvscrpt_and_css_extra/native_api.js";
 
 
 @plugin "@tailwindcss/typography";
