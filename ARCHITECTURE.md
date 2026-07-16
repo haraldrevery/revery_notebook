@@ -47,7 +47,9 @@ revery_notebook/
 │   ├── Cargo.toml / tauri.conf.json  ← Rust deps, window config, CSP
 │   ├── capabilities/                 ← Window permission sets (main + minimal pdf-print-*)
 │   └── src/main.rs                   ← #[tauri::command] implementations + tests
-├── build_tools/                      ← esbuild scripts (CM bundle + sidebar bundle)
+├── build_tools/                      ← esbuild scripts (CM bundle + sidebar bundle) +
+│                                        build_css.js (Tailwind one-shot; the standalone
+│                                        Tailwind binaries live here too, gitignored)
 ├── test/                             ← node:test suites incl. crash-consistency, links and E2E
 ├── svg_icons_to_use/                 ← The ONLY approved icon source (Harald Revery glyphs)
 ├── images_for_installer/             ← Windows installer branding bitmaps (NSIS/WiX specs)
@@ -532,6 +534,30 @@ npm run build:sidebar
 
 The bundle is committed so the web version and both wrappers work without a
 build step. Never edit the bundle directly — the banner comment says so too.
+
+### Shipped CSS (main_rn.css / prose_rn.css)
+
+`www/main_rn.css` and `www/prose_rn.css` are **generated files**. The source
+of truth is `www/css_aesthetics/` (`input.css`, `input_prose.css`,
+`theme.css`). After editing anything there, rebuild:
+
+```bash
+npm run build:css        # one-shot; dev.sh / dev.bat are the watch variants
+```
+
+Which files get scanned for Tailwind class names is declared with `@source`
+directives inside the inputs (automatic detection is disabled with
+`source(none)` so vendor bundles can't leak tokens into the output). The
+unminified `*_max.css` twins in css_aesthetics/ are debug copies. Like the
+sidebar bundle, the outputs are committed — always commit inputs and
+regenerated outputs together. The Tailwind standalone binary is gitignored;
+build_css.js prints the download URL if it's missing.
+
+Two hard couplings to respect when touching prose styles: menus.js
+(`applyUiSizeProseCompensation`) mirrors `.prose h1` = 3rem, `.prose h2` =
+1.875rem and the `.prose-lg` base 1.125rem; and the theme system remaps the
+`--tw-prose-*` variables in revery_notebook_style.css — those variable names
+are a contract.
 
 ### Production Build
 

@@ -1,1 +1,4 @@
-I use tailwind to re-generate the prose.css and main.css
+Source of truth for the shipped stylesheets www/main_rn.css and
+www/prose_rn.css. Rebuild with `npm run build:css` (one-shot) or
+www/dev.sh / www/dev.bat (watch mode). Never edit the outputs directly;
+always commit inputs + regenerated outputs together.
