@@ -448,6 +448,30 @@
         scrollIntoView: true,
         userEvent: 'select',
       });
+      /* The landing above is a char-offset guess — the target line was
+         hidden inside the widget, so its pixels couldn't be measured
+         pre-dispatch (from a blank line it parks at column 0, from a
+         long one it clamps to the line end). Now that the dispatch has
+         revealed the line, re-land at the goal: goalColumn is a pixel x
+         relative to contentDOM's left edge, and posAtCoords flushes
+         measurement synchronously. Both dispatches share one paint, so
+         there is no visible double-move. The line guard means a stray
+         measurement can never move the cursor off the intended line. */
+      const lineCoords = view.coordsAtPos(head);
+      if (lineCoords) {
+        const x = view.contentDOM.getBoundingClientRect().left + goal;
+        const p = view.posAtCoords({ x, y: (lineCoords.top + lineCoords.bottom) / 2 });
+        if (p != null && p !== head && doc.lineAt(p).number === targetNo) {
+          const fixed = extend
+            ? EditorSelection.range(sel.anchor, p, goal)
+            : EditorSelection.cursor(p, undefined, undefined, goal);
+          view.dispatch({
+            selection: EditorSelection.create([fixed]),
+            scrollIntoView: true,
+            userEvent: 'select',
+          });
+        }
+      }
     } else {
       view.dispatch({
         selection: extend ? { anchor: sel.anchor, head } : { anchor: head },

@@ -769,6 +769,22 @@
     for (let i = 0; i < 7; i++) await pressArrow('ArrowUp');   // walk back
     /* Same line, same pixels: the round trip must be exact. */
     lpV2.arrowColumnStable = downOk && lineNo() === 1 && colNo() === 20;
+
+    /* Crossing INTO a widget must land AT the goal column, not at the
+       char-offset guess (from the blank gap that guess is column 0 —
+       the "cursor jumps to the start of the line" report). The landing
+       is corrected post-reveal from real pixels, so on a different
+       line it is near col 30, and back on the origin line it is exact. */
+    replaceEditorContent('the cursor starts on this long top line here\n\n'
+      + 'A paragraph line that is quite long here indeed');
+    editor.setSelectionRange(30, 30);                  // line 1, col 30
+    await sleep(400);
+    await pressArrow('ArrowDown');                     // 1 → 2 (native, blank gap)
+    await pressArrow('ArrowDown');                     // 2 → 3 (override, into widget)
+    const downLanded = lineNo() === 3 && colNo() >= 26 && colNo() <= 34;
+    await pressArrow('ArrowUp');                       // 3 → 2 (native)
+    await pressArrow('ArrowUp');                       // 2 → 1 (override, into widget)
+    lpV2.arrowLandsAtGoal = downLanded && lineNo() === 1 && colNo() === 30;
   }
 
   window.setLivePreviewMode(false);
