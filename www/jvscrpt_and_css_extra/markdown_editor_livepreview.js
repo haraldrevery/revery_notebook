@@ -406,12 +406,29 @@
 
     const def = view.moveVertically(sel, forward);
     const defLine = doc.lineAt(def.head);
+    /* Motion within the same doc line = stepping visual rows of a
+       soft-wrapped line; the default is always right there, even when
+       a rendered widget sits on the adjacent doc line. Must be checked
+       before the widget-coverage trigger below.                      */
+    if (def.head !== sel.head && defLine.number === curLine.number) return false;
     const skips = forward ? defLine.number > curLine.number + 1
                           : defLine.number < curLine.number - 1;
     const stuck = def.head === sel.head;
-    if (!skips && !stuck) return false;                      // default handles it
-
     const target = doc.line(targetNo);
+    /* Deterministic trigger: moveVertically measures against the
+       rendered-widget geometry that this very transaction is about to
+       swap for raw text, so skips/stuck can flip between identical
+       keypresses. If the adjacent doc line is covered by a replace
+       widget, always take the override; the heuristic stays as a
+       fallback for geometry cases the coverage test can't see.
+       to > from excludes the zero-length lp-frontmatter line decos.  */
+    let covered = false;
+    const fv = state.field(blockField, false);
+    if (fv) fv.deco.between(target.from, target.to, (from, to) => {
+      if (to > from) { covered = true; return false; }
+    });
+    if (!covered && !skips && !stuck) return false;          // default handles it
+
     const head = target.from + Math.min(sel.head - curLine.from, target.length);
     /* Carry the goal column forward. moveVertically resolves it as
        sel.goalColumn ?? pixel-x of the head, so `def` already holds the
