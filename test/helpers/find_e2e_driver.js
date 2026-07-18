@@ -785,6 +785,35 @@
     await pressArrow('ArrowUp');                       // 3 → 2 (native)
     await pressArrow('ArrowUp');                       // 2 → 1 (override, into widget)
     lpV2.arrowLandsAtGoal = downLanded && lineNo() === 1 && colNo() === 30;
+
+    /* A wrapped paragraph is ONE doc line across several visual rows.
+       Entering it from below must land on its BOTTOM row (native
+       semantics — the row adjacent to the departure point), entering
+       from above on its TOP row. The pre-fix correction took its y
+       from the char-offset guess (≈ col 0 = top row), which parked
+       upward block-to-block motion at the top of every paragraph.    */
+    const longPara = ('wrapping words flow onward through the paragraph and '.repeat(6)).trim();
+    replaceEditorContent(`top line here\n\n${longPara}\n\ntail line below the block`);
+    editor.setSelectionRange(editor.value.length - 5, editor.value.length - 5);
+    await sleep(400);
+    const cmv = window.cmView;
+    const rowTop = (pos, side) => {
+      const c = cmv.coordsAtPos(pos, side);
+      return c ? c.top : NaN;
+    };
+    const line3 = () => cmv.state.doc.line(3);
+    await pressArrow('ArrowUp');                       // 5 → 4 (native, blank gap)
+    await pressArrow('ArrowUp');                       // 4 → 3 (override, into wrapped para)
+    const paraWraps = rowTop(line3().to, -1) - rowTop(line3().from, 1) > 5;
+    const upBottomRow = lineNo() === 3
+      && Math.abs(rowTop(cmv.state.selection.main.head, -1) - rowTop(line3().to, -1)) < 2;
+    editor.setSelectionRange(4, 4);                    // line 1
+    await sleep(350);                                  // para re-renders as a widget
+    await pressArrow('ArrowDown');                     // 1 → 2 (native, blank gap)
+    await pressArrow('ArrowDown');                     // 2 → 3 (override, into wrapped para)
+    const downTopRow = lineNo() === 3
+      && Math.abs(rowTop(cmv.state.selection.main.head, 1) - rowTop(line3().from, 1)) < 2;
+    lpV2.arrowWrapRowEntry = paraWraps && upBottomRow && downTopRow;
   }
 
   window.setLivePreviewMode(false);

@@ -456,8 +456,13 @@
          relative to contentDOM's left edge, and posAtCoords flushes
          measurement synchronously. Both dispatches share one paint, so
          there is no visible double-move. The line guard means a stray
-         measurement can never move the cursor off the intended line. */
-      const lineCoords = view.coordsAtPos(head);
+         measurement can never move the cursor off the intended line.
+         The y must come from the DEPARTURE side of the target line, not
+         from the guess: a wrapped paragraph is one doc line spanning
+         several visual rows, and entering it from below must land on
+         its BOTTOM row (the guess sits near column 0 = the top row). */
+      const refPos = forward ? target.from : target.to;
+      const lineCoords = view.coordsAtPos(refPos, forward ? 1 : -1);
       if (lineCoords) {
         const x = view.contentDOM.getBoundingClientRect().left + goal;
         const p = view.posAtCoords({ x, y: (lineCoords.top + lineCoords.bottom) / 2 });
