@@ -729,6 +729,48 @@
       && document.querySelector('.cm-content').textContent.includes('- gamma');
   }
 
+  /* Goal-column preservation across widget crossings: the override used
+     to dispatch a plain {anchor, head}, erasing the goal column, so a
+     down-and-back-up walk ended at whatever short line clamped it to.
+     Two-line paragraphs bracket the doc so the FINAL press in each
+     direction is native motion aiming at the preserved pixel goal —
+     column 20 only comes back if every override in between carried it. */
+  {
+    replaceEditorContent('the quick brown fox jumps over the lazy dog\n'
+      + 'second line of the leading paragraph here\n\n- ab\n- cd\n\n'
+      + 'first line of the closing paragraph here\n'
+      + 'the five boxing wizards jump quickly tonight');
+    editor.setSelectionRange(20, 20);                  // line 1, col 20
+    await sleep(400);
+    const pressArrow = async (key) => {
+      window.cmView.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {
+        key, bubbles: true, cancelable: true,
+      }));
+      await sleep(200);
+    };
+    const lineNo = () => window.cmView.state.doc.lineAt(window.cmView.state.selection.main.head).number;
+    const colNo = () => {
+      const head = window.cmView.state.selection.main.head;
+      return head - window.cmView.state.doc.lineAt(head).from;
+    };
+    await pressArrow('ArrowDown');                     // 1 → 2 (native, same block)
+    await pressArrow('ArrowDown');                     // 2 → 3 (native, blank gap)
+    await pressArrow('ArrowDown');                     // 3 → 4 (override, INTO list widget)
+    lpV2.arrowGoalPreserved =
+      window.cmView.state.selection.main.goalColumn !== undefined;
+    await pressArrow('ArrowDown');                     // 4 → 5 (native, raw list)
+    await pressArrow('ArrowDown');                     // 5 → 6 (native, blank gap)
+    await pressArrow('ArrowDown');                     // 6 → 7 (override, into closing para)
+    await pressArrow('ArrowDown');                     // 7 → 8 (native → pixel goal)
+    /* The goal is a PIXEL x; on line 8's different characters it lands
+       near col 20, not exactly (proportional font). Without the goal it
+       clamps to 0 through the blank gaps and never recovers.         */
+    const downOk = lineNo() === 8 && colNo() >= 18;
+    for (let i = 0; i < 7; i++) await pressArrow('ArrowUp');   // walk back
+    /* Same line, same pixels: the round trip must be exact. */
+    lpV2.arrowColumnStable = downOk && lineNo() === 1 && colNo() === 20;
+  }
+
   window.setLivePreviewMode(false);
   await sleep(200);
   const lpOffState = {
