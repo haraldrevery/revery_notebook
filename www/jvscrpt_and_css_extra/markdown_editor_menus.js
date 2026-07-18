@@ -1283,15 +1283,6 @@ const advancedOptions = [
     set: (v) => window.setLogoPosition(v),
   },
   {
-    label: 'Panel order',
-    choices: [['normal', 'Normal'], ['flipped', 'Mirrored']],
-    get: () => (flipLayout ? 'flipped' : 'normal'),
-    set: (v) => window.setFlipLayout(v === 'flipped'),
-    /* Desktop only: mirroring has no effect in the single-pane mobile
-       views — hiding the row avoids a silent no-op control. */
-    visible: () => window.innerWidth > 820,
-  },
-  {
     label: 'Top bar icon',
     choices: [['default', 'Default'], ['custom', 'Custom SVG…']],
     get: () => {
@@ -1334,6 +1325,15 @@ const advancedOptions = [
       };
       input.click();
     },
+  },
+  {
+    label: 'Panel order',
+    choices: [['normal', 'Normal'], ['flipped', 'Mirrored']],
+    get: () => (flipLayout ? 'flipped' : 'normal'),
+    set: (v) => window.setFlipLayout(v === 'flipped'),
+    /* Desktop only: mirroring has no effect in the single-pane mobile
+       views — hiding the row avoids a silent no-op control. */
+    visible: () => window.innerWidth > 820,
   },
   /* Future advanced settings: append entries here. */
 ];
