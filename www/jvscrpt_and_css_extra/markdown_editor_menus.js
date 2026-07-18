@@ -1196,6 +1196,20 @@ function sanitizeLogoSvg(text) {
   }
   root.removeAttribute('width');
   root.removeAttribute('height'); // CSS owns the rendered box
+  /* Theme parity with the shipped logo: every explicit paint color is
+     normalized to currentColor so the icon follows the topbar text
+     color in all themes. 'none' is preserved — forcing a fill onto
+     outline-only shapes would turn them into solid blobs. Gradient
+     paints (url(#…)) flatten to the theme color by design. Elements
+     with no paint attributes inherit currentColor from the CSS rule. */
+  const paintProps = ['fill', 'stroke'];
+  [root, ...root.querySelectorAll('*')].forEach((el) => {
+    for (const p of paintProps) {
+      const attr = el.getAttribute(p);
+      if (attr && attr.trim().toLowerCase() !== 'none') el.setAttribute(p, 'currentColor');
+      if (el.style && el.style[p] && el.style[p] !== 'none') el.style[p] = 'currentColor';
+    }
+  });
   return { ok: true, node: root, markup: new XMLSerializer().serializeToString(root) };
 }
 

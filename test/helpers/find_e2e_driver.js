@@ -881,10 +881,25 @@
     const btn = document.getElementById('btn-logo');
     const key = 'revery_custom_logo';
     const r1 = window.setCustomLogoSvg(
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="#e33"/></svg>');
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+      + '<circle cx="5" cy="5" r="4" fill="#e33"/>'
+      + '<path d="M1 1h8" fill="none" stroke="#00f"/>'
+      + '<rect width="4" height="4" style="fill:#123456"/></svg>');
     customLogo.validApplies = r1.ok === true
       && !!btn.querySelector('svg.custom-logo circle')
       && !!localStorage.getItem(key);
+
+    /* Explicit paints normalize to currentColor (theme parity with the
+       shipped logo); fill="none" outline shapes must stay unfilled. */
+    const circ = btn.querySelector('svg.custom-logo circle');
+    const outline = btn.querySelector('svg.custom-logo path');
+    const styled = btn.querySelector('svg.custom-logo rect');
+    customLogo.themeRecolored = !!circ && !!outline && !!styled
+      && circ.getAttribute('fill') === 'currentColor'
+      && getComputedStyle(circ).fill === getComputedStyle(btn).color
+      && outline.getAttribute('fill') === 'none'
+      && outline.getAttribute('stroke') === 'currentColor'
+      && String(styled.style.fill).toLowerCase() === 'currentcolor';
 
     btn.click();
     await sleep(150);

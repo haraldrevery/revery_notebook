@@ -281,10 +281,10 @@ body {
   height: 1.2rem;      /* SVG logo size tweak, scales with UI text size */
   width: auto;
   display: block;
+  fill: currentColor;  /* theme monochrome — custom icons are normalized
+                          to currentColor at import (sanitizeLogoSvg) so
+                          they follow the theme exactly like this one */
 }
-/* Theme monochrome applies to the shipped logo only — a custom icon
-   keeps its own colors. */
-#btn-logo svg:not(.custom-logo) { fill: currentColor; }
 /* Wide-viewBox custom icons letterbox instead of blowing up the topbar. */
 #btn-logo svg.custom-logo { max-width: 6rem; }
 
