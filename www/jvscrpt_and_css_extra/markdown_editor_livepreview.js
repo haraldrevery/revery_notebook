@@ -413,11 +413,31 @@
 
     const target = doc.line(targetNo);
     const head = target.from + Math.min(sel.head - curLine.from, target.length);
-    view.dispatch({
-      selection: extend ? { anchor: sel.anchor, head } : { anchor: head },
-      scrollIntoView: true,
-      userEvent: 'select',
-    });
+    /* Carry the goal column forward. moveVertically resolves it as
+       sel.goalColumn ?? pixel-x of the head, so `def` already holds the
+       column the user is aiming at; a plain {anchor, head} dispatch
+       would erase it and make the column wander across presses that
+       alternate between this override and the default motion. The
+       bundle doesn't export EditorSelection — reach the class through
+       the live selection instance instead. */
+    const EditorSelection = state.selection.constructor;
+    const goal = def.goalColumn !== undefined ? def.goalColumn : sel.goalColumn;
+    if (goal !== undefined && typeof EditorSelection.cursor === 'function') {
+      const range = extend
+        ? EditorSelection.range(sel.anchor, head, goal)
+        : EditorSelection.cursor(head, undefined, undefined, goal);
+      view.dispatch({
+        selection: EditorSelection.create([range]),
+        scrollIntoView: true,
+        userEvent: 'select',
+      });
+    } else {
+      view.dispatch({
+        selection: extend ? { anchor: sel.anchor, head } : { anchor: head },
+        scrollIntoView: true,
+        userEvent: 'select',
+      });
+    }
     return true;
   }
 
