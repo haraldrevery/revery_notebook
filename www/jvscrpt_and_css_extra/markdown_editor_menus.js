@@ -477,7 +477,7 @@ window.getOutlineFontSize = function () { return outlineFontSize; };
 /* The Editor/Preview text-size scale — single source for the Settings
    submenus AND the +/- pane-bar buttons, so the ■ mark always lands on a
    real row (note the 270 → 290 gap: step by index, never ±10).          */
-const TEXT_SIZE_OPTIONS = [70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 290];
+const TEXT_SIZE_OPTIONS = [60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 290];
 function snapTextSize(pct) {
   let best = TEXT_SIZE_OPTIONS[0];
   for (const v of TEXT_SIZE_OPTIONS) {
