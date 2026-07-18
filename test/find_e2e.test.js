@@ -189,4 +189,12 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 90000
     faceInjected: true, deletedReverts: true,
     importerOpens: true, sysFontHook: true, styledPicker: true, importerCloses: true,
   }, 'custom fonts must appear in both font menus with ✕, apply via the CSS var, persist, revert to Harald on delete, and the importer must use the app-styled system-font picker');
+
+  // 20. custom top bar icon: sanitize-inject-restore lifecycle; scripts,
+  //     links, styles, SMIL and foreignObject must never reach the DOM
+  assert.deepEqual(r.customLogo, {
+    validApplies: true, menuStillOpens: true, positionSurvives: true,
+    maliciousStripped: true, oversizedRejected: true, invalidRejected: true,
+    defaultRestores: true,
+  }, 'custom top bar SVG must inject sanitized, keep the menu button working, survive repositioning, strip all script/link/style vectors, reject oversized/invalid input, and restore the default icon cleanly');
 });

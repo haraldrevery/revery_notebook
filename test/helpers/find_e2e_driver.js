@@ -870,6 +870,66 @@
     lpV2.flipLayoutRestores = backNormal;
   }
 
+  /* 11a-2. Custom top bar icon (Advanced Options). Driven through the
+     window API — the Advanced Options modal isn't reachable via
+     clickSetting (settings-dropdown scoped), same precedent as
+     setFlipLayout above. The malicious import SUCCEEDS by design: the
+     sanitizer strips the vectors rather than rejecting the file, so
+     the assertions check stripped-ness, not failure. */
+  const customLogo = {};
+  {
+    const btn = document.getElementById('btn-logo');
+    const key = 'revery_custom_logo';
+    const r1 = window.setCustomLogoSvg(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="#e33"/></svg>');
+    customLogo.validApplies = r1.ok === true
+      && !!btn.querySelector('svg.custom-logo circle')
+      && !!localStorage.getItem(key);
+
+    btn.click();
+    await sleep(150);
+    customLogo.menuStillOpens =
+      getComputedStyle(document.getElementById('logo-dropdown')).display !== 'none';
+    btn.click();
+    await sleep(100);
+
+    window.setLogoPosition('left');
+    await sleep(100);
+    const survivedLeft = !!btn.querySelector('svg.custom-logo');
+    window.setLogoPosition('center');
+    await sleep(100);
+    customLogo.positionSurvives = survivedLeft && !!btn.querySelector('svg.custom-logo');
+
+    const evil = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" onload="window.__pwn=1">'
+      + '<style>#topbar{display:none}</style>'
+      + '<script>window.__pwn=2<\/script>'
+      + '<a href="https://example.com"><rect width="10" height="10"/></a>'
+      + '<foreignObject><iframe src="https://example.com"></iframe></foreignObject>'
+      + '<set attributeName="href" to="https://example.com"/>'
+      + '<circle cx="5" cy="5" r="4"/></svg>';
+    const r2 = window.setCustomLogoSvg(evil);
+    const injected = btn.querySelector('svg.custom-logo');
+    customLogo.maliciousStripped = r2.ok === true && !!injected
+      && !injected.querySelector('script,a,foreignObject,style,iframe,set')
+      && !Array.from(injected.querySelectorAll('*')).concat([injected]).some((el) =>
+        Array.from(el.attributes).some((a) => /^on/i.test(a.name) || /href/i.test(a.name)))
+      && window.__pwn === undefined
+      && getComputedStyle(document.getElementById('topbar')).display !== 'none';
+
+    const storedBefore = localStorage.getItem(key);
+    const rBig = window.setCustomLogoSvg('<svg>' + 'x'.repeat(260 * 1024) + '</svg>');
+    const rBad = window.setCustomLogoSvg('this is not an svg at all');
+    customLogo.oversizedRejected = rBig.ok === false && rBig.error === 'too-large'
+      && localStorage.getItem(key) === storedBefore;
+    customLogo.invalidRejected = rBad.ok === false
+      && localStorage.getItem(key) === storedBefore;
+
+    window.clearCustomLogo();
+    customLogo.defaultRestores = !btn.querySelector('svg.custom-logo')
+      && btn.querySelectorAll('svg path').length === 4
+      && localStorage.getItem(key) === null;
+  }
+
   /* 11b. Export suite builders (web mode: pure builders, no dialogs).
      LaTeX templates/engines/TOC + PDF front-page/TOC/@page options. */
   window.setLivePreviewMode(false);
@@ -1455,5 +1515,5 @@
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
            lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
            outlineFontButtons, exportSuite, customTemplates, linkComplete, advanced,
-           pdfPrintWindow, customFonts };
+           pdfPrintWindow, customFonts, customLogo };
 })()
