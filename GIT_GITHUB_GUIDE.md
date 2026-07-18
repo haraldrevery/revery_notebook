@@ -59,10 +59,33 @@ Tell Git who you are. This is stamped onto every commit you make.
 
 ```bash
 git config --global user.name  "Your Name"
-git config --global user.email "you@example.com"
+git config --global user.email "252636030+haraldrevery@users.noreply.github.com"
 ```
 
-Use the **same email** as your GitHub account so your commits are linked to you.
+> ⚠️ **CRITICAL — do NOT use your real email here.** Every commit records this
+> email, and it becomes **permanently public** to anyone who views the repo on
+> GitHub. Using your real address leaks your private data forever. Instead, use
+> the **anonymous "noreply" email** GitHub gives you (shown above — that one is
+> already yours).
+>
+> **Where to find yours:** GitHub → **Settings** → **Emails** → tick *"Keep my
+> email addresses private"*, and it shows your address in the form
+> `ID+username@users.noreply.github.com`. Also tick *"Block command line pushes
+> that expose my email"* so GitHub stops any leaky push before it happens.
+>
+> **If a push is ever rejected with `GH007: Your push would publish a private
+> email address`** — that's this exact protection working. It means a commit was
+> made with your real email. Fix it:
+> ```bash
+> git config --global user.email "252636030+haraldrevery@users.noreply.github.com"
+> git commit --amend --reset-author --no-edit   # re-stamp the last commit
+> git push
+> ```
+> (The `--amend` only fixes the most recent commit, and only safely before it's
+> reached GitHub — which is exactly the case when GH007 blocked the push.)
+
+Your **name** is fine to be public. Keep it recognizable so you know your own
+commits.
 
 ---
 
@@ -212,6 +235,7 @@ If size becomes a concern:
 | `fatal: 'origin' does not appear...` / no remote | No GitHub link is set. | `git remote add origin <url>` |
 | `Updates were rejected` / `non-fast-forward` | GitHub has commits you don't have locally. | `git pull` first, then `git push`. |
 | `refusing to merge unrelated histories` | Local and GitHub have separate histories (e.g. after losing `.git`). | Safest: re-`clone` fresh, or ask for help before force-pushing. |
+| `GH007: Your push would publish a private email address` | A commit used your **real email**, which GitHub protects. | Set your noreply email + re-stamp the commit — see [Section 3](#3-one-time-setup-only-do-this-once-per-computer). |
 | Asked for username/password on push | GitHub no longer accepts passwords. | Use a **Personal Access Token** (GitHub → Settings → Developer settings → Tokens) as the password, or set up SSH keys. |
 
 > ⚠️ **About `git push --force`:** it *overwrites* GitHub with your local
@@ -223,6 +247,10 @@ If size becomes a concern:
 ## 10. The 10-second cheat sheet
 
 ```bash
+# Do this ONCE per computer — use your GitHub noreply email, NOT your real one:
+git config --global user.name  "Your Name"
+git config --global user.email "252636030+haraldrevery@users.noreply.github.com"
+
 # Start tracking an existing folder and push it up:
 git init
 git add .
@@ -246,5 +274,5 @@ git pull
 
 ---
 
-*Golden rules: commit often, push to back up, pull before you start, and never
-delete the `.git` folder.*
+*Golden rules: use your noreply email (never your real one), commit often, push
+to back up, pull before you start, and never delete the `.git` folder.*
