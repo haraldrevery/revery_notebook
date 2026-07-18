@@ -34,6 +34,8 @@ let slowHardwareMode = false;    // One switch for older machines — see setSlo
 let backgroundOpacity = null;    // null = per-theme CSS default; number 0.01–1 overrides
 let livePreviewMode = false;     // Obsidian-style in-editor rendering — see setLivePreviewMode
 const CUSTOM_BG_KEY = 'revery_custom_bg'; // data: URL of an imported background (outside the settings JSON)
+const CUSTOM_LOGO_KEY = 'revery_custom_logo'; // sanitized <svg> markup; presence = custom icon active (outside the settings JSON)
+const CUSTOM_LOGO_MAX_BYTES = 256 * 1024;
 window.slowHardwareMode = false; // Mirror read by core/sync/native_api/sidebar at call time
 let editorBgGradient = false;     // true = gradient fade, false = solid colour
 let logoPosition = 'center';      // top bar logo: 'center' | 'left' (Advanced Options)
@@ -1156,6 +1158,93 @@ window.setLogoPosition = function (pos) {
   window.saveEditorSettings();
 };
 
+/* ── Custom top bar icon (Advanced Options) ──────────────────────────
+   A user-supplied SVG replaces the default logo inside #btn-logo. The
+   markup is untrusted: it must never carry links (the app must never
+   navigate — the borderless UI can't recover, and the web build has no
+   DOM-level link guard), scripts, SMIL (a <set> can re-add an href), a
+   <style> (inline-SVG styles apply DOCUMENT-wide and could hide the
+   topbar), or foreignObject. Sanitized at import AND at every apply, so
+   a hand-edited localStorage value gets the same treatment. */
+function sanitizeLogoSvg(text) {
+  if (typeof text !== 'string' || !text.trim()) return { ok: false, error: 'empty' };
+  if (text.length > CUSTOM_LOGO_MAX_BYTES) return { ok: false, error: 'too-large' };
+  if (!window.DOMPurify) return { ok: false, error: 'no-sanitizer' };
+  /* RETURN_DOM_FRAGMENT parses in HTML context, where the parser assigns
+     the SVG namespace even when the xmlns attribute is missing — a
+     string round-trip through DOMParser('image/svg+xml') would instead
+     yield a namespace-less svg that renders as nothing. */
+  const frag = window.DOMPurify.sanitize(text, {
+    USE_PROFILES: { svg: true, svgFilters: true },
+    FORBID_TAGS: ['a', 'script', 'style', 'foreignObject',
+                  'animate', 'animateTransform', 'animateMotion', 'set'],
+    FORBID_ATTR: ['href', 'xlink:href'],
+    RETURN_DOM_FRAGMENT: true,
+  });
+  const root = frag ? frag.firstElementChild : null;
+  if (!(root instanceof SVGSVGElement)) return { ok: false, error: 'not-svg' };
+  if (!root.getAttribute('viewBox')) {
+    /* width:auto sizing needs an intrinsic ratio, which only a viewBox
+       provides once the width/height attributes are stripped below. */
+    const w = parseFloat(root.getAttribute('width'));
+    const h = parseFloat(root.getAttribute('height'));
+    if (isFinite(w) && w > 0 && isFinite(h) && h > 0) {
+      root.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    } else {
+      return { ok: false, error: 'no-viewbox' };
+    }
+  }
+  root.removeAttribute('width');
+  root.removeAttribute('height'); // CSS owns the rendered box
+  return { ok: true, node: root, markup: new XMLSerializer().serializeToString(root) };
+}
+
+let _defaultLogoSvg = null; // the shipped inline svg, cached by reference before the first swap
+function applyCustomLogo() {
+  const btn = document.getElementById('btn-logo');
+  if (!btn) return;
+  const cur = btn.querySelector('svg');
+  if (_defaultLogoSvg === null) _defaultLogoSvg = cur;
+  let markup = null;
+  try { markup = localStorage.getItem(CUSTOM_LOGO_KEY); } catch (_) {}
+  if (!markup) {
+    if (_defaultLogoSvg && cur !== _defaultLogoSvg) cur.replaceWith(_defaultLogoSvg);
+    return;
+  }
+  const res = sanitizeLogoSvg(markup);
+  if (!res.ok) {
+    /* Stored value is unusable (tampered or from a future format) —
+       drop it so every later boot cleanly shows the default. */
+    try { localStorage.removeItem(CUSTOM_LOGO_KEY); } catch (_) {}
+    if (_defaultLogoSvg && cur !== _defaultLogoSvg) cur.replaceWith(_defaultLogoSvg);
+    return;
+  }
+  const el = document.importNode(res.node, true);
+  el.classList.add('custom-logo');
+  if (cur) cur.replaceWith(el); else btn.appendChild(el);
+}
+
+window.setCustomLogoSvg = function (text) {
+  const res = sanitizeLogoSvg(text);
+  if (!res.ok) return res;
+  try {
+    localStorage.setItem(CUSTOM_LOGO_KEY, res.markup);
+  } catch (e) {
+    if (typeof window.showStatusWarning === 'function') {
+      window.showStatusWarning('storage-full',
+        window.t('Storage full! The icon could not be saved.'), { priority: 100, ttl: 5000 });
+    }
+    return { ok: false, error: 'storage-full' };
+  }
+  applyCustomLogo();
+  return { ok: true };
+};
+
+window.clearCustomLogo = function () {
+  try { localStorage.removeItem(CUSTOM_LOGO_KEY); } catch (_) {}
+  applyCustomLogo();
+};
+
 /* Mirrored panel order (outline | preview | editor | files). Pure CSS
    `order` keyed on the body class — the DOM never moves, so tab order and
    assistive tech are untouched; the drag handlers read window.flipLayout
@@ -1187,6 +1276,50 @@ const advancedOptions = [
     /* Desktop only: mirroring has no effect in the single-pane mobile
        views — hiding the row avoids a silent no-op control. */
     visible: () => window.innerWidth > 820,
+  },
+  {
+    label: 'Top bar icon',
+    choices: [['default', 'Default'], ['custom', 'Custom SVG…']],
+    get: () => {
+      try { return localStorage.getItem(CUSTOM_LOGO_KEY) ? 'custom' : 'default'; }
+      catch (_) { return 'default'; }
+    },
+    set: (v) => {
+      if (v !== 'custom') { window.clearCustomLogo(); return; }
+      /* Throwaway picker + FileReader works identically in web, Electron
+         and Tauri (same pattern as the custom background — and like it,
+         never createObjectURL: blob: URLs are CSP-blocked). Picking the
+         row while already custom is the replace flow. On cancel nothing
+         happens and the rows correctly repaint as their stored state. */
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.svg,image/svg+xml';
+      input.onchange = () => {
+        const f = input.files && input.files[0];
+        if (!f) return;
+        if (f.size > CUSTOM_LOGO_MAX_BYTES) {
+          if (typeof window.showStatusWarning === 'function') {
+            window.showStatusWarning('logo-svg', window.t('The SVG file is too large.'), { priority: 10, ttl: 5000 });
+          }
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const r = window.setCustomLogoSvg(String(reader.result));
+          if (!r.ok) {
+            if (r.error !== 'storage-full' && typeof window.showStatusWarning === 'function') {
+              window.showStatusWarning('logo-svg', window.t('Invalid SVG file.'), { priority: 10, ttl: 5000 });
+            }
+          } else if (document.getElementById('advanced-options-modal')) {
+            /* The rows repainted synchronously as 'default' when the
+               picker opened; rebuild so the ■ lands on Custom. */
+            openAdvancedOptions();
+          }
+        };
+        reader.readAsText(f);
+      };
+      input.click();
+    },
   },
   /* Future advanced settings: append entries here. */
 ];
@@ -1316,6 +1449,7 @@ applyUiSizeProseCompensation();
 _applyCustomFontFaces(); // Register imported @font-face fonts before first paint
 applyFontTypes(); // Execute font assignment on boot
 applyLogoPosition(); // Restore the saved logo position on boot
+applyCustomLogo();   // Swap in the custom top bar icon if one is stored
 applyCenterHeaders(); // <-- ADD THIS LINE to apply the saved setting on page load
 applyBackground();
 applyEditorBgStyle();
