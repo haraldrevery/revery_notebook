@@ -814,6 +814,27 @@
     const downTopRow = lineNo() === 3
       && Math.abs(rowTop(cmv.state.selection.main.head, 1) - rowTop(line3().from, 1)) < 2;
     lpV2.arrowWrapRowEntry = paraWraps && upBottomRow && downTopRow;
+
+    /* The press AFTER an upward entry. Entering from a column-0 departure
+       line lands the caret EXACTLY on the soft-wrap boundary (first char
+       of the bottom row). Without an assoc, CM draws that caret with
+       assoc||1 (bottom row) but measures the next ArrowUp with assoc||-1
+       (end of the row above), so the press skipped a visual row — the
+       "last line, then third-last line" report. The override now pins
+       assoc to the landed row; the follow-up press must step exactly one
+       row. */
+    const tailStart = editor.value.indexOf('tail line');
+    editor.setSelectionRange(tailStart, tailStart);     // line 5, col 0
+    await sleep(350);                                   // para re-renders as a widget
+    await pressArrow('ArrowUp');                        // 5 → 4 (native, blank gap)
+    await pressArrow('ArrowUp');                        // 4 → 3 (override → wrap boundary)
+    const assocPinned = cmv.state.selection.main.assoc === 1;
+    const bottomTop = rowTop(line3().to, -1);
+    await pressArrow('ArrowUp');                        // one visual row up, same doc line
+    const stepped = bottomTop - rowTop(cmv.state.selection.main.head, 1);
+    const oneRowUp = lineNo() === 3
+      && stepped > 2 && stepped < 1.5 * cmv.defaultLineHeight;
+    lpV2.arrowWrapRowStep = assocPinned && oneRowUp;
   }
 
   window.setLivePreviewMode(false);

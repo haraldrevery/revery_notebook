@@ -117,7 +117,7 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 90000
     flipLayoutMirrors: true, flipLayoutDrag: true, flipLayoutRestores: true,
     arrowDownByLine: true, arrowUpByLine: true,
     arrowGoalPreserved: true, arrowColumnStable: true, arrowLandsAtGoal: true,
-    arrowWrapRowEntry: true,
+    arrowWrapRowEntry: true, arrowWrapRowStep: true,
   }, 'v2 blocks must render through the preview pipeline with computed-style parity: headers, code font+colors, hidden fences, image sizing, tables, multi-line math; vertical arrows must walk raw doc lines through rendered blocks');
 
   // 12. zip export is desktop-only — absent from the File menu in web mode

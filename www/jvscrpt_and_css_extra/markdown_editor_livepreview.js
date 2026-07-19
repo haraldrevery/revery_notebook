@@ -439,10 +439,17 @@
        the live selection instance instead. */
     const EditorSelection = state.selection.constructor;
     const goal = def.goalColumn !== undefined ? def.goalColumn : sel.goalColumn;
+    /* The landing can sit exactly on a soft-wrap boundary (start of the
+       entered row), where CM draws the caret with assoc||1 but measures
+       the next vertical motion with assoc||-1 — one visual row apart, so
+       the following press skips a row. Pin the caret to the row we
+       deliberately landed on: bottom row entering from below, top row
+       entering from above. Inert away from wrap points.               */
+    const assoc = forward ? -1 : 1;
     if (goal !== undefined && typeof EditorSelection.cursor === 'function') {
       const range = extend
         ? EditorSelection.range(sel.anchor, head, goal)
-        : EditorSelection.cursor(head, undefined, undefined, goal);
+        : EditorSelection.cursor(head, assoc, undefined, goal);
       view.dispatch({
         selection: EditorSelection.create([range]),
         scrollIntoView: true,
@@ -469,7 +476,7 @@
         if (p != null && p !== head && doc.lineAt(p).number === targetNo) {
           const fixed = extend
             ? EditorSelection.range(sel.anchor, p, goal)
-            : EditorSelection.cursor(p, undefined, undefined, goal);
+            : EditorSelection.cursor(p, assoc, undefined, goal);
           view.dispatch({
             selection: EditorSelection.create([fixed]),
             scrollIntoView: true,
