@@ -10,7 +10,7 @@
   --text-nav: 1.4rem;
 
   --text-line-row-space: 1.24;   /* space between the rows/lines of text */
-  --tracking-body: 0.029em;     /* global letter-spacing (space between characters/letters)*/
+  --tracking-body: 0.0em;     /* global letter-spacing (space between characters/letters)*/
 
   /* Layout Spacing */
   --spacing-container-px: 5%; 

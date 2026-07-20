@@ -16,7 +16,7 @@
     --text-body-mobile: 1.22rem;
     --text-mono: 1.22rem;
     --text-line-row-space: 1.24;
-    --tracking-body: 0.029em;
+    --tracking-body: 0.0em;
   }
 }
 @layer base {
