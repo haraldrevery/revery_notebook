@@ -139,7 +139,7 @@ html :is(#preview, .lp-render) .prose b {
   --text-body:        1.22rem;
   --text-body-mobile: 1.07rem;
   --text-line:        1.24;
-  --tracking-body:    0.025em;
+  --tracking-body:    0.01em;
   --tracking-wide:    0.09em;
   --tracking-wider:   0.16em;
   /* ── Outline pane font scale (set via Settings → Outline font size) ── */
