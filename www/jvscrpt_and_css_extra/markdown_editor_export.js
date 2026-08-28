@@ -756,6 +756,7 @@
     const docParts = [
       `\\documentclass${clsOpt}{${desc.documentclass}}`,
       ...engineLines,
+      `\\usepackage{lmodern}`,
       ...languageLines,
       ...desc.preamble(meta, latexEsc),
       ``,
