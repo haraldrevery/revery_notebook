@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label":          "main",
+        "title":          "Revery Notebook",
+        "url":            "index.html",
+        "width":          1280,
+        "height":         800,
+        "minWidth":       640,
+        "minHeight":      480,
+        "resizable":      true,
+        "dragDropEnabled": false
+      }
+    ]
+  }
+}

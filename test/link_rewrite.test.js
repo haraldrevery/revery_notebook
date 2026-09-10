@@ -152,3 +152,21 @@ test('reverse mapping restores the original links (undo path)', async () => {
   });
   assert.equal(back.text, src);
 });
+
+test('windows absolute destinations are paths, not URL schemes', async () => {
+  // A single letter before the colon is a drive, so C:/... must be rewritten
+  // when its target moves — previously it was skipped as a "scheme".
+  const r = await rw('![a](C:/p/img.png)', 'C:/p/img.png', 'C:/p/new.png', 'C:/p');
+  assert.equal(r.text, '![a](C:/p/new.png)');
+  assert.equal(r.changes, 1);
+});
+
+test('windows paths compare case-insensitively when relativising', async () => {
+  const { rewriteLinksInText, buildAbsMapper } = await mod();
+  const r = rewriteLinksInText('![a](img.png)', {
+    fileDirBefore: 'C:\\Users\\H\\Notes',
+    fileDirAfter: 'c:/users/h/notes/sub',
+    mapAbs: buildAbsMapper([]),
+  });
+  assert.equal(r.text, '![a](../img.png)');
+});

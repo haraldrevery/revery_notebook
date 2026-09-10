@@ -3,8 +3,10 @@
    This is the single source of truth for all disk writes of the active
    file. Treat every ordering comment in here as load-bearing. */
 import { S, docTitleEl, folderNameEl, treeEl, expandedDirs, _previewCache,
-         SUPPRESS_MS, SCRATCHPAD_PREFIX, ensureScratchpadVolatileKey } from './state.js';
+         SUPPRESS_MS, SCRATCHPAD_PREFIX, ensureScratchpadVolatileKey,
+         pendingNoteDir } from './state.js';
 import { uniquePath, stripMarkdownForPreview } from './helpers.js';
+import { baseNameOf } from './paths.js';
 import { renderTree, highlightActiveFile } from './tree.js';
 import { startWatchingFile } from './watcher.js';
 import { pushUndo, undoLastOperation } from './fileops.js';
@@ -114,7 +116,7 @@ function mirrorDurableWhileExposed() {
   // Do not interrupt a bulk operation (move, delete, multi‑rename)
   if (S._operationLock) return;
 
-  if (!S.activeFilePath || window._showingUnsupportedFile || S._mediaPreviewMode) return;
+  if (!S.activeFilePath || window._showingUnsupportedFile) return;
 
   const rawName = docTitleEl.value.trim();
   const parts = S.activeFilePath.replace(/\\/g, '/').split('/');
@@ -231,7 +233,7 @@ async function saveActiveFile() {
     const currentBase = S.activeFilePath.replace(/\\/g, '/').split('/').pop()
                        .replace(/\.[^/.]+$/, '');
     const inputName = docTitleEl.value.trim();
-    if (inputName && inputName !== currentBase && !window._showingUnsupportedFile && !S._mediaPreviewMode) {
+    if (inputName && inputName !== currentBase && !window._showingUnsupportedFile) {
       await renameActiveFileFromTitle();
       if (!S.activeFilePath) return false;
     }
@@ -442,47 +444,14 @@ export function initSaveEngine() {
   ══════════════════════════════════════════════════════════════════ */
 
   editor.addEventListener('input', () => {
-    /* ── Media preview mode: create a .md file on the first keystroke ── */
-    if (S._mediaPreviewMode && !S._mediaPreviewMode.fileCreated) {
-      S._mediaPreviewMode.fileCreated = true; // set immediately to prevent re-entry
-      (async () => {
-        const dir      = S._mediaPreviewMode.pendingMdDir;
-        const baseName = S._mediaPreviewMode.mediaPath
-          .replace(/\\/g, '/').split('/').pop()
-          .replace(/\.[^/.]+$/, ''); // strip media extension
-        const newPath  = await uniquePath(dir, baseName, 'md');
-        try {
-          await window.NativeAPI.createFile(newPath);
-          // Write what the user has already typed (current editor content)
-          await window.NativeAPI.writeFile(newPath, editor.value);
-          // Suppress AFTER write — ensures the full window is fresh when
-          // startWatchingFile(newPath) is called moments later.
-          S._suppressWatchUntil = Date.now() + SUPPRESS_MS;
-        } catch (err) {
-          console.error('[Sidebar] media auto-create failed:', err);
-          S._mediaPreviewMode.fileCreated = false; // allow retry
-          return;
-        }
-        S.activeFilePath  = newPath;
-        S._mediaPreviewMode = null;
-        window._showingUnsupportedFile = false;
-        await window.NativeAPI.setLastOpenedFile(newPath);
-        if (docTitleEl) {
-          docTitleEl.value = newPath.replace(/\\/g, '/').split('/').pop()
-                                    .replace(/\.(md|txt)$/, '');
-        }
-        startWatchingFile(newPath);
-        expandedDirs.add(dir);
-        await renderTree();
-        highlightActiveFile(newPath);
-      })();
-      return; // skip dirty-mark until file exists
-    }
-
-
-/* ── Scratchpad mode: Auto-create a .md file if typing in an empty state ── */
-    if (!S.activeFilePath && !S._mediaPreviewMode && !_autoCreatingFile && !window._showingUnsupportedFile) {
-      const targetDir = S.selectedDirPath || S.rootPath;
+/* ── Scratchpad mode: auto-create a .md file when typing with no file open ──
+   Covers the empty editor AND the media preview (fileops.openMediaFile):
+   both are "no active file". The folder is pendingNoteDir() — the same
+   folder media ingest copies into and links resolve against — and while an
+   image is previewed the note takes the image's name and lands beside it.
+   The volatile placeholder key protects the text until the file exists. */
+    if (!S.activeFilePath && !_autoCreatingFile && !window._showingUnsupportedFile) {
+      const targetDir = pendingNoteDir();
       if (targetDir) {
 
         const placeholderKey = ensureScratchpadVolatileKey();
@@ -494,8 +463,11 @@ export function initSaveEngine() {
         }
 
         _autoCreatingFile = true; // Lock to prevent duplicate files if user types fast
+        const baseName = S.previewMediaPath
+          ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, '') // note named after the image
+          : 'untitled';
         (async () => {
-          const newPath = await uniquePath(targetDir, 'untitled', 'md');
+          const newPath = await uniquePath(targetDir, baseName, 'md');
           try {
             await window.NativeAPI.createFile(newPath);
             // Instantly write the first keystrokes to the new file
@@ -520,8 +492,9 @@ export function initSaveEngine() {
             return;
           }
           S.activeFilePath = newPath;
+          S.previewMediaPath = null; // the preview became this note
           _autoCreatingFile = false;
- 
+
           _scratchpadFailureWarned = false;
 
           await window.NativeAPI.setLastOpenedFile(newPath);

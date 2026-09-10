@@ -282,6 +282,17 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
     }
   }
 
+  /* A deleted node (or folder) that held the previewed image ends the
+     preview: the highlight target is gone and the next note must not be
+     named after — or placed beside — a file that no longer exists. */
+  function forgetPreviewIfDeleted(normalNode) {
+    if (!S.previewMediaPath) return;
+    const normalPrev = S.previewMediaPath.replace(/\\/g, '/');
+    if (normalPrev === normalNode || normalPrev.startsWith(normalNode + '/')) {
+      S.previewMediaPath = null;
+    }
+  }
+
   /* ══════════════════════════════════════════════════════════════════
      MULTI-SELECT OPERATIONS  (rename / delete)
   ══════════════════════════════════════════════════════════════════ */
@@ -417,6 +428,7 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
             S.activeFilePath; the other iteration then finds it already null
             and the block is a no-op. */
           const normalNode = p.replace(/\\/g, '/');
+          forgetPreviewIfDeleted(normalNode);
 
           if (S.activeFilePath) {
             const normalActive = S.activeFilePath.replace(/\\/g, '/');
@@ -454,7 +466,18 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
   }
 
   /* ══════════════════════════════════════════════════════════════════
-     OPEN MEDIA FILE  (image/video — show preview, no text load)
+     OPEN MEDIA FILE  (image — show it in the preview; nothing is written)
+
+     Clicking an image previews it and PREPARES a note beside it without
+     creating a file: the editor becomes the ordinary scratchpad (no active
+     file) holding the image link, and S.previewMediaPath tells the rest
+     of the app which image is shown. pendingNoteDir() then points at the
+     image's folder, so the preview resolves the link there, media dropped
+     meanwhile is copied there, and the first keystroke creates the note
+     there — named after the image (save.js). Everything else is the
+     normal scratchpad path: volatile crash backup from the first
+     keystroke, atomic create + write, autosave. No special mode exists in
+     the save engine.
   ══════════════════════════════════════════════════════════════════ */
 
   async function openMediaFile(filePath) {
@@ -464,33 +487,20 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       if (!saved) return;
     }
 
-    /* Clear any previous state */
-    S.activeFilePath                 = null;
-    S._mediaPreviewMode              = null;
+    S.activeFilePath               = null;
     window._showingUnsupportedFile = false;
+    S.previewMediaPath             = filePath;
 
-    /* The media file's own directory is the natural base for the relative
-       path reference.  When the user types and auto-creates a .md file it
-       goes into this same directory, keeping the reference correct.       */
-    const mediaDir   = filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-    const pendingDir = mediaDir || S.selectedDirPath || S.rootPath;
-
-    S._mediaPreviewMode = {
-      mediaPath:    filePath,
-      pendingMdDir: pendingDir,
-      fileCreated:  false,
-    };
-
-    /* Build markdown relative to pendingDir so the path is correct when
-       the auto-created .md is saved there.                               */
-    const mdText = mediaMarkdown(filePath, pendingDir);
+    /* Relative to pendingNoteDir(), i.e. the image's own folder — where
+       the note this preview may become will be created. */
+    const mdText = mediaMarkdown(filePath);
 
     /* Use replaceEditorContent (via setState) rather than performTextChange
        (via dispatch) so that:
          1. The CM history is wiped — Ctrl+Z won't undo back into whatever
             file was open before.
          2. The updateListener is NOT fired, so _inputListeners are skipped
-            and the media auto-create handler doesn't trigger on our own
+            and the scratchpad auto-create doesn't trigger on our own
             programmatic content change.                                   */
     if (typeof window.replaceEditorContent === 'function') {
       window.replaceEditorContent(mdText);
@@ -525,8 +535,8 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       if (!saved) return;
     }
 
-    S.activeFilePath                 = null;
-    S._mediaPreviewMode              = null;
+    S.activeFilePath               = null;
+    S.previewMediaPath             = null;
     window._showingUnsupportedFile = true;
     switchFromMobileSidebar();
 
@@ -559,7 +569,7 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
 
   async function openFile(filePath) {
     /* Clear any special viewing modes */
-    S._mediaPreviewMode              = null;
+    S.previewMediaPath             = null;
     window._showingUnsupportedFile = false;
 
     /* Auto-save current file first — no modal, no friction */
@@ -801,6 +811,7 @@ async function deleteNode(nodePath, type) {
           prefix check prevents "/foo/bar2/x" from being treated as inside
           "/foo/bar". */
         const normalNode = nodePath.replace(/\\/g, '/');
+        forgetPreviewIfDeleted(normalNode);
 
         if (S.activeFilePath) {
           const normalActive = S.activeFilePath.replace(/\\/g, '/');
@@ -882,7 +893,8 @@ async function promptOpenFolder() {
       if (!path) return;
 
       /* Clear the editor BEFORE setting the new root to prevent path-escape races */
-      S.activeFilePath = null;
+      S.activeFilePath   = null;
+      S.previewMediaPath = null;
       await window.NativeAPI.clearLastOpenedFile();
       markClean();
       if (typeof window.replaceEditorContent === 'function') {

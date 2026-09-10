@@ -454,11 +454,12 @@ const lineNumbersCompartment = new Compartment();
   // (window.sidebarListLinkCompletions — resolves with the renderer's own
   // path semantics, read-only, null in web mode so this source is inert).
 
-  /* Minimal CommonMark-safe encoding — same set mediaMarkdown uses, so
-     accepted paths render everywhere (% first!). */
+  /* Link destinations use the app's one encoding rule (src/sidebar/paths.js,
+     exposed as window.ReveryPaths by the sidebar bundle). Completions only
+     exist once that bundle has answered sidebarListLinkCompletions, so the
+     global is present whenever this runs. */
   function _encodeLinkSeg(s) {
-    return s.replace(/%/g, '%25').replace(/ /g, '%20')
-            .replace(/\(/g, '%28').replace(/\)/g, '%29');
+    return window.ReveryPaths.encodeLinkDest(s);
   }
 
   async function linkPathCompletionSource(context) {

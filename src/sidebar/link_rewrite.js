@@ -1,15 +1,10 @@
 /* link_rewrite.js — pure markdown link rewriting for rename/move operations.
-   NO imports, NO DOM: everything takes strings in and returns strings out,
-   so the whole module is unit-tested in plain node (test/link_rewrite.test.js)
-   without a filesystem.
-
-   The algorithm mirrors the RENDERER's own semantics (resolveRelPath /
-   mediaMarkdown in the app) instead of doing text matching: each link
-   destination is decoded, resolved against the containing file's directory,
-   and only rewritten when it resolves to a moved path (or when the file
-   itself moved and its relative links need re-basing). The invariant this
-   buys: any link that rendered correctly before a rename/move renders
-   correctly after it — and links that never resolved are never touched.
+   NO DOM: everything takes strings in and returns strings out, so the whole
+   module is unit-tested in plain node (test/link_rewrite.test.js) without a
+   filesystem. Path spelling comes from paths.js — the same functions the
+   renderer uses — so the invariant holds by construction: any link that
+   rendered correctly before a rename/move renders correctly after it, and
+   links that never resolved are never touched.
 
    Deliberate limits (documented, not bugs):
    - Only markdown syntax `![alt](dest)` / `[text](dest)` (optional "title"),
@@ -19,63 +14,13 @@
    - Any destination with a URL scheme (http:, data:, …) or an anchor (#…)
      is never touched. */
 
-/** Normalize separators; strip one trailing slash (keeps root "/"). */
-function norm(p) {
-  return String(p || '').replace(/\\/g, '/').replace(/(.)\/$/, '$1');
-}
-
-const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
-const ABS_WIN_RE = /^[a-zA-Z]:\//;
-
-function isAbsoluteDest(p) {
-  return p.startsWith('/') || ABS_WIN_RE.test(p);
-}
-
-/** Mirror of the renderer's resolveRelPath: resolve rel against baseDir.
-    Exported: the link-path autocomplete resolves typed folder prefixes with
-    the same semantics, so its suggestions match what will actually render. */
-export function resolveRel(baseDir, rel) {
-  baseDir = norm(baseDir);
-  rel = norm(rel);
-  if (isAbsoluteDest(rel)) return rel;
-  const parts = baseDir.split('/');
-  for (const seg of rel.split('/')) {
-    if (seg === '..') parts.pop();
-    else if (seg !== '.' && seg !== '') parts.push(seg);
-  }
-  return parts.join('/');
-}
-
-/** Mirror of the sidebar's makeRelativePath. */
-function makeRelative(fromDir, toFile) {
-  fromDir = norm(fromDir);
-  toFile = norm(toFile);
-  const fParts = fromDir.split('/');
-  const tParts = toFile.split('/');
-  let common = 0;
-  while (common < fParts.length && common < tParts.length
-         && fParts[common] === tParts[common]) common++;
-  const up = fParts.length - common;
-  return '../'.repeat(up) + tParts.slice(common).join('/');
-}
-
-/** Mirror of mediaMarkdown's minimal CommonMark-safe encoding (% first!). */
-function encodeDest(p) {
-  return p
-    .replace(/%/g, '%25')
-    .replace(/ /g, '%20')
-    .replace(/\(/g, '%28')
-    .replace(/\)/g, '%29');
-}
-
-function decodeSafe(s) {
-  try { return decodeURIComponent(s); } catch (_) { return s; }
-}
+import { normalizePath, isAbsolutePath, hasUrlScheme, resolvePath,
+         relativePath, encodeLinkDest, decodeLinkDest } from './paths.js';
 
 /** Build abs→abs mapper from rename records [{oldPath,newPath}] (prefix-aware
     so folder moves remap every descendant). Returns null for unmoved paths. */
 export function buildAbsMapper(records) {
-  const pairs = records.map((r) => [norm(r.oldPath), norm(r.newPath)]);
+  const pairs = records.map((r) => [normalizePath(r.oldPath), normalizePath(r.newPath)]);
   return (abs) => {
     for (const [o, n] of pairs) {
       if (abs === o) return n;
@@ -105,8 +50,8 @@ const LINK_RE = /(!?)\[([^\]]*)\]\(\s*([^()\s]+)(\s+"[^"]*"|\s+'[^']*')?\s*\)/g;
  * @returns {{text: string, changes: number}}
  */
 export function rewriteLinksInText(text, opts) {
-  const dirBefore = norm(opts.fileDirBefore);
-  const dirAfter = norm(opts.fileDirAfter);
+  const dirBefore = normalizePath(opts.fileDirBefore);
+  const dirAfter = normalizePath(opts.fileDirAfter);
   const mapAbs = opts.mapAbs || (() => null);
   const selfMoved = dirBefore !== dirAfter;
   let changes = 0;
@@ -132,13 +77,13 @@ export function rewriteLinksInText(text, opts) {
     });
 
     const rewritten = masked.replace(LINK_RE, (full, bang, label, dest, title) => {
-      if (SCHEME_RE.test(dest) || dest.startsWith('#')) return full;
+      if (hasUrlScheme(dest) || dest.startsWith('#')) return full;
 
-      const decoded = decodeSafe(dest);
-      if (SCHEME_RE.test(decoded) || decoded.startsWith('#')) return full;
+      const decoded = decodeLinkDest(dest);
+      if (hasUrlScheme(decoded) || decoded.startsWith('#')) return full;
 
-      const wasAbsolute = isAbsoluteDest(norm(decoded));
-      const absOld = resolveRel(dirBefore, decoded);
+      const wasAbsolute = isAbsolutePath(decoded);
+      const absOld = resolvePath(dirBefore, decoded);
       const mapped = mapAbs(absOld);
 
       /* Rewrite when the target moved, or when this file itself moved and
@@ -147,7 +92,7 @@ export function rewriteLinksInText(text, opts) {
 
       const absNew = mapped === null ? absOld : mapped;
       /* Preserve the author's style: absolute stays absolute. */
-      const newDest = encodeDest(wasAbsolute ? absNew : makeRelative(dirAfter, absNew));
+      const newDest = encodeLinkDest(wasAbsolute ? absNew : relativePath(dirAfter, absNew));
       if (newDest === dest) return full;
 
       changes++;

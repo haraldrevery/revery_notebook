@@ -58,27 +58,24 @@ md.renderer.rules.image = function (tokens, idx, options, env, self) {
   return defaultImageRenderer(tokens, idx, options, env, self);
 };
 
-/* ── Resolve a relative path against a base directory ─────────────────────
-   Handles ../ traversal correctly on both Unix and Windows paths.          */
-function resolveRelPath(baseDir, relPath) {
-  // Normalise separators
-  baseDir = baseDir.replace(/\\/g, '/').replace(/\/$/, '');
-  relPath = relPath.replace(/\\/g, '/');
-  if (!relPath || relPath.startsWith('http') || relPath.startsWith('data:')
-      || relPath.startsWith('file:') || relPath.startsWith('asset:')) {
-    return relPath; // already absolute/URL — leave untouched
-  }
-  if (relPath.startsWith('/')) return relPath; // absolute Unix path
-  if (/^[a-zA-Z]:\//.test(relPath)) return relPath; // absolute Windows path
-
-  const parts = baseDir.split('/');
-
-
-  for (const seg of relPath.split('/')) {
-    if (seg === '..') parts.pop();
-    else if (seg !== '.') parts.push(seg);
-  }
-  return parts.join('/');
+/* ── Resolve a markdown link destination to a project file ─────────────
+   Returns the absolute path of the file a link points at, or null when the
+   destination is a URL / data URI, when no project is open, or when it
+   escapes the project root. The path rules AND the base folder come from
+   the sidebar bundle — window.ReveryPaths (src/sidebar/paths.js) and
+   window.sidebarGetLinkBaseDir (the active note's folder, else the folder
+   the next keystroke creates the note in) — so the preview, the live
+   preview, the LaTeX export, the rename-time link rewriter and the link
+   autocomplete all agree on what a link means. Used after every render,
+   when the bundle is long loaded; null (no image) if it is not. */
+function resolveProjectMediaPath(dest) {
+  const P = window.ReveryPaths;
+  if (!P || !dest || P.hasUrlScheme(dest)) return null;
+  const baseDir  = (typeof window.sidebarGetLinkBaseDir === 'function') ? window.sidebarGetLinkBaseDir() : null;
+  const rootPath = (typeof window.sidebarGetRootPath === 'function') ? window.sidebarGetRootPath() : null;
+  if (!baseDir || !rootPath) return null;
+  const abs = P.resolvePath(baseDir, P.decodeLinkDest(dest));
+  return P.isInsideRoot(abs, rootPath) ? abs : null;
 }
 
 /**
@@ -128,53 +125,18 @@ function postProcessImages(root) {
   root = root || preview;
   if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
 
-  // Determine the base directory for resolving relative image paths.
-  const activePath =
-    (typeof window.sidebarGetActiveFilePath === 'function')
-      ? window.sidebarGetActiveFilePath()
-      : null;
-  const rootPath =
-    (typeof window.sidebarGetRootPath === 'function')
-      ? window.sidebarGetRootPath()
-      : null;
-
-  const baseDir = activePath
-    ? activePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-    : (rootPath || '').replace(/\\/g, '/');
-
-  if (!baseDir) return; // nothing to resolve against
-
-    root.querySelectorAll('img').forEach(img => {
+  root.querySelectorAll('img').forEach(img => {
     // Rely on data-src first, as DOMPurify may have stripped the original src
-    let src = img.getAttribute('data-src') || img.getAttribute('src');
+    const src = img.getAttribute('data-src') || img.getAttribute('src');
     if (!src) return;
     // Skip anything that is already an absolute URL or data URI
     if (/^(https?:|data:|file:|asset:|tauri:)/.test(src)) return;
-    /* Markdown link destinations are percent-encoded (spaces, non-ASCII —
-       both ours via mediaMarkdown and markdown-it's own normalization).
-       Decode to the real on-disk name BEFORE resolving, or the wrappers
-       would look for a literal "%20" file (Tauri's asset protocol would
-       even double-encode it). Undecodable %-sequences stay raw. */
-    try { src = decodeURIComponent(src); } catch (_) { /* keep raw */ }
-    const absolutePath = resolveRelPath(baseDir, src);
-
-    // ── Root-containment guard ─────────────────────────────────────────
-    // Reject any resolved path that escapes the project root.
-    // Tauri is already protected by the asset-protocol scope, but Electron
-    // serves unrestricted file:// URLs so we must enforce this ourselves.
-    if (rootPath) {
-      const normalizedRoot = rootPath.replace(/\\/g, '/').replace(/\/$/, '');
-      const normalizedAbs  = absolutePath.replace(/\\/g, '/');
-      if (!normalizedAbs.startsWith(normalizedRoot + '/') &&
-           normalizedAbs !== normalizedRoot) {
-        return; // Path escapes project root — skip this image
-      }
-    } else {
-      // No project root known — cannot verify containment, skip to be safe.
-      return;
-    }
-    // ──────────────────────────────────────────────────────────────────
-
+    /* Markdown destinations are percent-encoded (ours via mediaMarkdown,
+       markdown-it's own normalisation); resolveProjectMediaPath decodes,
+       resolves against the link base folder and enforces root containment
+       — Tauri's asset scope does that too, Electron's file:// does not. */
+    const absolutePath = resolveProjectMediaPath(src);
+    if (!absolutePath) return;
     img.src = window.NativeAPI.toMediaUrl(absolutePath);
   });
 }
@@ -766,34 +728,6 @@ More information, click the ½ logo in the center top of the screen.
 /* ── end boot block ─────────────────────────────────────────────────── */
 
 
-/* ── Sidebar Drag & Drop Editor Insertion ───────────────────────────────── */
-editor.addEventListener('drop', (e) => {
-  const draggedMarkdown = e.dataTransfer.getData('text/plain');
-  
-  if (draggedMarkdown && draggedMarkdown.startsWith('![')) {
-    e.preventDefault();
-    
-    const start = editor.selectionStart;
-    const end   = editor.selectionEnd;
-
-    // Use insertWithUndo so CodeMirror records this as a normal undoable edit,
-    // preserving the full undo history. Also avoids the full-document replacement
-    // that editor.value= causes.
-    insertWithUndo(start, end, draggedMarkdown + '\n');
-
-    // setSelectionRange is the correct CM-shim API; selectionStart has no setter.
-    const newCursor = start + draggedMarkdown.length + 1;
-    editor.setSelectionRange(newCursor, newCursor);
-    
-    render();
-    countWords();
-    
-   // Trigger autosave (web mode only — see input listener note)
-    if (!(window.NativeAPI && window.NativeAPI.isDesktop)) {
-      try { localStorage.setItem('revery_md_autosave', editor.value); } catch(err) {}
-    }
-  }
-});
 
 
 

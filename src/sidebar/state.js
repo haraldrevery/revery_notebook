@@ -37,8 +37,13 @@ export const S = {
   /* sidebarViewMode : 'tree' | 'card'  (persisted to localStorage) */
   sidebarViewMode:  'tree',
   cardViewDir:      null,
-  /* { mediaPath: string, pendingMdDir: string, fileCreated: boolean } */
-  _mediaPreviewMode: null,
+  /* Media file shown in the preview while no note is open (fileops.js
+     openMediaFile). Display + naming only: the tree highlights it, and
+     the scratchpad auto-create (save.js) names the new note after it and
+     places it beside it (pendingNoteDir). Cleared whenever the editor
+     moves on to a file, a folder switch, or the scratchpad creates the
+     note. */
+  previewMediaPath: null,
   selectionAnchor:  null,      // Last non-shift clicked path (range anchor)
   _dragItems:       [],        // [{path, type}] currently being dragged
   /* Serialize async FS operations — prevents simultaneous move/rename/delete
@@ -73,3 +78,29 @@ export function ensureScratchpadVolatileKey() {
     S._scratchpadVolatileKey = SCRATCHPAD_PREFIX + rnd;
     return S._scratchpadVolatileKey;
   }
+
+/* ── Where new content goes and what relative links resolve against ──
+   ONE definition, shared by link building (helpers.mediaMarkdown), media
+   ingest, the scratchpad auto-create (save.js), link-path completion,
+   and — through window.sidebarGetLinkBaseDir — the preview's and the
+   LaTeX export's image resolution:
+     • the active note's folder;
+     • else, while an image is previewed, that image's folder (the note the
+       first keystroke creates is placed beside the image);
+     • else the folder a first keystroke would create the note in: the
+       selected folder, then the project root.
+   Null when no project is open. Returned in the path's OWN spelling
+   (separators untouched) so it compares equal to tree entries and
+   expandedDirs keys; every consumer normalises through paths.js before
+   doing path math. */
+export function pendingNoteDir() {
+  if (S.activeFilePath) return parentDir(S.activeFilePath);
+  if (S.previewMediaPath) return parentDir(S.previewMediaPath) || S.rootPath || null;
+  return S.selectedDirPath || S.rootPath || null;
+}
+
+function parentDir(p) {
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\'));
+  if (i < 0) return '';
+  return i === 0 ? p[0] : p.slice(0, i);
+}

@@ -1,6 +1,7 @@
 /* cards.js — card view: grid rendering, previews, view-mode toggle. */
 import { S, treeEl, btnViewBtn, btnToggleAll, btnSortBtn, selectedItems, _previewCache } from './state.js';
 import { stripMarkdownForPreview, getFileCategory, mediaMarkdown } from './helpers.js';
+import { SIDEBAR_ITEM_MIME } from './drop_transport.js';
 import { sortEntries, renderTree, updateMultiSelectHighlight, showContextMenu } from './tree.js';
 import { openFile, openMediaFile, openUnsupportedFile } from './fileops.js';
 import { icon } from './icons.js';
@@ -68,7 +69,7 @@ let _cardGeneration = 0;
   function buildCard(entry, generation) {
     const category = entry.type === 'dir' ? 'dir' : getFileCategory(entry.name);
     const isActive = (entry.path === S.activeFilePath);
-    const isMediaPrev = (S._mediaPreviewMode && S._mediaPreviewMode.mediaPath === entry.path);
+    const isMediaPrev = (S.previewMediaPath === entry.path);
 
     const card = document.createElement('div');
     card.className   = 'sidebar-card';
@@ -210,9 +211,10 @@ let _cardGeneration = 0;
         .filter(el => selectedItems.has(el.dataset.path))
         .map(el => ({ path: el.dataset.path, type: el.dataset.type }));
 
+      /* Same two payloads as a tree row (see tree.js dragstart). */
       e.dataTransfer.effectAllowed = category === 'media' ? 'copyMove' : 'move';
-      const dragText = category === 'media' ? mediaMarkdown(entry.path) : '';
-      e.dataTransfer.setData('text/plain', dragText);
+      e.dataTransfer.setData(SIDEBAR_ITEM_MIME, entry.path);
+      e.dataTransfer.setData('text/plain', category === 'media' ? mediaMarkdown(entry.path) : '');
 
       requestAnimationFrame(() => {
         treeEl.querySelectorAll('.sidebar-card').forEach(el => {

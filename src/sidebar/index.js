@@ -9,11 +9,13 @@ import { initSaveEngine } from './save.js';
 import { initPanel } from './panel.js';
 import { initFileOps } from './fileops.js';
 import { initDnd } from './dnd.js';
-import { initEditorMedia } from './editor_media.js';
+import { initMediaIngest } from './media_ingest.js';
 import { initCloseHandler, runBoot } from './lifecycle.js';
 import { getYamlIndex } from './yaml_index.js';
 import { initSearch } from './search.js';
 import { listLinkCompletions } from './link_complete.js';
+import { pendingNoteDir } from './state.js';
+import * as paths from './paths.js';
 
 /* YAML autocomplete data feed for the editor (cm_setup.js). Exposed in
    BOTH modes: on desktop it indexes the whole project; in web mode it
@@ -24,6 +26,16 @@ window.sidebarYamlIndex = getYamlIndex;
    media/note listings for `![...](path)` destinations. Returns null in web
    mode (no filesystem), which keeps the completion source inert there. */
 window.sidebarListLinkCompletions = listLinkCompletions;
+
+/* The app's one set of path rules (src/sidebar/paths.js) for the editor
+   scripts: preview image resolution (core_cm.js resolveProjectMediaPath),
+   LaTeX export, link-path completion encoding. Pure functions, both modes. */
+window.ReveryPaths = Object.freeze({ ...paths });
+
+/* The folder relative links resolve against right now (state.js). Null in
+   web mode and before a project is open — the preview then leaves
+   relative image sources untouched. */
+window.sidebarGetLinkBaseDir = pendingNoteDir;
 
 /* ── Guard: desktop only ─────────────────────────────────────────── */
 if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
@@ -40,7 +52,7 @@ if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
   initPanel();
   initFileOps();
   initDnd();
-  initEditorMedia();
+  initMediaIngest();
   initSearch();
   initCloseHandler();
   runBoot();
@@ -53,4 +65,3 @@ if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
   setTimeout(() => { try { getYamlIndex('').catch(() => {}); } catch (_) {} },
              window.slowHardwareMode ? 12000 : 4000);
 }
-

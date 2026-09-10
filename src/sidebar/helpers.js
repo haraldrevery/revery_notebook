@@ -1,14 +1,12 @@
-/* helpers.js — pure-ish utility functions shared across modules. */
-import { S } from './state.js';
+/* helpers.js — pure-ish utility functions shared across modules.
+   Path spelling (resolve / relative / encode / containment) lives in
+   paths.js; this file adds the pieces that need sidebar state or the
+   filesystem. */
+import { pendingNoteDir } from './state.js';
+import { mediaLinkMarkdown } from './paths.js';
 
-  /**
-   * Strip the most distracting markdown syntax so card previews look
-   * like readable prose rather than raw markup.  Light-touch only —
-   * no full parser needed here.
-   */
   /* File bytes → base64 in 32 KB chunks (fromCharCode arg-count limits).
-     Shared by the sidebar drop path (dnd.js keeps a private twin) and the
-     editor media drop/paste path. */
+     Used by the media ingest for DOM File sources. */
   function arrayBufferToBase64(buf) {
     const bytes = new Uint8Array(buf);
     let binary = '';
@@ -19,6 +17,11 @@ import { S } from './state.js';
     return btoa(binary);
   }
 
+  /**
+   * Strip the most distracting markdown syntax so card previews look
+   * like readable prose rather than raw markup.  Light-touch only —
+   * no full parser needed here.
+   */
   function stripMarkdownForPreview(raw) {
     return raw
       .replace(/^---[\s\S]*?---\n?/m, '')      // strip YAML frontmatter
@@ -36,7 +39,7 @@ import { S } from './state.js';
 
   /* ── File category classification ───────────────────────────────────
      text    → editable in the editor (.md, .txt)
-     media   → images/video; click inserts markdown reference
+     media   → images; click previews, drop/drag inserts a markdown link
      other   → all remaining types; shown in orange, cannot be opened   */
   const SUPPORTED_TEXT  = new Set(['.md', '.txt']);
   const SUPPORTED_MEDIA = new Set([
@@ -53,49 +56,16 @@ import { S } from './state.js';
     return 'other';
   }
 
-  /* ── Relative-path helper ────────────────────────────────────────────
-     Returns the POSIX-style relative path from fromDir to toFile.
-     Used when inserting image markdown so paths stay portable.          */
-  function makeRelativePath(fromDir, toFile) {
-    fromDir = fromDir.replace(/\\/g, '/').replace(/\/$/, '');
-    toFile  = toFile.replace(/\\/g, '/');
-    const fParts = fromDir.split('/');
-    const tParts = toFile.split('/');
-    let common = 0;
-    while (common < fParts.length && common < tParts.length
-           && fParts[common] === tParts[common]) common++;
-    const up   = fParts.length - common;
-    const down = tParts.slice(common);
-    return '../'.repeat(up) + down.join('/');
-  }
-
   /**
    * Build the `![name](rel)` markdown for a media file.
    * @param {string} mediaPath  - absolute path to the media file
-   * @param {string} [fromDir] - directory to resolve relative path from.
-   *   Defaults to S.activeFilePath's directory, then S.rootPath.
-   *   Pass the directory of the file that WILL contain this reference.
+   * @param {string} [fromDir]  - folder of the note that WILL contain the
+   *   link. Defaults to pendingNoteDir(): the active note's folder, else
+   *   where the next keystroke creates the note — so a link built while no
+   *   note is open stays correct once it exists.
    */
   function mediaMarkdown(mediaPath, fromDir) {
-    const name = mediaPath.replace(/\\/g, '/').split('/').pop();
-    const baseDir = (fromDir || (
-      S.activeFilePath
-        ? S.activeFilePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-        : (S.rootPath || '').replace(/\\/g, '/')
-    )).replace(/\\/g, '/');
-    const rel = baseDir
-      ? makeRelativePath(baseDir, mediaPath.replace(/\\/g, '/'))
-      : name;
-    /* CommonMark link destinations must not contain raw spaces or
-       unescaped parens — a name like "shot from desk.png" would render
-       as literal text. Encode the minimal set (% first!); the preview's
-       postProcessImages decodes before resolving the real path.        */
-    const relEnc = rel
-      .replace(/%/g, '%25')
-      .replace(/ /g, '%20')
-      .replace(/\(/g, '%28')
-      .replace(/\)/g, '%29');
-    return `![${name}](${relEnc})`;
+    return mediaLinkMarkdown(mediaPath, fromDir || pendingNoteDir());
   }
 
   /**
@@ -202,6 +172,5 @@ import { S } from './state.js';
     });
   }
 
-export { stripMarkdownForPreview, getFileCategory, makeRelativePath,
-         mediaMarkdown, uniqueDestPath, uniquePath, scanBakOrphansIn,
-         reportBakOrphans, arrayBufferToBase64 };
+export { stripMarkdownForPreview, getFileCategory, mediaMarkdown, uniqueDestPath,
+         uniquePath, scanBakOrphansIn, reportBakOrphans, arrayBufferToBase64 };

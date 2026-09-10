@@ -8,6 +8,12 @@
  * sidebarImportFile, sidebarHandleClose.
  */
 (() => {
+  var __defProp = Object.defineProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+
   // src/sidebar/dialogs.js
   function initDialogStyles() {
     (function injectInputDialogStyles() {
@@ -495,6 +501,100 @@
     });
   }
 
+  // src/sidebar/paths.js
+  var paths_exports = {};
+  __export(paths_exports, {
+    baseNameOf: () => baseNameOf,
+    decodeLinkDest: () => decodeLinkDest,
+    dirOf: () => dirOf,
+    encodeLinkDest: () => encodeLinkDest,
+    hasUrlScheme: () => hasUrlScheme,
+    isAbsolutePath: () => isAbsolutePath,
+    isInsideRoot: () => isInsideRoot,
+    isWindowsPath: () => isWindowsPath,
+    mediaLinkMarkdown: () => mediaLinkMarkdown,
+    normalizePath: () => normalizePath,
+    relativePath: () => relativePath,
+    resolvePath: () => resolvePath
+  });
+  var DRIVE_RE = /^[a-zA-Z]:(\/|$)/;
+  var UNC_RE = /^\/\/[^/]/;
+  var SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]+:/;
+  function normalizePath(p) {
+    return String(p || "").replace(/\\/g, "/").replace(/(.)\/$/, "$1");
+  }
+  function isWindowsPath(p) {
+    const n = normalizePath(p);
+    return DRIVE_RE.test(n) || UNC_RE.test(n);
+  }
+  function isAbsolutePath(p) {
+    const n = normalizePath(p);
+    return n.startsWith("/") || DRIVE_RE.test(n);
+  }
+  function hasUrlScheme(s) {
+    return SCHEME_RE.test(String(s || ""));
+  }
+  function dirOf(p) {
+    const n = normalizePath(p);
+    const i = n.lastIndexOf("/");
+    if (i < 0) return "";
+    return i === 0 ? "/" : n.slice(0, i);
+  }
+  function baseNameOf(p) {
+    const n = normalizePath(p);
+    return n.slice(n.lastIndexOf("/") + 1);
+  }
+  function segments(dir) {
+    const n = normalizePath(dir);
+    return n === "/" ? [""] : n.split("/");
+  }
+  function sameSegment(a, b, caseInsensitive) {
+    return caseInsensitive ? a.toLowerCase() === b.toLowerCase() : a === b;
+  }
+  function resolvePath(baseDir, rel) {
+    const r = normalizePath(rel);
+    if (hasUrlScheme(r) || isAbsolutePath(r) || !baseDir) return r;
+    const parts = segments(baseDir);
+    for (const seg of r.split("/")) {
+      if (seg === "..") parts.pop();
+      else if (seg !== "." && seg !== "") parts.push(seg);
+    }
+    return parts.join("/");
+  }
+  function relativePath(fromDir, toFile) {
+    const f = segments(fromDir);
+    const t = normalizePath(toFile).split("/");
+    const ci = isWindowsPath(fromDir) || isWindowsPath(toFile);
+    let common = 0;
+    while (common < f.length && common < t.length && sameSegment(f[common], t[common], ci)) common++;
+    return "../".repeat(f.length - common) + t.slice(common).join("/");
+  }
+  function encodeLinkDest(p) {
+    return String(p).replace(/%/g, "%25").replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
+  }
+  function decodeLinkDest(s) {
+    try {
+      return decodeURIComponent(String(s));
+    } catch (_) {
+      return String(s);
+    }
+  }
+  function isInsideRoot(absPath, rootPath) {
+    const r = normalizePath(rootPath);
+    if (!r) return false;
+    const a = normalizePath(absPath);
+    const ci = isWindowsPath(r);
+    const A = ci ? a.toLowerCase() : a;
+    const R = ci ? r.toLowerCase() : r;
+    if (A === R) return true;
+    return A.startsWith(R === "/" ? "/" : R + "/");
+  }
+  function mediaLinkMarkdown(mediaPath, baseDir) {
+    const name = baseNameOf(mediaPath);
+    const rel = baseDir ? relativePath(baseDir, mediaPath) : name;
+    return `![${name}](${encodeLinkDest(rel)})`;
+  }
+
   // src/sidebar/state.js
   var btnSidebar = document.getElementById("btn-sidebar");
   var sidebarPanel = document.getElementById("project-sidebar");
@@ -525,8 +625,13 @@
     /* sidebarViewMode : 'tree' | 'card'  (persisted to localStorage) */
     sidebarViewMode: "tree",
     cardViewDir: null,
-    /* { mediaPath: string, pendingMdDir: string, fileCreated: boolean } */
-    _mediaPreviewMode: null,
+    /* Media file shown in the preview while no note is open (fileops.js
+       openMediaFile). Display + naming only: the tree highlights it, and
+       the scratchpad auto-create (save.js) names the new note after it and
+       places it beside it (pendingNoteDir). Cleared whenever the editor
+       moves on to a file, a folder switch, or the scratchpad creates the
+       note. */
+    previewMediaPath: null,
     selectionAnchor: null,
     // Last non-shift clicked path (range anchor)
     _dragItems: [],
@@ -556,6 +661,11 @@
     const rnd = Array.from(crypto.getRandomValues(new Uint8Array(6))).map((b) => b.toString(16).padStart(2, "0")).join("");
     S._scratchpadVolatileKey = SCRATCHPAD_PREFIX + rnd;
     return S._scratchpadVolatileKey;
+  }
+  function pendingNoteDir() {
+    if (S.activeFilePath) return dirOf(S.activeFilePath);
+    if (S.previewMediaPath) return dirOf(S.previewMediaPath) || normalizePath(S.rootPath || "") || null;
+    return normalizePath(S.selectedDirPath || S.rootPath || "") || null;
   }
 
   // src/sidebar/helpers.js
@@ -593,23 +703,8 @@
     if (SUPPORTED_MEDIA.has(ext)) return "media";
     return "other";
   }
-  function makeRelativePath(fromDir, toFile) {
-    fromDir = fromDir.replace(/\\/g, "/").replace(/\/$/, "");
-    toFile = toFile.replace(/\\/g, "/");
-    const fParts = fromDir.split("/");
-    const tParts = toFile.split("/");
-    let common = 0;
-    while (common < fParts.length && common < tParts.length && fParts[common] === tParts[common]) common++;
-    const up = fParts.length - common;
-    const down = tParts.slice(common);
-    return "../".repeat(up) + down.join("/");
-  }
   function mediaMarkdown(mediaPath, fromDir) {
-    const name = mediaPath.replace(/\\/g, "/").split("/").pop();
-    const baseDir = (fromDir || (S.activeFilePath ? S.activeFilePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/") : (S.rootPath || "").replace(/\\/g, "/"))).replace(/\\/g, "/");
-    const rel = baseDir ? makeRelativePath(baseDir, mediaPath.replace(/\\/g, "/")) : name;
-    const relEnc = rel.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
-    return `![${name}](${relEnc})`;
+    return mediaLinkMarkdown(mediaPath, fromDir || pendingNoteDir());
   }
   async function uniqueDestPath(targetDir, name, type) {
     const sep = targetDir.endsWith("/") || targetDir.endsWith("\\") ? "" : "/";
@@ -682,6 +777,32 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       buttons: [window.t("OK")]
     });
   }
+
+  // src/sidebar/drop_transport.js
+  function decideFileDropTransport(env, platform) {
+    if (env !== "tauri") return "dom";
+    return /^win/i.test(String(platform || "")) ? "dom" : "native";
+  }
+  function fileDropTransport() {
+    const env = window.NativeAPI ? window.NativeAPI.env : "web";
+    return decideFileDropTransport(env, navigator.platform);
+  }
+  function isOsFileDrop(dt) {
+    if (!dt) return false;
+    if (dt.files && dt.files.length) return true;
+    const types = Array.from(dt.types || []);
+    if (types.includes("Files")) return true;
+    if (types.includes("text/uri-list")) {
+      let list = "";
+      try {
+        list = dt.getData("text/uri-list") || "";
+      } catch (_) {
+      }
+      return /^file:/im.test(list);
+    }
+    return false;
+  }
+  var SIDEBAR_ITEM_MIME = "application/x-revery-path";
 
   // src/sidebar/icons.js
   var ICONS = {
@@ -1204,7 +1325,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   var _renamePromise = null;
   async function renameActiveFileFromTitle() {
     if (S._operationLock) return;
-    if (!S.activeFilePath || window._showingUnsupportedFile || S._mediaPreviewMode) return;
+    if (!S.activeFilePath || window._showingUnsupportedFile) return;
     const rawName = docTitleEl.value.trim();
     const parts = S.activeFilePath.replace(/\\/g, "/").split("/");
     const oldFullName = parts.pop();
@@ -1282,7 +1403,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (docTitleEl) {
         const currentBase = S.activeFilePath.replace(/\\/g, "/").split("/").pop().replace(/\.[^/.]+$/, "");
         const inputName = docTitleEl.value.trim();
-        if (inputName && inputName !== currentBase && !window._showingUnsupportedFile && !S._mediaPreviewMode) {
+        if (inputName && inputName !== currentBase && !window._showingUnsupportedFile) {
           await renameActiveFileFromTitle();
           if (!S.activeFilePath) return false;
         }
@@ -1410,37 +1531,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       highlightActiveFile(newPath);
     };
     editor.addEventListener("input", () => {
-      if (S._mediaPreviewMode && !S._mediaPreviewMode.fileCreated) {
-        S._mediaPreviewMode.fileCreated = true;
-        (async () => {
-          const dir = S._mediaPreviewMode.pendingMdDir;
-          const baseName = S._mediaPreviewMode.mediaPath.replace(/\\/g, "/").split("/").pop().replace(/\.[^/.]+$/, "");
-          const newPath = await uniquePath(dir, baseName, "md");
-          try {
-            await window.NativeAPI.createFile(newPath);
-            await window.NativeAPI.writeFile(newPath, editor.value);
-            S._suppressWatchUntil = Date.now() + SUPPRESS_MS;
-          } catch (err) {
-            console.error("[Sidebar] media auto-create failed:", err);
-            S._mediaPreviewMode.fileCreated = false;
-            return;
-          }
-          S.activeFilePath = newPath;
-          S._mediaPreviewMode = null;
-          window._showingUnsupportedFile = false;
-          await window.NativeAPI.setLastOpenedFile(newPath);
-          if (docTitleEl) {
-            docTitleEl.value = newPath.replace(/\\/g, "/").split("/").pop().replace(/\.(md|txt)$/, "");
-          }
-          startWatchingFile(newPath);
-          expandedDirs.add(dir);
-          await renderTree();
-          highlightActiveFile(newPath);
-        })();
-        return;
-      }
-      if (!S.activeFilePath && !S._mediaPreviewMode && !_autoCreatingFile && !window._showingUnsupportedFile) {
-        const targetDir = S.selectedDirPath || S.rootPath;
+      if (!S.activeFilePath && !_autoCreatingFile && !window._showingUnsupportedFile) {
+        const targetDir = pendingNoteDir();
         if (targetDir) {
           const placeholderKey = ensureScratchpadVolatileKey();
           try {
@@ -1449,8 +1541,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
             console.warn("[Sidebar] scratchpad placeholder volatile failed (non-fatal):", e);
           }
           _autoCreatingFile = true;
+          const baseName = S.previewMediaPath ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, "") : "untitled";
           (async () => {
-            const newPath = await uniquePath(targetDir, "untitled", "md");
+            const newPath = await uniquePath(targetDir, baseName, "md");
             try {
               await window.NativeAPI.createFile(newPath);
               await window.NativeAPI.writeFile(newPath, editor.value);
@@ -1473,6 +1566,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
               return;
             }
             S.activeFilePath = newPath;
+            S.previewMediaPath = null;
             _autoCreatingFile = false;
             _scratchpadFailureWarned = false;
             await window.NativeAPI.setLastOpenedFile(newPath);
@@ -1600,47 +1694,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
 
   // src/sidebar/link_rewrite.js
-  function norm(p) {
-    return String(p || "").replace(/\\/g, "/").replace(/(.)\/$/, "$1");
-  }
-  var SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
-  var ABS_WIN_RE = /^[a-zA-Z]:\//;
-  function isAbsoluteDest(p) {
-    return p.startsWith("/") || ABS_WIN_RE.test(p);
-  }
-  function resolveRel(baseDir, rel) {
-    baseDir = norm(baseDir);
-    rel = norm(rel);
-    if (isAbsoluteDest(rel)) return rel;
-    const parts = baseDir.split("/");
-    for (const seg of rel.split("/")) {
-      if (seg === "..") parts.pop();
-      else if (seg !== "." && seg !== "") parts.push(seg);
-    }
-    return parts.join("/");
-  }
-  function makeRelative(fromDir, toFile) {
-    fromDir = norm(fromDir);
-    toFile = norm(toFile);
-    const fParts = fromDir.split("/");
-    const tParts = toFile.split("/");
-    let common = 0;
-    while (common < fParts.length && common < tParts.length && fParts[common] === tParts[common]) common++;
-    const up = fParts.length - common;
-    return "../".repeat(up) + tParts.slice(common).join("/");
-  }
-  function encodeDest(p) {
-    return p.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
-  }
-  function decodeSafe(s) {
-    try {
-      return decodeURIComponent(s);
-    } catch (_) {
-      return s;
-    }
-  }
   function buildAbsMapper(records) {
-    const pairs = records.map((r) => [norm(r.oldPath), norm(r.newPath)]);
+    const pairs = records.map((r) => [normalizePath(r.oldPath), normalizePath(r.newPath)]);
     return (abs) => {
       for (const [o, n] of pairs) {
         if (abs === o) return n;
@@ -1654,8 +1709,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
   var LINK_RE = /(!?)\[([^\]]*)\]\(\s*([^()\s]+)(\s+"[^"]*"|\s+'[^']*')?\s*\)/g;
   function rewriteLinksInText(text, opts) {
-    const dirBefore = norm(opts.fileDirBefore);
-    const dirAfter = norm(opts.fileDirAfter);
+    const dirBefore = normalizePath(opts.fileDirBefore);
+    const dirAfter = normalizePath(opts.fileDirAfter);
     const mapAbs = opts.mapAbs || (() => null);
     const selfMoved = dirBefore !== dirAfter;
     let changes = 0;
@@ -1680,15 +1735,15 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         return "\0" + (spans.length - 1) + "\0";
       });
       const rewritten = masked.replace(LINK_RE, (full, bang, label, dest, title) => {
-        if (SCHEME_RE.test(dest) || dest.startsWith("#")) return full;
-        const decoded = decodeSafe(dest);
-        if (SCHEME_RE.test(decoded) || decoded.startsWith("#")) return full;
-        const wasAbsolute = isAbsoluteDest(norm(decoded));
-        const absOld = resolveRel(dirBefore, decoded);
+        if (hasUrlScheme(dest) || dest.startsWith("#")) return full;
+        const decoded = decodeLinkDest(dest);
+        if (hasUrlScheme(decoded) || decoded.startsWith("#")) return full;
+        const wasAbsolute = isAbsolutePath(decoded);
+        const absOld = resolvePath(dirBefore, decoded);
         const mapped = mapAbs(absOld);
         if (mapped === null && !(selfMoved && !wasAbsolute)) return full;
         const absNew = mapped === null ? absOld : mapped;
-        const newDest = encodeDest(wasAbsolute ? absNew : makeRelative(dirAfter, absNew));
+        const newDest = encodeLinkDest(wasAbsolute ? absNew : relativePath(dirAfter, absNew));
         if (newDest === dest) return full;
         changes++;
         return `${bang}[${label}](${newDest}${title || ""})`;
@@ -1941,6 +1996,13 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       S._operationLock = false;
     }
   }
+  function forgetPreviewIfDeleted(normalNode) {
+    if (!S.previewMediaPath) return;
+    const normalPrev = S.previewMediaPath.replace(/\\/g, "/");
+    if (normalPrev === normalNode || normalPrev.startsWith(normalNode + "/")) {
+      S.previewMediaPath = null;
+    }
+  }
   async function renameSelectedNodes() {
     if (S._operationLock || selectedItems.size === 0) return;
     if (selectedItems.size === 1) {
@@ -2040,6 +2102,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         try {
           await window.NativeAPI.deleteNode(p);
           const normalNode = p.replace(/\\/g, "/");
+          forgetPreviewIfDeleted(normalNode);
           if (S.activeFilePath) {
             const normalActive = S.activeFilePath.replace(/\\/g, "/");
             if (normalActive === normalNode || normalActive.startsWith(normalNode + "/")) {
@@ -2078,16 +2141,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (!saved) return;
     }
     S.activeFilePath = null;
-    S._mediaPreviewMode = null;
     window._showingUnsupportedFile = false;
-    const mediaDir = filePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
-    const pendingDir = mediaDir || S.selectedDirPath || S.rootPath;
-    S._mediaPreviewMode = {
-      mediaPath: filePath,
-      pendingMdDir: pendingDir,
-      fileCreated: false
-    };
-    const mdText = mediaMarkdown(filePath, pendingDir);
+    S.previewMediaPath = filePath;
+    const mdText = mediaMarkdown(filePath);
     if (typeof window.replaceEditorContent === "function") {
       window.replaceEditorContent(mdText);
     } else {
@@ -2110,7 +2166,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (!saved) return;
     }
     S.activeFilePath = null;
-    S._mediaPreviewMode = null;
+    S.previewMediaPath = null;
     window._showingUnsupportedFile = true;
     switchFromMobileSidebar();
     if (typeof window.replaceEditorContent === "function") {
@@ -2128,7 +2184,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     markClean();
   }
   async function openFile(filePath) {
-    S._mediaPreviewMode = null;
+    S.previewMediaPath = null;
     window._showingUnsupportedFile = false;
     if (S.isDirty && S.activeFilePath) {
       const saved = await saveActiveFile();
@@ -2303,6 +2359,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       try {
         await window.NativeAPI.deleteNode(nodePath);
         const normalNode = nodePath.replace(/\\/g, "/");
+        forgetPreviewIfDeleted(normalNode);
         if (S.activeFilePath) {
           const normalActive = S.activeFilePath.replace(/\\/g, "/");
           if (normalActive === normalNode || normalActive.startsWith(normalNode + "/")) {
@@ -2363,6 +2420,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       const path = await window.NativeAPI.openFolderDialog();
       if (!path) return;
       S.activeFilePath = null;
+      S.previewMediaPath = null;
       await window.NativeAPI.clearLastOpenedFile();
       markClean();
       if (typeof window.replaceEditorContent === "function") {
@@ -2683,7 +2741,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         if (category === "other") itemEl.classList.add("sidebar-unsupported");
         if (entry.path === S.activeFilePath) itemEl.classList.add("active");
         if (selectedItems.has(entry.path)) itemEl.classList.add("multi-selected");
-        if (S._mediaPreviewMode && S._mediaPreviewMode.mediaPath === entry.path) {
+        if (S.previewMediaPath === entry.path) {
           itemEl.classList.add("sidebar-media-active");
         }
         itemEl.appendChild(iconEl);
@@ -2725,8 +2783,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         S._dragItems = getVisibleItems().filter((el) => selectedItems.has(el.dataset.path)).map((el) => ({ path: el.dataset.path, type: el.dataset.type }));
         const dragCategory = getFileCategory(entry.name);
         e.dataTransfer.effectAllowed = dragCategory === "media" ? "copyMove" : "move";
-        const dragText = dragCategory === "media" ? mediaMarkdown(entry.path) : "";
-        e.dataTransfer.setData("text/plain", dragText);
+        e.dataTransfer.setData(SIDEBAR_ITEM_MIME, entry.path);
+        e.dataTransfer.setData("text/plain", dragCategory === "media" ? mediaMarkdown(entry.path) : "");
         requestAnimationFrame(() => {
           treeEl.querySelectorAll(".sidebar-item").forEach((el) => {
             el.classList.toggle("drag-source-active", selectedItems.has(el.dataset.path));
@@ -2963,7 +3021,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   function buildCard(entry, generation) {
     const category = entry.type === "dir" ? "dir" : getFileCategory(entry.name);
     const isActive = entry.path === S.activeFilePath;
-    const isMediaPrev = S._mediaPreviewMode && S._mediaPreviewMode.mediaPath === entry.path;
+    const isMediaPrev = S.previewMediaPath === entry.path;
     const card = document.createElement("div");
     card.className = "sidebar-card";
     card.dataset.path = entry.path;
@@ -3072,8 +3130,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       }
       S._dragItems = Array.from(treeEl.querySelectorAll(".sidebar-card")).filter((el) => selectedItems.has(el.dataset.path)).map((el) => ({ path: el.dataset.path, type: el.dataset.type }));
       e.dataTransfer.effectAllowed = category === "media" ? "copyMove" : "move";
-      const dragText = category === "media" ? mediaMarkdown(entry.path) : "";
-      e.dataTransfer.setData("text/plain", dragText);
+      e.dataTransfer.setData(SIDEBAR_ITEM_MIME, entry.path);
+      e.dataTransfer.setData("text/plain", category === "media" ? mediaMarkdown(entry.path) : "");
       requestAnimationFrame(() => {
         treeEl.querySelectorAll(".sidebar-card").forEach((el) => {
           el.classList.toggle("drag-source-active", selectedItems.has(el.dataset.path));
@@ -3239,104 +3297,127 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     })();
   }
 
-  // src/sidebar/editor_media.js
-  var MEDIA_MAX_BYTES = 20 * 1024 * 1024;
-  function destDirForMedia() {
-    if (S.activeFilePath) {
-      return S.activeFilePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+  // src/sidebar/media_ingest.js
+  var DROP_MAX_BYTES = 20 * 1024 * 1024;
+  var sourceName = (src) => src.kind === "file" ? src.file.name : baseNameOf(src.path);
+  var isMediaSource = (src) => getFileCategory(sourceName(src)) === "media";
+  var filesToSources = (files) => Array.from(files || []).map((file) => ({ kind: "file", file }));
+  var pathsToSources = (paths) => (paths || []).map((path) => ({ kind: "path", path }));
+  async function copySources(sources, targetDir) {
+    const finals = [];
+    const errors = [];
+    for (const src of sources) {
+      const label = sourceName(src);
+      try {
+        let res;
+        if (src.kind === "file") {
+          if (src.file.size > DROP_MAX_BYTES) {
+            errors.push(`${label}: too large (${(src.file.size / 1024 / 1024).toFixed(1)} MB, max 20 MB)`);
+            continue;
+          }
+          let b64;
+          try {
+            b64 = arrayBufferToBase64(await src.file.arrayBuffer());
+          } catch (_) {
+            errors.push(`${label}: could not read (folders can't be dropped here)`);
+            continue;
+          }
+          res = await window.NativeAPI.copyFileIntoFolder(targetDir, src.file.name, b64);
+        } else {
+          res = await window.NativeAPI.copyPathIntoFolder(src.path, targetDir);
+        }
+        finals.push(res.path);
+      } catch (err) {
+        errors.push(`${label}: ${err && err.message || err}`);
+      }
     }
-    return S.rootPath || null;
+    return { finals, errors };
   }
-  async function requireDestDir() {
-    const dir = destDirForMedia();
-    if (!dir) {
-      await window.NativeAPI.showMessageBox({
-        type: "info",
-        title: window.t ? window.t("Add media") : "Add media",
-        message: window.t ? window.t("Open a project folder first.") : "Open a project folder first."
-      });
-      return null;
+  async function withOperationLock(fn) {
+    if (S._operationLock) {
+      if (typeof window.showStatusWarning === "function") {
+        window.showStatusWarning("fs-busy", window.t("Busy \u2014 try again in a moment."), { priority: 5, ttl: 2500 });
+      }
+      return false;
     }
-    return dir;
+    S._operationLock = true;
+    try {
+      await fn();
+      return true;
+    } finally {
+      S._operationLock = false;
+    }
   }
-  function insertMediaLinks(finalPaths) {
-    if (!finalPaths.length) return;
-    const links = finalPaths.map((p) => mediaMarkdown(p)).join("\n");
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
-    window.insertWithUndo(start, end, links + "\n");
-    const cur = start + links.length + 1;
-    editor.setSelectionRange(cur, cur);
-    if (typeof render === "function") render();
-    if (typeof countWords === "function") countWords();
-  }
-  function notifyIssues(errors) {
+  function reportCopyIssues(errors, messageKey) {
     if (!errors.length) return;
     window.NativeAPI.showMessageBox({
       type: "warning",
       title: window.t("Copy Issues"),
-      message: window.t("{n} file(s) could not be added:").replace("{n}", errors.length),
+      message: window.t(messageKey).replace("{n}", errors.length),
       detail: errors.join("\n")
+    }).catch(() => {
     });
   }
-  async function handleEditorMediaFiles(files) {
-    if (!window.NativeAPI || !window.NativeAPI.isDesktop) return false;
-    const media = Array.from(files || []).filter((f) => getFileCategory(f.name) === "media");
-    if (!media.length) return false;
-    if (S._operationLock) return true;
-    const dir = await requireDestDir();
-    if (!dir) return true;
-    S._operationLock = true;
-    try {
-      const finals = [];
-      const errors = [];
-      for (const f of media) {
-        if (f.size > MEDIA_MAX_BYTES) {
-          errors.push(`${f.name}: too large (${(f.size / 1024 / 1024).toFixed(1)} MB, max 20 MB)`);
-          continue;
-        }
-        try {
-          const b64 = arrayBufferToBase64(await f.arrayBuffer());
-          const res = await window.NativeAPI.copyFileIntoFolder(dir, f.name, b64);
-          finals.push(res.path);
-        } catch (err) {
-          errors.push(`${f.name}: ${err && err.message || err}`);
-        }
+  function copyIntoFolder(sources, targetDir) {
+    if (!sources.length || !targetDir) return Promise.resolve(false);
+    return withOperationLock(async () => {
+      const { finals, errors } = await copySources(sources, targetDir);
+      if (finals.length) {
+        expandedDirs.add(targetDir);
+        await renderTree();
       }
-      insertMediaLinks(finals);
-      if (finals.length) await renderTree();
-      notifyIssues(errors);
-    } finally {
-      S._operationLock = false;
-    }
-    return true;
+      reportCopyIssues(errors, "{n} file(s) could not be copied:");
+    });
   }
-  async function handleEditorMediaPaths(paths) {
-    if (!window.NativeAPI || !window.NativeAPI.isDesktop) return false;
-    const media = (paths || []).filter((p) => getFileCategory(p.replace(/\\/g, "/").split("/").pop()) === "media");
-    if (!media.length) return false;
-    if (S._operationLock) return true;
-    const dir = await requireDestDir();
-    if (!dir) return true;
-    S._operationLock = true;
+  function docPosAtClient(x, y) {
     try {
-      const finals = [];
-      const errors = [];
-      for (const p of media) {
-        try {
-          const res = await window.NativeAPI.copyPathIntoFolder(p, dir);
-          finals.push(res.path);
-        } catch (err) {
-          errors.push(`${p}: ${err && err.message || err}`);
-        }
-      }
-      insertMediaLinks(finals);
-      if (finals.length) await renderTree();
-      notifyIssues(errors);
-    } finally {
-      S._operationLock = false;
+      const pos = window.cmView.posAtCoords({ x, y });
+      if (pos != null) return pos;
+    } catch (_) {
     }
-    return true;
+    return editor.selectionStart;
+  }
+  function ingestMediaAt(sources, from, to = from) {
+    const media = sources.filter(isMediaSource);
+    if (!media.length) {
+      if (sources.length) explainNonMediaDrop();
+      return Promise.resolve(false);
+    }
+    const dir = pendingNoteDir();
+    if (!dir) {
+      window.NativeAPI.showMessageBox({
+        type: "info",
+        title: window.t("Add media"),
+        message: window.t("Open a project folder first.")
+      }).catch(() => {
+      });
+      return Promise.resolve(false);
+    }
+    return withOperationLock(async () => {
+      const { finals, errors } = await copySources(media, dir);
+      if (finals.length) {
+        const links = finals.map((p) => mediaMarkdown(p, dir)).join("\n") + "\n";
+        window.insertWithUndo(from, to, links);
+        expandedDirs.add(dir);
+        await renderTree();
+      }
+      reportCopyIssues(errors, "{n} file(s) could not be added:");
+    });
+  }
+  function insertSidebarItem(dataTransfer, at) {
+    const itemPath = dataTransfer.getData(SIDEBAR_ITEM_MIME);
+    if (!itemPath) return;
+    if (getFileCategory(baseNameOf(itemPath)) !== "media") return;
+    window.insertWithUndo(at, at, mediaMarkdown(itemPath) + "\n");
+  }
+  function explainNonMediaDrop() {
+    if (typeof window.showStatusWarning === "function") {
+      window.showStatusWarning(
+        "editor-drop",
+        window.t("Only images can be dropped into a note. Drop other files on the file panel to copy them into the project."),
+        { priority: 5, ttl: 5e3 }
+      );
+    }
   }
   function extFromMime(type) {
     const map = {
@@ -3354,40 +3435,40 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     const p2 = (n) => String(n).padStart(2, "0");
     return `Pasted image ${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.${extFromMime(type)}`;
   }
-  function initEditorMedia() {
+  function initMediaIngest() {
     if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
     const dom = window.cmView && window.cmView.dom;
     if (!dom) return;
+    const transport = fileDropTransport();
     dom.addEventListener("drop", (e) => {
-      const files = e.dataTransfer && e.dataTransfer.files;
-      if (!files || !files.length) return;
-      const anyMedia = Array.from(files).some((f) => getFileCategory(f.name) === "media");
-      if (!anyMedia) return;
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      const types = Array.from(dt.types || []);
+      if (types.includes(SIDEBAR_ITEM_MIME)) {
+        e.preventDefault();
+        e.stopPropagation();
+        insertSidebarItem(dt, docPosAtClient(e.clientX, e.clientY));
+        return;
+      }
+      if (!isOsFileDrop(dt)) return;
       e.preventDefault();
       e.stopPropagation();
-      try {
-        const pos = window.cmView.posAtCoords({ x: e.clientX, y: e.clientY });
-        if (pos != null) editor.setSelectionRange(pos, pos);
-      } catch (_) {
-      }
-      handleEditorMediaFiles(files);
+      if (transport !== "dom") return;
+      ingestMediaAt(filesToSources(dt.files), docPosAtClient(e.clientX, e.clientY));
     }, true);
     dom.addEventListener("paste", (e) => {
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
-      const imgs = Array.from(items).filter(
-        (it) => it.kind === "file" && it.type.startsWith("image/")
-      );
-      if (!imgs.length) return;
+      const images = Array.from(items).filter((it) => it.kind === "file" && it.type.startsWith("image/"));
+      if (!images.length) return;
       e.preventDefault();
       e.stopPropagation();
-      const files = imgs.map((it) => {
+      const files = images.map((it) => {
         const f = it.getAsFile();
         return f ? new File([f], pastedImageName(f.type || it.type), { type: f.type }) : null;
       }).filter(Boolean);
-      handleEditorMediaFiles(files);
+      ingestMediaAt(filesToSources(files), editor.selectionStart, editor.selectionEnd);
     }, true);
-    window.sidebarEditorMediaFiles = handleEditorMediaFiles;
   }
 
   // src/sidebar/dnd.js
@@ -3418,74 +3499,16 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
     return treeEl.querySelector(`.sidebar-dir[data-path="${CSS.escape(dirPath)}"]`);
   }
-  var DROP_MAX_BYTES = 20 * 1024 * 1024;
-  function arrayBufferToBase642(buf) {
-    const bytes = new Uint8Array(buf);
-    let binary = "";
-    const CHUNK = 32768;
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-    }
-    return btoa(binary);
-  }
-  async function copyDroppedSources(sources, targetDir) {
-    if (S._operationLock || !sources.length || !targetDir) return;
-    if (!window.NativeAPI) return;
-    S._operationLock = true;
-    try {
-      const errors = [];
-      let copiedAny = false;
-      for (const src of sources) {
-        const label = src.kind === "file" ? src.file.name : src.path;
-        try {
-          if (src.kind === "file") {
-            const file = src.file;
-            if (file.size > DROP_MAX_BYTES) {
-              errors.push(`${label}: too large (${(file.size / 1024 / 1024).toFixed(1)} MB, max 20 MB)`);
-              continue;
-            }
-            let b64;
-            try {
-              b64 = arrayBufferToBase642(await file.arrayBuffer());
-            } catch (e) {
-              errors.push(`${label}: could not read (folders can't be dropped here)`);
-              continue;
-            }
-            await window.NativeAPI.copyFileIntoFolder(targetDir, file.name, b64);
-          } else {
-            await window.NativeAPI.copyPathIntoFolder(src.path, targetDir);
-          }
-          copiedAny = true;
-        } catch (err) {
-          errors.push(`${label}: ${err && err.message ? err.message : err}`);
-        }
-      }
-      if (copiedAny) {
-        expandedDirs.add(targetDir);
-        await renderTree();
-      }
-      if (errors.length) {
-        await window.NativeAPI.showMessageBox({
-          type: "warning",
-          title: window.t("Copy Issues"),
-          message: window.t("{n} file(s) could not be copied:").replace("{n}", errors.length),
-          detail: errors.join("\n")
-        });
-      }
-    } finally {
-      S._operationLock = false;
-    }
-  }
-  async function copyExternalFilesIntoDir(files, targetDir) {
-    const sources = Array.from(files).map((file) => ({ kind: "file", file }));
-    return copyDroppedSources(sources, targetDir);
+  function clearDropHighlights() {
+    treeEl.querySelectorAll(".drop-target").forEach((el) => el.classList.remove("drop-target"));
+    treeEl.classList.remove("drop-target-root");
   }
   function initDnd() {
+    const transport = fileDropTransport();
     treeEl.addEventListener("dragover", (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = S._dragItems.length ? "move" : "copy";
-      treeEl.querySelectorAll(".drop-target").forEach((el) => el.classList.remove("drop-target"));
-      treeEl.classList.remove("drop-target-root");
+      clearDropHighlights();
       const targetEl = getDropTargetEl(e.target);
       if (targetEl) {
         targetEl.classList.add("drop-target");
@@ -3496,23 +3519,20 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
     treeEl.addEventListener("dragleave", (e) => {
       if (e.relatedTarget && treeEl.contains(e.relatedTarget)) return;
-      treeEl.querySelectorAll(".drop-target").forEach((el) => el.classList.remove("drop-target"));
-      treeEl.classList.remove("drop-target-root");
+      clearDropHighlights();
     });
     treeEl.addEventListener("drop", async (e) => {
       e.preventDefault();
       const targetDir = getDropTargetDir(e.target);
-      treeEl.querySelectorAll(".drop-target").forEach((el) => el.classList.remove("drop-target"));
-      treeEl.classList.remove("drop-target-root");
+      clearDropHighlights();
       if (S._dragItems.length) {
         const itemsToMove = [...S._dragItems];
         S._dragItems = [];
         await moveNodes(itemsToMove, targetDir);
         return;
       }
-      const files = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
-      if (files.length) {
-        await copyExternalFilesIntoDir(files, targetDir);
+      if (isOsFileDrop(e.dataTransfer) && transport === "dom") {
+        await copyIntoFolder(filesToSources(e.dataTransfer.files), targetDir);
       }
     });
     treeEl.addEventListener("click", (e) => {
@@ -3530,45 +3550,45 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       });
       window.addEventListener("drop", (e) => {
         const t = e.target;
-        if (t && t.closest && t.closest("input, textarea")) return;
+        if (t && t.closest && t.closest("input, textarea") && !isOsFileDrop(e.dataTransfer)) return;
         e.preventDefault();
       });
     })();
-    (function installTauriNativeFileDrop() {
-      if (!window.NativeAPI || window.NativeAPI.env !== "tauri") return;
-      const clearHighlights = () => {
-        treeEl.querySelectorAll(".drop-target").forEach((el) => el.classList.remove("drop-target"));
-        treeEl.classList.remove("drop-target-root");
+    (function installNativeFileDrop() {
+      if (transport !== "native" || !window.NativeAPI || window.NativeAPI.env !== "tauri") return;
+      const toClient = (pos) => {
+        const dpr = window.devicePixelRatio || 1;
+        return { x: pos.x / dpr, y: pos.y / dpr };
       };
       const pointToTarget = (pos) => {
         if (!pos) return null;
-        const dpr = window.devicePixelRatio || 1;
-        const el = document.elementFromPoint(pos.x / dpr, pos.y / dpr);
+        const { x, y } = toClient(pos);
+        const el = document.elementFromPoint(x, y);
         if (!el || !el.closest || !el.closest("#sidebar-tree")) return null;
         return { el, dir: getDropTargetDir(el) };
       };
       window.NativeAPI.onNativeFileDrop({
         onOver: (pos) => {
-          clearHighlights();
+          clearDropHighlights();
           const hit = pointToTarget(pos);
           if (!hit) return;
           const targetEl = getDropTargetEl(hit.el);
           if (targetEl) targetEl.classList.add("drop-target");
           else if (hit.dir === S.rootPath) treeEl.classList.add("drop-target-root");
         },
-        onLeave: clearHighlights,
+        onLeave: clearDropHighlights,
         onDrop: (pos, paths) => {
-          clearHighlights();
-          if (!paths || !paths.length) return;
+          clearDropHighlights();
+          if (!paths || !paths.length || !pos) return;
           const hit = pointToTarget(pos);
           if (hit) {
-            copyDroppedSources(paths.map((p) => ({ kind: "path", path: p })), hit.dir);
+            copyIntoFolder(pathsToSources(paths), hit.dir);
             return;
           }
-          const dpr = window.devicePixelRatio || 1;
-          const el = document.elementFromPoint(pos.x / dpr, pos.y / dpr);
+          const { x, y } = toClient(pos);
+          const el = document.elementFromPoint(x, y);
           if (el && el.closest && el.closest("#editor")) {
-            handleEditorMediaPaths(paths);
+            ingestMediaAt(pathsToSources(paths), docPosAtClient(x, y));
           }
         }
       }).catch(() => {
@@ -3918,8 +3938,8 @@ More information, click the \xBD logo in the center top of the screen.
                     try {
                       const dirPath = lastFile.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
                       const entries = await window.NativeAPI.readDirectory(dirPath);
-                      const norm2 = (p) => String(p).replace(/\\/g, "/");
-                      const me = (entries || []).find((e) => norm2(e.path) === norm2(lastFile));
+                      const norm = (p) => String(p).replace(/\\/g, "/");
+                      const me = (entries || []).find((e) => norm(e.path) === norm(lastFile));
                       if (me && typeof me.mtime === "number") fileMtime = me.mtime;
                     } catch (_) {
                     }
@@ -4385,29 +4405,19 @@ Restore these changes, or discard and keep the saved version.`,
   }
 
   // src/sidebar/link_complete.js
-  var SCHEME_RE2 = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
-  var dirOf = (p) => p.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
   async function listLinkCompletions(rawDest) {
     if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return null;
     if (typeof rawDest !== "string") return null;
     const lastSlash = rawDest.lastIndexOf("/");
     const rawDir = lastSlash >= 0 ? rawDest.slice(0, lastSlash + 1) : "";
     const rawSeg = rawDest.slice(lastSlash + 1);
-    let decDir = rawDir;
-    let decSeg = rawSeg;
-    try {
-      decDir = decodeURIComponent(rawDir);
-    } catch (_) {
-    }
-    try {
-      decSeg = decodeURIComponent(rawSeg);
-    } catch (_) {
-    }
-    if (SCHEME_RE2.test(decDir || decSeg)) return null;
-    const baseDir = S.activeFilePath ? dirOf(S.activeFilePath) : S.rootPath.replace(/\\/g, "/");
-    const absDir = resolveRel(baseDir, decDir);
-    const root = S.rootPath.replace(/\\/g, "/").replace(/\/$/, "");
-    if (absDir !== root && !absDir.startsWith(root + "/")) return null;
+    const decDir = decodeLinkDest(rawDir);
+    const decSeg = decodeLinkDest(rawSeg);
+    if (hasUrlScheme(decDir || decSeg)) return null;
+    const baseDir = pendingNoteDir();
+    if (!baseDir) return null;
+    const absDir = resolvePath(baseDir, decDir);
+    if (!isInsideRoot(absDir, S.rootPath)) return null;
     let entries;
     try {
       entries = await window.NativeAPI.readDirectory(absDir);
@@ -4434,6 +4444,8 @@ Restore these changes, or discard and keep the saved version.`,
   // src/sidebar/index.js
   window.sidebarYamlIndex = getYamlIndex;
   window.sidebarListLinkCompletions = listLinkCompletions;
+  window.ReveryPaths = Object.freeze({ ...paths_exports });
+  window.sidebarGetLinkBaseDir = pendingNoteDir;
   if (!window.NativeAPI || !window.NativeAPI.isDesktop) {
     const btn = document.getElementById("btn-sidebar");
     if (btn) btn.style.display = "none";
@@ -4448,7 +4460,7 @@ Restore these changes, or discard and keep the saved version.`,
     initPanel();
     initFileOps();
     initDnd();
-    initEditorMedia();
+    initMediaIngest();
     initSearch();
     initCloseHandler();
     runBoot();

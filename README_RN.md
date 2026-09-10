@@ -73,7 +73,9 @@ the browser (a live demo of the software before you install it).
   every markdown link that points at them (you see the exact files first;
   Ctrl+Z reverses it, links included).
 - Images: drop or paste (screenshots included) straight into a note — the file
-  is copied into your project and a link is inserted.
+  is copied into your project beside the note and a link is inserted. Drag an
+  image from the file panel to link it; click one to preview it and start a
+  note next to it.
 - **Crash safety**: atomic writes (a crash can never leave a half-written
   file), plus a rolling volatile backup of unsaved keystrokes.
 

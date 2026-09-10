@@ -442,6 +442,42 @@ fn safe_path_inside(raw: &str, root: &Path) -> Result<PathBuf, String> {
     Ok(check)
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   PATHS HANDED TO THE FRONTEND
+   The renderer does its path math on '/'-joined strings (relative links,
+   root containment, tree state). Every path that crosses the command
+   boundary must therefore be an ORDINARY OS path. On Windows, std's
+   canonicalize() returns verbatim paths (`\\?\C:\...`, `\\?\UNC\srv\...`);
+   under verbatim rules '/' is not a separator, and a `//?/` prefix defeats
+   every prefix comparison in the renderer (a dropped image's link became a
+   chain of `../` plus the absolute path and never rendered).
+   strip_verbatim_prefix is the pure rule (unit-tested on every OS; mirrors
+   the `dunce` crate: only prefixes whose remainder is a valid plain path
+   are removed, `\\?\Volume{..}` stays). frontend_path applies it where such
+   prefixes can arise and is the ONLY way a command may return a path.
+══════════════════════════════════════════════════════════════════════════ */
+fn strip_verbatim_prefix(p: &str) -> String {
+    if let Some(rest) = p.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = p.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        let is_drive = bytes.len() >= 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes.len() == 2 || bytes[2] == b'\\');
+        if is_drive {
+            return rest.to_string();
+        }
+    }
+    p.to_string()
+}
+
+fn frontend_path(p: &Path) -> String {
+    let s = p.to_string_lossy().into_owned();
+    if cfg!(target_os = "windows") { strip_verbatim_prefix(&s) } else { s }
+}
+
 fn get_root(root_state: &State<'_, RootPath>) -> Result<std::path::PathBuf, String> {
     let guard = root_state.0.lock().unwrap_or_else(|p| p.into_inner());
     match guard.as_ref() {
@@ -617,19 +653,9 @@ let is_trusted = settings["trustedRoots"]
 
             DirEntry {
                 name: e.file_name().to_string_lossy().into_owned(),
-                path: {
-                    let p = e.path().to_string_lossy().into_owned();
-                    // On Windows, read_dir on a canonicalized (\\?\-prefixed) directory
-                    // returns entry paths that also carry the \\?\ prefix.  Under verbatim
-                    // path rules the Windows API does not treat '/' as a separator, which
-                    // breaks the JS path-joining logic in uniqueDestPath (it always joins
-                    // with '/').  Strip the prefix here so the frontend always receives
-                    // ordinary Windows paths.  Internal Rust operations continue to use
-                    // fully canonical paths via safe_path_inside's own canonicalize() call.
-                    #[cfg(target_os = "windows")]
-                    let p = p.strip_prefix(r"\\?\").map(str::to_owned).unwrap_or(p);
-                    p
-                },
+                // read_dir on a canonicalized directory yields canonical entry
+                // paths — on Windows \\?\-prefixed. See frontend_path.
+                path: frontend_path(&e.path()),
                 entry_type: if is_dir { "dir".into() } else { "file".into() },
                 mtime,
                 ctime,
@@ -1458,7 +1484,7 @@ async fn save_file(
                 p.parent().and_then(|dir| {
                     let canonical = dir.canonicalize().ok()?;
                     let _ = app.asset_protocol_scope().allow_directory(&canonical, true);
-                    let dir_str = canonical.to_string_lossy().into_owned();
+                    let dir_str = frontend_path(&canonical);
 
 
                     let new_trust = dir_str.clone();
@@ -2168,7 +2194,9 @@ fn get_last_opened_file(
     lock: State<'_, SettingsLock>,
 ) -> Result<Option<String>, String> {
     let v = read_settings(&app, &lock.0)?;
-    Ok(v["lastOpenedFile"].as_str().map(String::from))
+    // Stored strings may predate frontend_path (a Save As on Windows could
+    // persist a verbatim root); normalising on the way out heals them.
+    Ok(v["lastOpenedFile"].as_str().map(|s| frontend_path(Path::new(s))))
 }
 
 
@@ -2289,7 +2317,7 @@ fn get_last_root_path(
     lock: State<'_, SettingsLock>,
 ) -> Result<Option<String>, String> {
     let v = read_settings(&app, &lock.0)?;
-    let result = v["lastRootPath"].as_str().map(String::from);
+    let result = v["lastRootPath"].as_str().map(|s| frontend_path(Path::new(s)));
 
     // XSS mitigation (unchanged): lastRootPath is attacker-controllable via
     // set_last_root_path. Validate against trustedRoots before granting scope.
@@ -2605,7 +2633,7 @@ fn copy_into_folder(
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or(name);
-    Ok(serde_json::json!({ "name": final_name, "path": final_path.to_string_lossy() }))
+    Ok(serde_json::json!({ "name": final_name, "path": frontend_path(&final_path) }))
 }
 
 
@@ -2688,7 +2716,7 @@ fn copy_path_into_folder(
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or(name);
-    Ok(serde_json::json!({ "name": final_name, "path": final_path.to_string_lossy() }))
+    Ok(serde_json::json!({ "name": final_name, "path": frontend_path(&final_path) }))
 }
 
 
@@ -3010,6 +3038,56 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("create test dir");
         dir
+    }
+
+    /* ── frontend_path / strip_verbatim_prefix ─────────────────────── */
+
+    #[test]
+    fn verbatim_drive_prefix_is_stripped() {
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users\h\notes\a.png"), r"C:\Users\h\notes\a.png");
+        assert_eq!(strip_verbatim_prefix(r"\\?\d:\x"), r"d:\x");
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:"), "C:");
+    }
+
+    #[test]
+    fn verbatim_unc_prefix_becomes_plain_unc() {
+        assert_eq!(strip_verbatim_prefix(r"\\?\UNC\server\share\a.png"), r"\\server\share\a.png");
+    }
+
+    #[test]
+    fn non_plain_verbatim_paths_are_left_alone() {
+        // No plain-path spelling exists for these; stripping would corrupt them.
+        let vol = r"\\?\Volume{b75e2c83-0000-0000-0000-602f00000000}\x";
+        assert_eq!(strip_verbatim_prefix(vol), vol);
+        assert_eq!(strip_verbatim_prefix(r"\\?\pipe\name"), r"\\?\pipe\name");
+    }
+
+    #[test]
+    fn ordinary_paths_are_unchanged() {
+        assert_eq!(strip_verbatim_prefix(r"C:\Users\h\a.png"), r"C:\Users\h\a.png");
+        assert_eq!(strip_verbatim_prefix(r"\\server\share\a.png"), r"\\server\share\a.png");
+        assert_eq!(strip_verbatim_prefix("/home/u/notes/a.png"), "/home/u/notes/a.png");
+        assert_eq!(strip_verbatim_prefix(""), "");
+    }
+
+    #[test]
+    fn frontend_path_is_identity_for_plain_paths_on_every_os() {
+        let p = Path::new("/home/u/notes/a.png");
+        assert_eq!(frontend_path(p), p.to_string_lossy());
+    }
+
+    #[test]
+    fn frontend_path_round_trips_through_read_dir() {
+        // The invariant the renderer relies on: an entry listed by
+        // read_directory equals dir + name in ordinary spelling.
+        let root = test_dir("frontend-path");
+        fs::write(root.join("a.md"), "x").unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        let entry = fs::read_dir(&canonical_root).unwrap().next().unwrap().unwrap();
+        let shown = frontend_path(&entry.path());
+        assert!(!shown.starts_with(r"\\?\"), "{shown}");
+        assert!(shown.ends_with("a.md"), "{shown}");
+        fs::remove_dir_all(&root).ok();
     }
 
     /* ── safe_path ─────────────────────────────────────────────────── */

@@ -2,6 +2,7 @@
    helpers, context menu, active-file highlighting. */
 import { S, treeEl, btnSortBtn, btnToggleAll, expandedDirs, selectedItems, _previewCache } from './state.js';
 import { getFileCategory, mediaMarkdown } from './helpers.js';
+import { SIDEBAR_ITEM_MIME } from './drop_transport.js';
 import { icon } from './icons.js';
 import { renderCards, highlightActiveFileCards } from './cards.js';
 import { openFile, openMediaFile, openUnsupportedFile, createNewFile, createNewFolder,
@@ -350,7 +351,7 @@ async function renderNode(containerEl, dirPath, depth, generation = 0) {   // �
         if (entry.path === S.activeFilePath) itemEl.classList.add('active');
         if (selectedItems.has(entry.path)) itemEl.classList.add('multi-selected');
         /* Highlight if this is the currently previewed media file */
-        if (S._mediaPreviewMode && S._mediaPreviewMode.mediaPath === entry.path) {
+        if (S.previewMediaPath === entry.path) {
           itemEl.classList.add('sidebar-media-active');
         }
         itemEl.appendChild(iconEl);
@@ -402,29 +403,24 @@ async function renderNode(containerEl, dirPath, depth, generation = 0) {   // �
         S._dragItems = getVisibleItems()
           .filter(el => selectedItems.has(el.dataset.path))
           .map(el => ({ path: el.dataset.path, type: el.dataset.type }));
-        /* Firefox and some Electron builds require setData to activate DnD.
-           We also use this text/plain payload to insert into CM when the user
-           drops a sidebar item onto the editor:
-             • media file  → inserts  ![name](relative/path)
-             • text file   → inserts  empty string (no accidental text)
-             • other file  → inserts  empty string                          */
+        /* Two payloads:
+             • SIDEBAR_ITEM_MIME — the item's absolute path. The editor's
+               drop handler (media_ingest.js) recognises our own rows by it
+               and inserts the link itself, relative to the note at DROP
+               time, so CodeMirror's default text insertion never runs.
+             • text/plain — the markdown for media (empty otherwise), so
+               dragging into another application still yields the link.
+               Also what makes some browsers start the drag at all.       */
         const dragCategory = getFileCategory(entry.name);
 
         /* effectAllowed:
              'move'     → files/folders being moved within the sidebar tree
              'copyMove' → media files: can be moved in tree OR copied as a
-                          markdown reference into the CM editor. CM's drop
-                          handler uses dropEffect='copy'; without 'copy' in
-                          effectAllowed the browser cancels the drop silently. */
+                          markdown reference into the editor. Without 'copy'
+                          in effectAllowed the browser cancels that drop.  */
         e.dataTransfer.effectAllowed = dragCategory === 'media' ? 'copyMove' : 'move';
-
-        /* text/plain payload: CM reads this on drop and inserts it at the
-           cursor.  Use the current active file's directory as the base so
-           the relative path is correct for the file the user is editing.  */
-        const dragText = dragCategory === 'media'
-          ? mediaMarkdown(entry.path) // uses S.activeFilePath or S.rootPath as base
-          : '';
-        e.dataTransfer.setData('text/plain', dragText);
+        e.dataTransfer.setData(SIDEBAR_ITEM_MIME, entry.path);
+        e.dataTransfer.setData('text/plain', dragCategory === 'media' ? mediaMarkdown(entry.path) : '');
 
         /* Apply ghost opacity AFTER the drag image is snapshotted */
         requestAnimationFrame(() => {

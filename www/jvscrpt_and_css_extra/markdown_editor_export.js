@@ -474,33 +474,20 @@
     );
 
     /* ── 6. Block images → figure, COLLECTED for the project zip ──────
-       Project-relative sources resolve exactly like postProcessImages
-       (active file dir → root containment); each becomes images/<name>
-       in the archive (basenames deduped, LaTeX-hostile chars swapped).
-       Remote/unresolvable sources keep the old path + advisory note.  */
+       Project-relative sources resolve exactly like the preview
+       (resolveProjectMediaPath: link base folder → root containment);
+       each becomes images/<name> in the archive (basenames deduped,
+       LaTeX-hostile chars swapped). Remote/unresolvable sources keep the
+       old path + advisory note.                                        */
     const collectedImages = [];
     const usedZipNames = new Set();
 
     function registerImage(src) {
-      let decoded = src;
-      try { decoded = decodeURIComponent(src); } catch (_) { /* keep raw */ }
-      if (/^(https?:|data:|file:|asset:|tauri:)/i.test(decoded)) return null;
-      if (typeof resolveRelPath !== 'function') return null;
-      const activePath = (typeof window.sidebarGetActiveFilePath === 'function')
-        ? window.sidebarGetActiveFilePath() : null;
-      const rootPath = (typeof window.sidebarGetRootPath === 'function')
-        ? window.sidebarGetRootPath() : null;
-      if (!rootPath) return null;
-      const baseDir = activePath
-        ? activePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-        : rootPath.replace(/\\/g, '/');
-      const abs = resolveRelPath(baseDir, decoded);
-      const normRoot = rootPath.replace(/\\/g, '/').replace(/\/$/, '');
-      const normAbs  = abs.replace(/\\/g, '/');
-      if (!normAbs.startsWith(normRoot + '/') && normAbs !== normRoot) return null;
+      const abs = (typeof resolveProjectMediaPath === 'function') ? resolveProjectMediaPath(src) : null;
+      if (!abs) return null;
 
       /* LaTeX-safe archive name: swap specials/spaces, dedupe. */
-      let name = decoded.split('/').pop().replace(/[{}%#&$~^\\\s]+/g, '_');
+      let name = window.ReveryPaths.baseNameOf(abs).replace(/[{}%#&$~^\\\s]+/g, '_');
       if (usedZipNames.has(name)) {
         const dot = name.lastIndexOf('.');
         const stem = dot > 0 ? name.slice(0, dot) : name;

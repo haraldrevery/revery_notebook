@@ -36,8 +36,9 @@ revery_notebook/
 │       └── markdown_editor_*.js      ← Editor core, menus, actions, export, sync, find, theme, lang
 │
 ├── src/sidebar/                      ← Sidebar source modules (state, save, tree, cards,
-│                                        fileops, dnd, search, yaml_index, project_scan,
-│                                        link_rewrite [pure, unit-tested], link_complete, …)
+│                                        fileops, dnd, media_ingest, search, yaml_index,
+│                                        project_scan, link_complete, …). Pure + unit-tested:
+│                                        paths [the ONLY path rules], link_rewrite, drop_transport
 ├── electron/
 │   ├── main.js                       ← Main process wiring: window, IPC, policy
 │   ├── fs_core.js                    ← Pure FS logic (atomic writes, settings store) — unit tested
@@ -45,12 +46,15 @@ revery_notebook/
 │   └── preload.js                    ← contextBridge (exposes window.electronAPI)
 ├── tauri/
 │   ├── Cargo.toml / tauri.conf.json  ← Rust deps, window config, CSP
+│   ├── tauri.windows.conf.json       ← Windows-only override (dragDropEnabled:false) — see
+│   │                                    "Media & drag-and-drop"; must mirror the main window
 │   ├── capabilities/                 ← Window permission sets (main + minimal pdf-print-*)
 │   └── src/main.rs                   ← #[tauri::command] implementations + tests
 ├── build_tools/                      ← esbuild scripts (CM bundle + sidebar bundle) +
 │                                        build_css.js (Tailwind one-shot; the standalone
 │                                        Tailwind binaries live here too, gitignored)
-├── test/                             ← node:test suites incl. crash-consistency, links and E2E
+├── test/                             ← node:test suites incl. crash-consistency, paths, links,
+│                                        and two Electron E2Es (web-mode find/export, desktop media)
 ├── svg_icons_to_use/                 ← The ONLY approved icon source (Harald Revery glyphs)
 ├── images_for_installer/             ← Windows installer branding bitmaps (NSIS/WiX specs)
 └── package.json                      ← npm scripts + electron-builder config (incl. NSIS wizard)
@@ -132,7 +136,7 @@ const ENV        = isTauri ? 'tauri' : isElectron ? 'electron' : 'web';
 | Dialogs / window | `showMessageBox` (multi-button routed through an in-page HTML dialog on Tauri), `onWindowClose`, `confirmClose`, `minimizeWindow`, `toggleMaximizeWindow`, `closeWindow`, `setFullscreen`, `showInExplorer` |
 | Settings / pointers | `getLastOpenedFile`/`setLastOpenedFile`/`clearLastOpenedFile`, `getLastRootPath`/`setLastRootPath`, `getPendingRename`/`setPendingRename`, `getProjectHistory`/`setProjectHistory`, `getAppDataPath`, `getDefaultNotesFolder`, `clearAllSettings` |
 | Export | `exportProjectZip` (no args — backend owns source root and destination), `exportLatexZip(tex, images, baseName, bundleFonts)`, `exportPdf(html, opts)` (Electron only — `null` elsewhere), `exportPdfWindow(html)` (Tauri only — dedicated print window) |
-| Media | `toMediaUrl(absPath)` (file:// on Electron, asset protocol on Tauri), `onNativeFileDrop`, `listSystemFonts` (Electron/web: Local Font Access API; Tauri: Rust fontdb) |
+| Media | `toMediaUrl(absPath)` (file:// on Electron, asset protocol on Tauri), `onNativeFileDrop` (Tauri's native drop event — subscribed only where `src/sidebar/drop_transport.js` selects the `native` transport), `listSystemFonts` (Electron/web: Local Font Access API; Tauri: Rust fontdb) |
 
 Feature detection is by METHOD PRESENCE, not by environment name: e.g. the
 exporter checks `typeof NativeAPI.exportPdf === 'function'` (Electron direct
@@ -244,6 +248,60 @@ semantics as the renderer and rewrites only links that resolved to a moved
 path. The user confirms first (dialog lists the exact files); the active
 document is edited in the editor buffer (undoable), other files through the
 atomic write path; undo re-runs the rewriter with the inverse mapping.
+
+### Media & drag-and-drop
+
+One ingest, one path module, one drop transport per platform:
+
+- **`src/sidebar/media_ingest.js`** is the only code that copies dropped or
+  pasted files into the project and inserts media links. A source is either
+  a DOM `File` (bytes → `copyFileIntoFolder`) or an absolute path from the
+  wrapper's native drop event (`copyPathIntoFolder`); both backends create
+  the destination with O_EXCL (unique `name (n).ext`, 20 MB cap, root-jailed).
+  Destination folder and link base are the SAME value, `pendingNoteDir()`
+  (state.js): the active note's folder, else — while an image is previewed —
+  that image's folder, else the folder a first keystroke would create the
+  note in (selected folder → project root). The inserted link is a normal
+  undoable transaction, so it flows through autosave and, with no note open,
+  through the scratchpad auto-create, which uses the same `pendingNoteDir()`.
+- **Editor drops** are handled in the capture phase on the CodeMirror
+  wrapper, so CodeMirror's own drop handler never sees them (it would insert
+  a text file's contents or a `file://` URL). The editor accepts images only;
+  other OS files get a status toast pointing at the file panel. Sidebar rows
+  and cards announce themselves with the `application/x-revery-path` type
+  (`SIDEBAR_ITEM_MIME`); dropping one on the editor inserts the link relative
+  to the note at drop time. `text/plain` still carries the markdown for
+  external targets. There is no drop handler in the editor scripts anymore.
+- **`src/sidebar/drop_transport.js`** decides, once, which channel delivers
+  OS files: `dom` (Electron everywhere; Tauri on Windows) or `native`
+  (Tauri on Linux/macOS — WebKitGTK cannot read dropped File bytes). Exactly
+  one channel copies; the other only prevents defaults. On Windows,
+  `tauri/tauri.windows.conf.json` sets `dragDropEnabled:false` because wry's
+  own drop target otherwise swallows every HTML5 drag inside the page
+  (sidebar→editor links, drag-to-move). `test/tauri_config.test.js` pins the
+  runtime rule to the config and the override to the base window (Tauri
+  merges platform files with RFC 7396, which replaces the whole `windows`
+  array — edit both files when the main window changes).
+- **`src/sidebar/paths.js`** holds every path rule (normalise, resolve,
+  relative, encode/decode, root containment — case-insensitive for Windows
+  spellings). The sidebar imports it; the editor scripts reach it as
+  `window.ReveryPaths`, and the current link base as
+  `window.sidebarGetLinkBaseDir()`. `resolveProjectMediaPath()` in
+  core_cm.js is the single resolver behind the preview, the live-preview
+  widgets and the LaTeX export; the rename-time link rewriter and the
+  link-path autocomplete use the same functions, so a link means the same
+  thing everywhere.
+- **Clicking an image** in the panel previews it and PREPARES a note beside
+  it: the editor becomes the ordinary scratchpad (no active file) holding
+  the image link, `S.previewMediaPath` marks the image (tree highlight +
+  note name). The first keystroke creates `<image-name>.md` next to the
+  image through the normal scratchpad path (volatile crash backup, atomic
+  create + write). No special mode exists in the save engine.
+- Every path the Tauri backend hands to the renderer goes through
+  `frontend_path()` (strips Windows `\\?\` verbatim prefixes that
+  `canonicalize()` produces); Electron paths come from `path.join` on the
+  realpath. `test/media_e2e.test.js` drives the whole flow in the real
+  Electron main (preload + IPC) on a temporary project.
 
 ### Unsaved Changes Guard
 
@@ -368,6 +426,14 @@ collision.
 | Dialog / window | `show_message_box`, `confirm_close`, `minimize_window`, `toggle_maximize_window`, `close_window`, `set_fullscreen`, `show_in_folder` |
 | Settings | `get/set_last_opened_file`, `get/set_last_root_path`, `get/set_pending_rename`, `get/set_project_history`, `get_app_data_path`, `get_default_notes_folder`, `clear_all_settings` |
 | Fonts | `list_system_fonts` (fontdb enumeration — family names only, no paths) |
+
+Every path a command RETURNS (directory entries, copied-file paths,
+`save_file`'s new root, the stored last root / last file) passes through
+`frontend_path()`: on Windows, `canonicalize()` yields verbatim paths
+(`\\?\C:\…`) under which `/` is not a separator and which defeat the
+renderer's prefix and containment checks; `strip_verbatim_prefix()` (unit
+tested) reduces them to ordinary spelling and leaves `\\?\Volume{…}` alone.
+Internal Rust operations keep using fully canonical paths.
 
 ### Managed State
 
@@ -525,8 +591,9 @@ npm run start:tauri
 
 `www/jvscrpt_and_css_extra/project_sidebar.js` is a **generated file**. The
 source of truth is the ES modules in `src/sidebar/` (state, save engine,
-tree, cards, file operations, drag-and-drop, watcher, lifecycle). After
-editing anything there, rebuild the single-file bundle the HTML loads:
+tree, cards, file operations, drag-and-drop, media ingest, paths, watcher,
+lifecycle). After editing anything there, rebuild the single-file bundle the
+HTML loads:
 
 ```bash
 npm run build:sidebar
@@ -650,7 +717,10 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output; `buildZipFromEntries` (LaTeX-project assembler) auto parent-dirs + unsafe-name rejection |
 | `test/link_rewrite.test.js` | The pure link rewriter behind rename/move link-updating: encoding round-trips (%20/%25/parens/unicode), `../` traversal, folder-prefix moves, self-moved files, fenced/inline code opacity, scheme/anchor immunity, undo (inverse-mapping) round-trip |
 | `test/find_e2e.test.js` | Boots the REAL app in Electron and asserts ~19 feature suites: regex worker + ReDoS, slow-hardware mode, backgrounds pipeline, live-preview parity, YAML autocomplete, export builders (PDF/LaTeX incl. Revery templates + engine gating), custom templates, custom fonts, link-path completion gating, Advanced Options, divider/menu interaction, the PDF print page graft |
-| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
+| `test/paths.test.js` | The single path-rule module behind preview, export, link rewriting, autocomplete and media ingest: normalisation, resolve/relative (incl. Windows case-insensitivity), encode/decode round-trips, root containment (sibling-prefix attack, verbatim prefix) |
+| `test/tauri_config.test.js` | Pins the per-platform file-drop transport to the Tauri config: the Windows override mirrors the main window except `dragDropEnabled:false`, and `drop_transport.js` agrees with it |
+| `test/media_e2e.test.js` | Boots the REAL Electron main (preload, IPC, atomic writes) on a temporary project and drives real DragEvent/ClipboardEvent drops: one encoded link per image, preview resolves it, non-media never copied, sidebar payload inserts once, image click previews from its own folder, media dropped while previewing lands beside the note it creates with every link resolving, paste, autosave, no native dialog |
+| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side
 atomic-write strategy — both `fs:write-file` and `dialog:save-file` call
@@ -824,3 +894,16 @@ hit that.
 5. **Tauri v1 compatibility**: The Rust code targets Tauri v2. For v1,
    replace `app.path().app_config_dir()` with `app.path_resolver().app_config_dir()`,
    and use `tauri::api::dialog` instead of `tauri-plugin-dialog`.
+
+6. **HTML5 drag-and-drop on Windows (Tauri)** — ✅ RESOLVED: with wry's
+   drag-drop handler enabled, WebView2's drop target is replaced and no
+   HTML5 drag inside the page reaches the renderer (sidebar→editor links,
+   drag-to-move were dead on Windows). `tauri/tauri.windows.conf.json`
+   disables it there; `src/sidebar/drop_transport.js` routes OS file drops
+   through the DOM on that platform. Linux/macOS keep the native event.
+
+7. **Media links from the Tauri copy commands on Windows** — ✅ RESOLVED:
+   `copy_into_folder`, `copy_path_into_folder` and `save_file` returned
+   `\\?\`-prefixed paths, so a dropped image's link became a chain of `../`
+   plus the absolute path and never rendered. All returned paths now go
+   through `frontend_path()`.
