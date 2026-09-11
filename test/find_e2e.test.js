@@ -159,6 +159,13 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 90000
     latexLanguage: true, latexMetaOverride: true,
   }, 'export builders must honor LaTeX templates/engines/title/TOC/clearpage/newpage-headers and PDF front-page/TOC/@page/A5-A6/per-header-break/font/asset-base options; both menu entries present; brand extbook/article templates force xelatex + report bundled fonts + are gated out under pdflatex; Harald PDF drops title bold + underlines inline bold + shrinks math to match');
 
+  // 13c. LaTeX robustness: nothing may reach TeX raw or mangled
+  assert.deepEqual(r.latexRobust, {
+    headingAfterTable: true, noFalseMath: true, realMathKept: true, footnoteHeading: true,
+    entities: true, itemBracket: true, nestedLists: true, nestingCapped: true, inlineEdges: true,
+    pdflatexUnicode: true, xelatexUnicodeKept: true, crlf: true, dateEscaped: true,
+  }, 'LaTeX export must keep headings after tables, follow texmath\'s $ rule (no false math spans), protect footnotes in headings, decode entities, guard [bracket] items, nest lists (capped at 4), respect CommonMark emphasis edges, and map/replace Unicode pdflatex cannot encode');
+
   // 14. outline +/- buttons scale only the outline font, persisted
   assert.equal(r.outlineFontButtons, true, 'outline font buttons must step and persist the existing setting');
 

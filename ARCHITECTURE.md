@@ -717,6 +717,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output; `buildZipFromEntries` (LaTeX-project assembler) auto parent-dirs + unsafe-name rejection |
 | `test/link_rewrite.test.js` | The pure link rewriter behind rename/move link-updating: encoding round-trips (%20/%25/parens/unicode), `../` traversal, folder-prefix moves, self-moved files, fenced/inline code opacity, scheme/anchor immunity, undo (inverse-mapping) round-trip |
 | `test/find_e2e.test.js` | Boots the REAL app in Electron and asserts ~19 feature suites: regex worker + ReDoS, slow-hardware mode, backgrounds pipeline, live-preview parity, YAML autocomplete, export builders (PDF/LaTeX incl. Revery templates + engine gating), custom templates, custom fonts, link-path completion gating, Advanced Options, divider/menu interaction, the PDF print page graft |
+| `test/latex_compile.test.js` | Builds every document in `helpers/latex_cases.js` through the real exporter (web-mode Electron) and compiles each with pdflatex: headings after tables, false `$` spans, footnotes in headings, `[bracket]` items, deep nesting, entities, Unicode/emoji. Skipped without a display or pdflatex |
 | `test/link_complete.test.js` | The link-path completion feed: desktop-only, root containment (`..` may climb, never leave; absolute/URL quiet), folders+images+notes only, decoded prefix filter with raw `rawSegLength`, `kind` per row, Windows spellings, size cap |
 | `test/paths.test.js` | The single path-rule module behind preview, export, link rewriting, autocomplete and media ingest: normalisation, resolve/relative (incl. Windows case-insensitivity), encode/decode round-trips, root containment (sibling-prefix attack, verbatim prefix) |
 | `test/tauri_config.test.js` | Pins the per-platform file-drop transport to the Tauri config: the Windows override mirrors the main window except `dragDropEnabled:false`, and `drop_transport.js` agrees with it |
@@ -801,6 +802,34 @@ template can never be exported for pdflatex. Options: title page, TOC on
 its own page, page breaks before H1/H2. The backend re-validates every
 image path against the trusted root before reading; fonts can only come
 from the fixed allowlist. Web mode falls back to a single-`.tex` download.
+
+**Markdown → LaTeX rules that keep the output compiling** (all in
+`buildLatexDocument`; the catalogue of documents that used to break lives
+in `test/helpers/latex_cases.js` and `test/latex_compile.test.js` compiles
+every one with a real pdflatex when available):
+- Line endings are normalised to `\n` first; protected blocks (fences,
+  math, tables, figures) become placeholders. A table's match must give
+  back the newline it consumed — otherwise the next heading is glued onto
+  the placeholder and printed as escaped text (`\#\# Title`).
+- Inline `$…$` follows the preview's texmath rule exactly: no space just
+  inside the delimiters, opener not after `\`/digit, closer not before a
+  digit, never across a line. The old any-two-dollars rule made
+  "costs $5 … $10" one math span; headings and `&` inside it reached TeX
+  raw (`Missing $ inserted`).
+- Prose goes through `latexEsc` (the ten specials) after HTML entities are
+  decoded; inline order is CommonMark's (code spans, backslash escapes,
+  links, emphasis with non-space edges, recursive bodies).
+- Headings with footnotes emit `\section[short]{…\protect\footnote{…}}`;
+  list items starting with `[` get `\item {}`; lists nest by indentation,
+  capped at LaTeX's depth of 4; frontmatter `date` is escaped like title
+  and author.
+- Unicode: `SYMBOL_MACROS` maps comparison signs, double arrows, check
+  marks, stars, boxes and Greek to macros under both engines (`amssymb`
+  is in every template, including Book (Revery)); inside math the bare
+  macro is used. Under pdflatex, `sanitizePdflatex` then replaces every
+  remaining character its `utf8` tables lack (measured allowlist) with
+  `?` and lists them in a `% NOTE:` at the top — the export always
+  compiles and says what to change. XeLaTeX output is left untouched.
 
 ### YAML Frontmatter Autocomplete
 

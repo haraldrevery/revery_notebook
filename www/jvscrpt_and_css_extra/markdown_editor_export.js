@@ -211,6 +211,7 @@
       beforeBody: () => `\\mainmatter`,
       preamble: (meta, esc) => [
         `\\usepackage{amsmath}`,
+        `\\usepackage{amssymb}`, // symbol macros (\checkmark, \bigstar…) that latexEsc emits
         `% ── Revery brand fonts (bundled alongside this main.tex) ──`,
         `\\setmainfont{HaraldReveryTextFont}[`,
         `  Path=./, Extension=.ttf,`,
@@ -358,7 +359,12 @@
   function buildLatexDocument(opts) {
     opts = Object.assign({}, DEFAULTS.latex, opts || {});
     const desc = LATEX_TEMPLATES[opts.template] || LATEX_TEMPLATES.article;
-    let raw = editor.value;
+    /* Honor the user's engine when the template supports it; otherwise fall
+       back to the template's first supported engine (a backstop so a stale
+       combo never emits pdflatex for a fontspec-only template). Decided up
+       front: the Unicode pass below is engine-specific. */
+    const engine = desc.engines.includes(opts.engine) ? opts.engine : desc.engines[0];
+    let raw = editor.value.replace(/\r\n?/g, '\n'); // one line-ending dialect for every rule below
 
     /* ── 1. Extract YAML frontmatter metadata ── */
     let metaTitle  = docTitle.value.trim() || 'Untitled';
@@ -373,7 +379,7 @@
         return m ? m[1] : '';
       };
       if (ymlGet('title'))  metaTitle  = ymlGet('title');
-      if (ymlGet('date'))   metaDate   = ymlGet('date');
+      if (ymlGet('date'))   metaDate   = { raw: ymlGet('date') }; // escaped below, once latexEsc's tables exist
       if (ymlGet('author')) metaAuthor = ymlGet('author');
       raw = raw.slice(frontmatterMatch[0].length).replace(/^\r?\n/, '');
     }
@@ -390,10 +396,40 @@
       return '';
     });
 
-    /* ── 3. LaTeX special-char escape (prose only) ── */
+    /* ── 3. LaTeX special-char escape (prose only) ──
+       Beyond the ten TeX specials, notes carry Unicode that pdflatex's
+       utf8 inputenc has no macro for — a FATAL "Unicode character … not
+       set up for use with LaTeX" (measured by compiling every code point
+       of the common ranges against TeX Live's utf8enc.dfu: Greek, the
+       U+2200 math block, check marks, emoji all fail; dashes, curly
+       quotes, …, €, ™ and the four plain arrows pass). SYMBOL_MACROS maps
+       what people actually type in notes to macros that render under
+       BOTH engines (amssymb is in every template); whatever pdflatex
+       still cannot encode is handled by sanitizePdflatex below.        */
+    const GREEK = {
+      'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon', 'ζ': 'zeta', 'η': 'eta',
+      'θ': 'theta', 'ι': 'iota', 'κ': 'kappa', 'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'π': 'pi',
+      'ρ': 'rho', 'σ': 'sigma', 'ς': 'sigma', 'τ': 'tau', 'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi',
+      'ψ': 'psi', 'ω': 'omega', 'Γ': 'Gamma', 'Δ': 'Delta', 'Θ': 'Theta', 'Λ': 'Lambda', 'Ξ': 'Xi',
+      'Π': 'Pi', 'Σ': 'Sigma', 'Υ': 'Upsilon', 'Φ': 'Phi', 'Ψ': 'Psi', 'Ω': 'Omega',
+    };
+    const SYMBOL_MACROS = {
+      '≤': '$\\leq$', '≥': '$\\geq$', '≠': '$\\neq$', '≈': '$\\approx$', '≡': '$\\equiv$', '−': '$-$',
+      '∞': '$\\infty$', '∑': '$\\sum$', '∏': '$\\prod$', '√': '$\\surd$', '∫': '$\\int$', '∂': '$\\partial$',
+      '∈': '$\\in$', '∉': '$\\notin$', '∅': '$\\emptyset$', '∀': '$\\forall$', '∃': '$\\exists$', '∝': '$\\propto$',
+      '∧': '$\\wedge$', '∨': '$\\vee$', '∩': '$\\cap$', '∪': '$\\cup$', '⊂': '$\\subset$', '⊆': '$\\subseteq$',
+      '←': '$\\leftarrow$', '→': '$\\rightarrow$', '↑': '$\\uparrow$', '↓': '$\\downarrow$', '↔': '$\\leftrightarrow$',
+      '⇐': '$\\Leftarrow$', '⇒': '$\\Rightarrow$', '⇔': '$\\Leftrightarrow$', '↦': '$\\mapsto$',
+      '′': '$\\prime$', '″': '$\\prime\\prime$', '∙': '$\\bullet$', '⋅': '$\\cdot$',
+      '✓': '\\checkmark{}', '✔': '\\checkmark{}', '✗': '$\\times$', '✘': '$\\times$',
+      '★': '$\\bigstar$', '☆': '$\\star$', '■': '$\\blacksquare$', '▪': '$\\blacksquare$', '□': '$\\square$',
+    };
+    for (const [ch, name] of Object.entries(GREEK)) SYMBOL_MACROS[ch] = `$\\${name}$`;
+    const SYMBOL_RE = new RegExp('[' + Object.keys(SYMBOL_MACROS).join('') + ']', 'g');
+
     function latexEsc(str) {
       if (!str) return '';
-      return str
+      return String(str)
         .replace(/\\/g, '\x00BKSL\x00')
         .replace(/&/g,  '\\&')
         .replace(/%/g,  '\\%')
@@ -404,12 +440,74 @@
         .replace(/\}/g, '\\}')
         .replace(/~/g,  '\\textasciitilde{}')
         .replace(/\^/g, '\\textasciicircum{}')
-        .replace(/\x00BKSL\x00/g, '\\textbackslash{}');
+        .replace(/\x00BKSL\x00/g, '\\textbackslash{}')
+        .replace(SYMBOL_RE, (ch) => SYMBOL_MACROS[ch]); // after the escapes: macros contain \ and $
+    }
+
+    /* HTML entities the preview (markdown-it) decodes — the export must
+       read the same: "Fish &amp; chips" is "Fish & chips", never "&amp;".
+       Code spans keep entities literal, exactly like the preview. */
+    const NAMED_ENTITIES = {
+      amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', copy: '©', reg: '®', trade: '™',
+      hellip: '…', mdash: '—', ndash: '–', laquo: '«', raquo: '»', ldquo: '“', rdquo: '”', lsquo: '‘',
+      rsquo: '’', times: '×', divide: '÷', deg: '°', euro: '€', pound: '£', middot: '·', bull: '•',
+    };
+    function decodeEntities(str) {
+      return str.replace(/&(#x[0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{2,8});/g, (m, body) => {
+        if (body[0] === '#') {
+          const cp = (body[1] === 'x' || body[1] === 'X') ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+          return (cp > 0 && cp <= 0x10FFFF) ? String.fromCodePoint(cp) : m;
+        }
+        return Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, body) ? NAMED_ENTITIES[body] : m;
+      });
+    }
+
+    /* Inside math the same symbols as bare macros: KaTeX renders "a ≤ b"
+       in $…$, TeX needs \leq. */
+    function mathUnicode(str) {
+      return str.replace(SYMBOL_RE, (ch) => {
+        const macro = SYMBOL_MACROS[ch];
+        if (macro === '$-$') return '-';
+        const m = /^\$((?:\\[a-zA-Z]+)+)\$$/.exec(macro);
+        return m ? m[1] + ' ' : ch;
+      });
+    }
+
+    /* pdflatex only. Code points its utf8 tables define pass; every other
+       character is swapped for '?' and listed in a note at the top, so the
+       export always compiles and the user sees exactly what to change (or
+       picks XeLaTeX, which needs none of this). Invisible format
+       characters (zero-width space, BOM…) are dropped silently. Allowlist
+       = U+0000–017E minus nine gaps, plus the measured extras.          */
+    const PDFLATEX_BAD_LATIN = new Set('ĦħĸĿŀŉŦŧſ');
+    const PDFLATEX_EXTRA_OK = new Set(
+      'ƒǄǅǆǇǈǉǊǋǌǍǎǏǐǑǒǓǔǢǣǦǧǨǩǪǫǰǴǵȘșȚțȲȳȷ' +
+      '‌‐‑‒–—―‖‘’‚“”„†‡•…‰‱‹›※‽⁄⁎⁒₡₤₦₩₫€₱℃№℗℞℠™Ω℧℮←↑→↓〈〉◦◯♪');
+    /* \date{} takes the frontmatter value verbatim — escape it like title
+       and author (the default \today is a macro and must stay bare). */
+    if (metaDate && typeof metaDate === 'object') metaDate = latexEsc(metaDate.raw);
+
+    const droppedForPdflatex = new Set();
+    function sanitizePdflatex(str) {
+      return str
+        .replace(/[​‍‎‏⁠﻿]/g, '')
+        .replace(/[^\x00-\x7F]/gu, (ch) => {
+          const cp = ch.codePointAt(0);
+          if ((cp <= 0x017E && !PDFLATEX_BAD_LATIN.has(ch)) || PDFLATEX_EXTRA_OK.has(ch)) return ch;
+          droppedForPdflatex.add(ch);
+          return '?';
+        });
     }
 
     /* ── 4. Protected-block system ── */
     const protectedBlocks = [];
     let   pbIdx = 0;
+    /* Inline placeholders (step 7) are numbered from ONE counter for the
+       whole document: emphasis bodies recurse into processInlinePart, and
+       a per-call counter let an inner "\x04I0\x05" collide with the outer
+       one already sitting in the same text. Declared here because tables
+       (step 5) already run the inline processor. */
+    let inlineSeq = 0;
     const protect = (latexStr) => {
       const ph = `\x02PH${pbIdx++}\x03`;
       protectedBlocks.push({ ph, content: latexStr });
@@ -431,20 +529,26 @@
     let eqCounter = 0;
     raw = raw.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
       eqCounter++;
-      const trimmedMath = math.trim();
+      const trimmedMath = mathUnicode(math.trim());
       return protect(
         `\\begin{equation}\\label{equation_${eqCounter}}\n${trimmedMath}\n\\end{equation}`
       );
     });
 
-    /* 4c. Inline math $…$ */
-    raw = raw.replace(/(?<!\\)\$([^$]+?)\$/g, (_, math) =>
-      protect(`$${math}$`)
+    /* 4c. Inline math $…$ — the SAME delimiter rule as the preview's
+       texmath: opener not preceded by a backslash or digit, no space just
+       inside either delimiter, closer not followed by a digit, and never
+       across a line break. The old any-two-dollars rule turned
+       "costs $5 … $10" into one math span that swallowed whole paragraphs;
+       headings and & inside it reached LaTeX raw and killed the compile
+       ("Missing $ inserted"). Now such text stays prose, as on screen. */
+    raw = raw.replace(/(?<![\\0-9])\$((?:[^\s\\$])|(?:[^\s$][^$\n]*?[^\s\\$]))\$(?![0-9])/g, (_, math) =>
+      protect(`$${mathUnicode(math)}$`)
     );
 
     /* 4d/e. Bracket math */
-    raw = raw.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => protect(`\\[${math}\\]`));
-    raw = raw.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => protect(`\\(${math}\\)`));
+    raw = raw.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => protect(`\\[${mathUnicode(math)}\\]`));
+    raw = raw.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => protect(`\\(${mathUnicode(math)}\\)`));
 
     /* ── 5. Markdown tables ── */
     let tableIdx = 0;
@@ -469,7 +573,10 @@
         }
         tex += `\\end{tabular}\n` +
                `\\caption{Table ${tableIdx}}\n\\label{table_${tableIdx}}\n\\end{table}`;
-        return protect(tex);
+        /* The match consumes the last row's line break; give it back, or the
+           next line (a heading, a list…) is glued onto the placeholder and
+           parsed as plain text — "## After table" printed literally. */
+        return protect(tex) + (block.endsWith('\n') ? '\n' : '');
       }
     );
 
@@ -523,32 +630,40 @@
     function processInlinePart(text) {
       if (!text) return '';
       const ip  = [];
-      let   ii  = 0;
-      const iSave = (s) => { const p = `\x04I${ii++}\x05`; ip.push({ p, s }); return p; };
+      const iSave = (s) => { const p = `\x04I${inlineSeq++}\x05`; ip.push({ p, s }); return p; };
 
-      text = text.replace(/\*\*\*(.+?)\*\*\*/g, (_, t) => iSave(`\\textbf{\\textit{${latexEsc(t)}}}`));
-      text = text.replace(/___(.+?)___/g,         (_, t) => iSave(`\\textbf{\\textit{${latexEsc(t)}}}`));
-      text = text.replace(/\*\*(.+?)\*\*/g,  (_, t) => iSave(`\\textbf{${latexEsc(t)}}`));
-      text = text.replace(/__(.+?)__/g,       (_, t) => iSave(`\\textbf{${latexEsc(t)}}`));
-      text = text.replace(/\*([^*\n]+?)\*/g,  (_, t) => iSave(`\\textit{${latexEsc(t)}}`));
-      text = text.replace(/(?<![\\a-zA-Z0-9])_([^_\n]+?)_(?![a-zA-Z0-9])/g,
-                                              (_, t) => iSave(`\\textit{${latexEsc(t)}}`));
-      text = text.replace(/~~(.+?)~~/g,       (_, t) => iSave(`\\sout{${latexEsc(t)}}`));
+      /* Order follows CommonMark precedence: code spans bind tightest, then
+         backslash escapes, then links and emphasis. Emphasis bodies recurse,
+         so **bold with `code`** nests instead of printing backticks, and
+         markers need a non-space right inside them, so "5 * 3 * 2" and
+         "a_b_c" stay literal — the same reading the preview gives them.  */
       text = text.replace(/`([^`\n]+)`/g,     (_, c) => iSave(`\\texttt{${latexEsc(c)}}`));
+      text = text.replace(/\\([\\`*_{}\[\]()#+\-.!|~<>$&%^])/g, (_, c) => iSave(latexEsc(c)));
       text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
-                          (_, a, s) => iSave(`\\textit{[Image: ${latexEsc(a || s)}]}`));
+                          (_, a, sSrc) => iSave(`\\textit{[Image: ${latexEsc(a || sSrc)}]}`));
       text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
-                          (_, t, u) => iSave(`\\href{${u}}{${latexEsc(t)}}`));
+                          (_, t, u) => iSave(`\\href{${u}}{${processInlinePart(t)}}`));
       text = text.replace(/\[\^([^\]]+)\]/g, (_, id) => {
         const def = footnoteMap[id.trim()];
-        return iSave(`\\footnote{${latexEsc(def || id)}}`);
+        return iSave(`\\footnote{${def !== undefined ? processInlinePart(def) : latexEsc(id)}}`);
       });
+      text = text.replace(/\*\*\*(?!\s)(.+?)(?<!\s)\*\*\*/g, (_, t) => iSave(`\\textbf{\\textit{${processInlinePart(t)}}}`));
+      text = text.replace(/___(?!\s)(.+?)(?<!\s)___/g,       (_, t) => iSave(`\\textbf{\\textit{${processInlinePart(t)}}}`));
+      text = text.replace(/\*\*(?!\s)(.+?)(?<!\s)\*\*/g,     (_, t) => iSave(`\\textbf{${processInlinePart(t)}}`));
+      text = text.replace(/__(?!\s)(.+?)(?<!\s)__/g,         (_, t) => iSave(`\\textbf{${processInlinePart(t)}}`));
+      text = text.replace(/\*(?![\s*])([^*\n]+?)(?<![\s\\])\*/g, (_, t) => iSave(`\\textit{${processInlinePart(t)}}`));
+      text = text.replace(/(?<![\\a-zA-Z0-9])_(?!\s)([^_\n]+?)(?<!\s)_(?![a-zA-Z0-9])/g,
+                                              (_, t) => iSave(`\\textit{${processInlinePart(t)}}`));
+      text = text.replace(/~~(?!\s)(.+?)(?<!\s)~~/g,         (_, t) => iSave(`\\sout{${processInlinePart(t)}}`));
 
       text = text.split(/(\x04I\d+\x05)/).map((part, idx) =>
-        idx % 2 === 1 ? part : latexEsc(part)
+        idx % 2 === 1 ? part : latexEsc(decodeEntities(part))
       ).join('');
 
-      for (const { p, s } of ip) text = text.split(p).join(s);
+      /* Newest first: a saved string may itself contain an older
+         placeholder (\textbf{… \texttt{code} …}), which must still be
+         in the text when its own turn comes. */
+      for (let k = ip.length - 1; k >= 0; k--) text = text.split(ip[k].p).join(ip[k].s);
       return text;
     }
 
@@ -591,6 +706,18 @@
       return cand;
     };
 
+    /* Heading command with a footnote-safe title: \footnote inside a
+       \section argument breaks the TOC/bookmarks ("Argument of \@sect has
+       an extra }"), so such headings get \protect plus a footnote-free
+       short title for the TOC — the standard LaTeX idiom. */
+    const headingTex = (level, title) => {
+      const full = processInline(title);
+      if (!full.includes('\\footnote{')) return `${cmds[level - 1]}{${full}}`;
+      const short = processInline(title.replace(/\[\^[^\]]+\]/g, ''));
+      const safeShort = short.includes(']') ? `{${short}}` : short;
+      return `${cmds[level - 1]}[${safeShort}]{${full.split('\\footnote{').join('\\protect\\footnote{')}}`;
+    };
+
     const lines  = raw.split('\n');
     const output = [];
     let i = 0;
@@ -620,7 +747,7 @@
         if (splitLevel && level <= splitLevel) {
           output.push(`\x02SEC:${sectionSlug(title)}\x03`);
         }
-        output.push(`${cmds[level - 1]}{${processInline(title)}}`);
+        output.push(headingTex(level, title));
         i++; continue;
       }
 
@@ -637,45 +764,65 @@
         }
         const parsedQLines = qLines.map(l => {
           const ht = l.trim().match(/^(#{1,6})(?:\s+(.*?)(?:\s+#+)?)?$/);
-          if (ht) {
-            const title = ht[2] || '';
-            return `${cmds[ht[1].length - 1]}{${processInline(title)}}`;
-          }
+          if (ht) return headingTex(ht[1].length, ht[2] || '');
           return processInline(l);
         });
         output.push(`\\begin{quote}\n${parsedQLines.join('\n')}\n\\end{quote}`);
         continue;
       }
 
-      if (/^\d+\.\s/.test(trimmed)) {
+      /* Lists — bullet, numbered and task items — NESTED by indentation
+         (two or more extra spaces open a level; the old flat loops dropped
+         every level). Depth is capped at LaTeX's limit of 4: a fifth
+         \begin{itemize} is a fatal "Too deeply nested", so deeper items stay
+         on level 4. Indented marker-less lines are lazy continuations of
+         the previous item. A blank line ends the list. */
+      if (/^(?:[-*+]|\d+[.)])\s/.test(trimmed)) {
+        const LIST_ITEM_RE = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
         const items = [];
-        while (i < lines.length && /^\s*\d+\.\s/.test(lines[i])) {
-          items.push(lines[i].replace(/^\s*\d+\.\s+/, ''));
+        while (i < lines.length && !/^\s*$/.test(lines[i])) {
+          const lm = lines[i].match(LIST_ITEM_RE);
+          if (lm) {
+            items.push({ indent: lm[1].replace(/\t/g, '    ').length, ordered: /\d/.test(lm[2]), text: lm[3] });
+          } else if (items.length && /^\s{2,}\S/.test(lines[i])) {
+            items[items.length - 1].text += ' ' + lines[i].trim();
+          } else break;
           i++;
         }
-        output.push(
-          `\\begin{enumerate}\n` +
-          items.map(t => `  \\item ${processInline(t)}`).join('\n') +
-          `\n\\end{enumerate}`
-        );
-        continue;
-      }
-
-      if (/^[-*+]\s/.test(trimmed)) {
-        const items = [];
-        while (i < lines.length && /^\s*[-*+]\s/.test(lines[i])) {
-          items.push(lines[i]);
-          i++;
-        }
-        const itemLines = items.map(l => {
-          const tm = l.match(/^\s*[-*+]\s+\[( |x|X)\]\s+(.*)/);
-          if (tm) {
-            const checked = tm[1].toLowerCase() === 'x';
-            return `  \\item[${checked ? '$\\boxtimes$' : '$\\square$'}] ${processInline(tm[2])}`;
+        const itemTex = (text) => {
+          const tm = text.match(/^\[( |x|X)\]\s+(.*)$/);
+          if (tm) return `\\item[${tm[1].toLowerCase() === 'x' ? '$\\boxtimes$' : '$\\square$'}] ${processInline(tm[2])}`;
+          const body = processInline(text);
+          /* "\item [note]" would read [note] as the label — {} stops that. */
+          return `\\item ${body.startsWith('[') ? '{}' : ''}${body}`;
+        };
+        const out = [];
+        const stack = []; // open environments, innermost last: { indent, env }
+        const pad = () => '  '.repeat(stack.length);
+        const closeDeeperThan = (indent) => {
+          while (stack.length && stack[stack.length - 1].indent > indent) {
+            const { env } = stack.pop();
+            out.push(`${pad()}\\end{${env}}`);
           }
-          return `  \\item ${processInline(l.replace(/^\s*[-*+]\s+/, ''))}`;
-        });
-        output.push(`\\begin{itemize}\n${itemLines.join('\n')}\n\\end{itemize}`);
+        };
+        for (const it of items) {
+          const env = it.ordered ? 'enumerate' : 'itemize';
+          closeDeeperThan(it.indent);
+          const top = stack[stack.length - 1];
+          if (!top || (it.indent >= top.indent + 2 && stack.length < 4)) {
+            out.push(`${pad()}\\begin{${env}}`);
+            stack.push({ indent: it.indent, env });
+          } else if (top.env !== env && it.indent < top.indent + 2) {
+            /* Same level, other kind: swap the environment. */
+            stack.pop();
+            out.push(`${pad()}\\end{${top.env}}`);
+            out.push(`${pad()}\\begin{${env}}`);
+            stack.push({ indent: top.indent, env });
+          }
+          out.push(`${pad()}${itemTex(it.text)}`);
+        }
+        closeDeeperThan(-1);
+        output.push(out.join('\n'));
         continue;
       }
 
@@ -687,6 +834,7 @@
 
     /* ── 9. Restore protected blocks ── */
     let body = restoreProtected(output.join('\n'));
+    if (engine !== 'xelatex') body = sanitizePdflatex(body); // before the section split: files get it too
 
     /* Cut the body at the sentinels into sections/<slug>.tex files; the
        main document keeps anything before the first split heading inline
@@ -704,13 +852,9 @@
       body = mainParts.filter(Boolean).join('\n\n');
     }
 
-    /* ── 10. Assemble the .tex document from the template descriptor ──
-       Honor the user's engine when the template supports it; otherwise fall
-       back to the template's first supported engine (a backstop so a stale
-       combo never emits pdflatex for a fontspec-only template). */
+    /* ── 10. Assemble the .tex document from the template descriptor ── */
     const paper = LATEX_PAPER_SIZES.includes(opts.paperSize) ? opts.paperSize : 'a4paper';
     const meta = { title: metaTitle, author: metaAuthor, date: metaDate, paper };
-    const engine = desc.engines.includes(opts.engine) ? opts.engine : desc.engines[0];
     const engineLines = (engine === 'xelatex')
       ? [`% Compile with xelatex`, `\\usepackage{fontspec}`]
       : [`% Compile with pdflatex`, `\\usepackage[utf8]{inputenc}`, `\\usepackage[T1]{fontenc}`];
@@ -756,7 +900,17 @@
       `\\end{document}`,
       ``
     ];
-    const tex = docParts.join('\n').replace(/\n{3,}/g, '\n\n');
+    let tex = docParts.join('\n').replace(/\n{3,}/g, '\n\n');
+    if (engine !== 'xelatex') {
+      tex = sanitizePdflatex(tex); // title/author from the preamble too
+      if (droppedForPdflatex.size) {
+        /* The note is a TeX comment, so the listed characters never reach
+           inputenc; it is added AFTER the pass for exactly that reason. */
+        tex = tex.replace('% Compile with pdflatex',
+          `% Compile with pdflatex\n% NOTE: pdflatex cannot encode these characters; they were replaced by "?": ` +
+          `${Array.from(droppedForPdflatex).join(' ')} — export with XeLaTeX for full Unicode.`);
+      }
+    }
 
     return { tex, images: collectedImages, baseName: exportBaseName(), fonts: desc.bundleFonts || [], sections };
   }

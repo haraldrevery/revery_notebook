@@ -1215,7 +1215,7 @@
      option form requires the per-language .ldf package and fails with
      "Unknown option 'swedish'" on minimal TeX installs. */
   const texSv = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', language: 'swedish' });
-  exportSuite.latexLanguage = /fontenc\}\s*\n\\usepackage\{babel\}\s*\n\\babelprovide\[import, main\]\{swedish\}/.test(texSv.tex)
+  exportSuite.latexLanguage = /fontenc\}\s*\n\\usepackage\{lmodern\}\s*\n\\usepackage\{babel\}\s*\n\\babelprovide\[import, main\]\{swedish\}/.test(texSv.tex)
     && !texSv.tex.includes('[swedish]{babel}')
     && texSv.tex.indexOf('{babel}') < texSv.tex.indexOf('{amsmath}')
     && !window.exporterBuildLatex({ language: 'none' }).tex.includes('babel')
@@ -1295,6 +1295,48 @@
     customTemplates.deleted = gone.ok === true
       && !subLabels('#toolbar-dropdown').some((t) => t.includes('E2E Tmpl'))
       && !(stored().yaml || []).some((t) => t.label === 'E2E Tmpl');
+  }
+
+  /* 11f. LaTeX robustness — the documents that used to reach TeX raw or
+     mangled (test/helpers/latex_cases.js compiles the full catalogue with
+     pdflatex; these are the string-level facts behind each fix). */
+  const latexRobust = {};
+  {
+    const buildTex = (doc, o) => {
+      replaceEditorContent(doc);
+      return window.exporterBuildLatex(Object.assign({ template: 'article', engine: 'pdflatex', titlePage: false, toc: false }, o || {})).tex;
+    };
+    /* A table's regex swallowed the trailing newline: the next heading was
+       glued onto the placeholder and printed as escaped text. */
+    latexRobust.headingAfterTable = /\\end\{table\}\n\\subsection\{After table\}/.test(
+      buildTex('| a | b |\n|---|---|\n| 1 | 2 |\n## After table\n\ntext'));
+    /* "$5 … $10" across paragraphs is prose (texmath's rule), not a math
+       span swallowing the heading and the & (fatal in TeX). */
+    const priced = buildTex('It costs $5 today.\n\n## Prices & taxes\n\nAnd $10 tomorrow, R&D says 50% more.');
+    latexRobust.noFalseMath = priced.includes('\\$5 today') && priced.includes('\\subsection{Prices \\& taxes}')
+      && priced.includes('R\\&D says 50\\% more');
+    const realMath = buildTex('Inline $x_1 + y$ stays, $a ≤ b$ maps, and $ 5 spaced $ does not.');
+    latexRobust.realMathKept = realMath.includes('$x_1 + y$') && /\$a \\leq\s+b\$/.test(realMath)
+      && realMath.includes('\\$ 5 spaced \\$');
+    latexRobust.footnoteHeading = buildTex('## Heading with note[^a]\n\n[^a]: the note & more')
+      .includes('\\subsection[Heading with note]{Heading with note\\protect\\footnote{the note \\& more}}');
+    const ent = buildTex('Fish &amp; chips, 3 &lt; 4 &gt; 2, `&amp;` literal');
+    latexRobust.entities = ent.includes('Fish \\& chips, 3 < 4 > 2') && ent.includes('\\texttt{\\&amp;}');
+    const items = buildTex('- [note] text after\n- [x] done task');
+    latexRobust.itemBracket = items.includes('\\item {}[note] text after') && items.includes('\\item[$\\boxtimes$] done task');
+    latexRobust.nestedLists = /\\begin\{itemize\}\n\s*\\item a\n\s*\\begin\{itemize\}\n\s*\\item b \\& c\n\s*\\begin\{enumerate\}\n\s*\\item d\n\s*\\end\{enumerate\}\n\s*\\end\{itemize\}\n\s*\\item e\n\\end\{itemize\}/
+      .test(buildTex('- a\n  - b & c\n    1. d\n- e'));
+    latexRobust.nestingCapped = (buildTex('- 1\n  - 2\n    - 3\n      - 4\n        - 5\n          - 6').match(/\\begin\{itemize\}/g) || []).length === 4;
+    latexRobust.inlineEdges = buildTex('**bold with `code` inside** and 5 * 3 * 2 and \\*lit\\* and snake_case_x')
+      .includes('\\textbf{bold with \\texttt{code} inside} and 5 * 3 * 2 and *lit* and snake\\_case\\_x');
+    const uni = buildTex('Done 🎉 and → arrow, ≠ ok, α too');
+    latexRobust.pdflatexUnicode = uni.includes('Done ? and $\\rightarrow$ arrow, $\\neq$ ok, $\\alpha$ too')
+      && uni.includes('% NOTE: pdflatex cannot encode these characters') && uni.includes('🎉');
+    const xe = buildTex('Done 🎉', { engine: 'xelatex' });
+    latexRobust.xelatexUnicodeKept = xe.includes('Done 🎉') && !xe.includes('% NOTE: pdflatex');
+    latexRobust.crlf = buildTex('# Title\r\n\r\n## Sub & more\r\n\r\ntext\r\n').includes('\\subsection{Sub \\& more}');
+    latexRobust.dateEscaped = buildTex('---\ntitle: T\ndate: 50% done & more\n---\n\ntext').includes('\\date{50\\% done \\& more}');
+    replaceEditorContent('---\ntitle: My Doc\nauthor: Ada\n---\n\n# Intro\n\nBody **text**.\n\n## Sub\n\n$x^2$\n');
   }
 
   /* 11g. Link-path autocomplete: the data feed must exist, and in WEB mode
@@ -1581,5 +1623,5 @@
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
            lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
            outlineFontButtons, exportSuite, customTemplates, linkComplete, advanced,
-           pdfPrintWindow, customFonts, customLogo };
+           pdfPrintWindow, customFonts, customLogo, latexRobust };
 })()
