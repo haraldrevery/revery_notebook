@@ -221,3 +221,88 @@ block. The E2E suite asserts computed-style EQUALITY between
 `.lp-render` and `#preview` (h1 font, paragraph size, code font+size,
 table cells, KaTeX size, image full-width) — the regression class the
 user reports were about.
+
+## 9. v2 pointer model (clicks and drags)
+
+User soak surfaced two pointer defects: clicks that landed on the wrong
+line or at column 0, and drag-selection that either selected nothing or
+flickered ("marks the wrong row"). Both had one cause: the block widget
+owned the mouse itself — `ignoreEvent()` returned true and a widget
+`mousedown` listener estimated the source line from the click's
+VERTICAL FRACTION of the rendered block, dispatched a cursor and stopped
+there. CodeMirror never saw the gesture, so no drag could start on a
+rendered block; and the reveal rule ("any selection range that
+intersects a block reveals it") meant that dragging over a rendered
+block flipped it to raw text under the pointer, which changed the
+layout, which changed where the pointer mapped, which flipped the next
+block — a feedback loop.
+
+The fix hands the mouse back to CodeMirror and only answers the one
+question CodeMirror cannot: *what document position does a pointer
+event over rendered content mean?*
+
+- **`EditorView.mouseSelectionStyle`** (installed only with the live
+  preview extension) drives every gesture through CodeMirror's own
+  MouseSelection — document-level move/up listeners, autoscroll at the
+  viewport edges, shift-extend, click-inside-selection drag detection,
+  focus. The widgets' `ignoreEvent()` now returns false for `mousedown`
+  (true for everything else, and for interactive children: copy
+  buttons, task checkboxes).
+- **Click mapping.** The renderer's `source_map` rule stamps every
+  top-level markdown-it token with `data-sl`/`data-sl-end` (lines within
+  the block's own text). A click resolves the caret under the pointer
+  (`caretPositionFromPoint`/`caretRangeFromPoint`), takes the nearest
+  stamped ancestor for the source LINE range, and aligns the rendered
+  text before the caret against that source segment to find the COLUMN:
+  characters are found at their next occurrence (everything skipped is
+  markup — `**`, `[`, `> `, bullets, fences), whitespace is ignored on
+  both sides, typographer output that does not exist in the source
+  consumes one character, and images / KaTeX / footnote refs / `](url)`
+  tails enter as opaque tokens that jump over their markdown. Heuristic
+  by construction: a miss lands at a nearby column on the right line,
+  never in another block. Clicks on the widget's own frame (beside a
+  narrower table) still route to the nearest position outside the block.
+- **Reveal rule** (the drag-stability half). A block is raw when the
+  cursor is in it (edges included) or when a range's ANCHOR is in it
+  (edges included — where the user started never collapses under them).
+  The HEAD never reveals a markdown block: a range that reaches into a
+  rendered block leaves it rendered, and a range that spans one selects
+  it as a unit. So nothing changes layout while a pointer drags — the
+  only reveal is the click that started it. Select-all keeps everything
+  rendered except the block the anchor sits in. (The YAML pill box is not
+  linear text; a head inside it still reveals the raw frontmatter.)
+- **Character-precise selection across rendered blocks.** During a drag
+  the pointer over a rendered block maps through the same caret-to-source
+  alignment as a click, so the head lands on the exact character; a
+  pointer beside the content column (or over the YAML box) maps to the
+  block's far side instead. Because drawSelection cannot paint inside a
+  widget — its band stops at the widget's edge — a `ViewPlugin` paints
+  the selection there in the measure phase: a spanned block gets
+  `lp-selected` (CSS outline, since code blocks and images hide the band);
+  a block the range reaches into gets the covered rendered text
+  highlighted through the CSS Custom Highlight API
+  (`::highlight(revery-lp-selection)`), mapping the source offsets back to
+  rendered DOM points with the aligner run in reverse — so what is painted
+  is what is selected, and copying yields the source markdown. Without
+  the API such a block falls back to the outline. Native selection is
+  hidden inside widgets (CodeMirror only hides it under `.cm-line`).
+  Keyboard extension (Shift+Arrow) into a rendered block behaves the same
+  way; typing then replaces the selected source.
+- **Row pinning** after a click is a `requestMeasure` read/write in the
+  same frame: it scrolls only by the drift of the clicked source row from
+  the pointer (zero when the reflow left it in place) and is void if the
+  document changed before the frame ran (file switch).
+- **Repeat clicks** (double = word, triple = line) are counted here,
+  reusing the first click's mapped position, so a double-click on a
+  rendered word selects that word even though the raw text has shifted
+  under the pointer after the reveal. Right-click on a rendered block
+  places the cursor there (the context menu acts on it) and never drags.
+
+Verified by `test/livepreview_e2e.test.js`, which reproduces every
+symptom on the old code (cursor at column 0, no drag from a widget, the
+spanned block flipping) and asserts the new properties through real DOM
+mouse events. Harness note: the hidden Electron window's
+`requestAnimationFrame` is unreliable, so the driver forces CodeMirror's
+measure cycle (`view.coordsAtPos`) where a visible window would simply
+have painted the next frame — that is what applies pending
+scroll-into-view targets, the pin and the marker.

@@ -1,5 +1,5 @@
 /* In-page driver for the find/replace E2E check. Evaluated by
-   executeJavaScript from find_e2e_main.js — must be a single expression
+   executeJavaScript from web_e2e_main.js — must be a single expression
    that resolves to a plain serializable object. Relies on the classic
    (non-module) script scope of markdown_editor_find_cm.js: its top-level
    functions and bindings (openFindBar, findInput, findMatches, …) are

@@ -7,9 +7,10 @@
  * the global markdown-it instance (hljs highlight hook, footnote and
  * texmath/KaTeX plugins) followed by DOMPurify, wrapped in the preview's
  * own `.prose` container so the prose stylesheet and the dynamic
- * ui-scale compensation apply identically. Blocks intersecting the
- * selection stay raw editable text; blank lines between blocks stay raw
- * (natural cursor targets). Click a rendered block to edit it.
+ * ui-scale compensation apply identically. Blocks the user is editing
+ * stay raw editable text (see the reveal rule); blank lines between
+ * blocks stay raw (natural cursor targets). Click a rendered block to
+ * edit it.
  *
  * The document text is never modified by rendering: saving, autosave,
  * crash backup, find/replace and undo all operate on the raw markdown
@@ -17,10 +18,19 @@
  * never a broken editor.
  *
  * Block replace decorations are forbidden from view plugins, so the
- * whole engine is a single StateField. It rebuilds on doc changes and
- * on selection changes only when some block's active/rendered status
- * actually flips; widget `eq` on the block's source text means typing
- * in the active block never re-renders the others.
+ * whole engine is a single StateField. It rebuilds on doc changes, when
+ * the parser delivers a new tree, and on selection changes only when
+ * some block's revealed/rendered status actually flips; widget `eq` on
+ * the block's source text means typing in the active block never
+ * re-renders the others.
+ *
+ * POINTER MODEL (the second half of this file): CodeMirror owns every
+ * mouse gesture through EditorView.mouseSelectionStyle; this file only
+ * decides what document position a pointer event means — a click on
+ * rendered text maps to THAT text in the source (renderer source-line
+ * stamps + text alignment), a drag extends character by character into
+ * rendered blocks (which stay rendered, the covered part painted in
+ * place), everything on raw text is the default posAtCoords.
  *
  * This file only defines window.buildLivePreviewExtension(). Installation
  * is owned by menus.js (setLivePreviewMode) through the compartment hook
@@ -33,7 +43,7 @@
     console.warn('[LivePreview] CM bundle lacks required exports — feature unavailable.');
     return;
   }
-  const { Decoration, WidgetType, syntaxTree, StateField, EditorView, keymap, Prec } = CM;
+  const { Decoration, WidgetType, ViewPlugin, syntaxTree, StateField, EditorView, keymap, Prec } = CM;
 
   /* End offset of a YAML frontmatter block at the very start of the doc,
      or 0. CommonMark would otherwise misparse it: the fences become
@@ -54,6 +64,12 @@
      HTML — replacing them with a widget would leave a zero-height hole.
      They stay raw instead. */
   const KEEP_RAW = new Set(['LinkReference']);
+
+  /* Children of a rendered block that keep their own pointer behaviour
+     (copy buttons, task checkboxes): CodeMirror never treats a mousedown
+     on them as a selection, and they never steal the editor's focus.   */
+  const INTERACTIVE = '.code-copy-btn, .lp-task-checkbox, input, button';
+  const isInteractive = (target) => !!(target && target.closest && target.closest(INTERACTIVE));
 
   /* ── Rendering: the classic preview's exact pipeline ─────────────────
      md (markdown-it + hljs + footnote + texmath) and DOMPurify are
@@ -128,6 +144,26 @@
     });
   }
 
+  /* Shared widget-DOM wiring for both widget kinds:
+       • interactive children keep their behaviour but must not take the
+         editor's focus on mousedown (a <button>/<input> focuses itself by
+         default — typing right after copying a snippet used to go nowhere);
+       • the app must never open links — same policy as everywhere else;
+         the wrapper nav-guards are the backstop, this stops it locally;
+       • rendered images/links are not draggable: a browser drag of an
+         <img> carries the file itself, and dropping it back on the
+         editor would import a duplicate copy into the project.       */
+  function wireWidgetDom(wrap) {
+    wrap.addEventListener('mousedown', (e) => {
+      if (isInteractive(e.target)) e.preventDefault();
+    });
+    wrap.addEventListener('click', (e) => {
+      const a = e.target.closest('a');
+      if (a) e.preventDefault();
+    });
+    wrap.querySelectorAll('img, a').forEach((el) => { el.draggable = false; });
+  }
+
   /* ── The block widget ────────────────────────────────────────────────
      DOM mirrors the preview pane's structure: a `.prose prose-lg
      max-w-none mx-auto` container (core_cm.js render()) inside an
@@ -165,106 +201,27 @@
           img.addEventListener('error', () => view.requestMeasure());
         });
       }
-      /* Click-to-edit: place the cursor in the block, which reveals its
-         raw markdown. Interactive children (copy button, checkboxes)
-         keep their own behavior.                                       */
-      attachClickToEdit(wrap, this.src);
-      /* The app must never open links — same policy as everywhere else.
-         The wrapper nav-guards are the backstop; this stops it locally. */
-      wrap.addEventListener('click', (e) => {
-        const a = e.target.closest('a');
-        if (a) e.preventDefault();
-      });
+      wireWidgetDom(wrap);
       return wrap;
     }
-    /* true = CodeMirror never ALSO handles events on the widget. With
-       false, CM's own pointer handling dispatched a competing cursor
-       placement for every mousedown — which is why clicking the copy
-       button (or a task checkbox) used to flip the block to raw. Our
-       DOM listeners above fully own widget interaction.               */
-    ignoreEvent() { return true; }
-  }
-
-  /* Shared click-to-edit wiring for rendered block widgets (markdown
-     blocks AND the YAML pill box): map the click's vertical position to
-     a source line, pin that line under the pointer through the reflow,
-     and dispatch as a POINTER selection — semantically true, and it lets
-     the YAML autocomplete's click-to-open listener react to it.
-     `resolvePos(e, view)` (optional) lets a widget supply an exact doc
-     position for a click target (the YAML pills do); returning null
-     falls back to the vertical-fraction estimate.                     */
-  function attachClickToEdit(wrap, src, resolvePos) {
-    wrap.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.code-copy-btn') || e.target.closest('.lp-task-checkbox')) return;
-      e.preventDefault();
-      const view2 = window.cmView;
-      if (!view2) return;
-      let pos;
-      try { pos = view2.posAtDOM(wrap); } catch (_) { return; }
-      /* MARGINAL clicks — on the widget's own empty frame rather than any
-         rendered content — route the cursor to the nearest position
-         OUTSIDE the block instead of revealing it. This is the "clicked
-         near the edge of the raw text but the neighbouring block got
-         selected" fix: the neighbour's hit-box starts exactly where the
-         raw text ends, so a near-miss must fall back to the raw side. */
-      const marginal = e.target === wrap
-        || (e.target.classList && e.target.classList.contains('prose'));
-      if (marginal) {
-        const blockFrom = pos;
-        const blockTo = Math.min(view2.state.doc.length, blockFrom + src.length);
-        const rect0 = wrap.getBoundingClientRect();
-        const upper = rect0.height > 0 && e.clientY < rect0.top + rect0.height / 2;
-        pos = upper ? Math.max(0, blockFrom - 1)
-                    : Math.min(view2.state.doc.length, blockTo + 1);
-      } else {
-        let resolved = null;
-        if (resolvePos) {
-          try { resolved = resolvePos(e, view2); } catch (_) { resolved = null; }
-        }
-        if (resolved != null) {
-          pos = Math.max(0, Math.min(resolved, view2.state.doc.length));
-        } else {
-          /* Refine to the clicked line: estimate from the click's vertical
-             position within the rendered block. Falls back to the start. */
-          try {
-            const rect = wrap.getBoundingClientRect();
-            if (rect.height > 0) {
-              const frac = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-              const lines = src.split('\n');
-              const lineIdx = Math.min(lines.length - 1, Math.floor(frac * lines.length));
-              for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
-            }
-          } catch (_) { /* keep block start */ }
-        }
-      }
-      /* Pin the clicked line under the pointer: the widget→raw swap
-         (and the previous active block re-collapsing) changes content
-         heights, so a plain scrollIntoView makes the view jump. The
-         y:'start' + yMargin effect scrolls so the clicked source line
-         sits exactly at the pointer's height after the reflow.       */
-      let scrollEffect;
-      try {
-        const scrollRect = view2.scrollDOM.getBoundingClientRect();
-        const lineH = view2.defaultLineHeight || 24;
-        const yMargin = Math.max(0, Math.min(
-          e.clientY - scrollRect.top,
-          view2.scrollDOM.clientHeight - 3 * lineH));
-        scrollEffect = EditorView.scrollIntoView(pos, { y: 'start', yMargin });
-      } catch (_) { /* fall back to no scroll adjustment */ }
-      view2.dispatch(scrollEffect
-        ? { selection: { anchor: pos }, effects: scrollEffect, userEvent: 'select.pointer' }
-        : { selection: { anchor: pos }, userEvent: 'select.pointer' });
-      view2.focus();
-    });
+    /* CodeMirror handles a mousedown on the widget (lpMouseSelection
+       below maps it to a source position) unless it targets an
+       interactive child, which keeps its own behaviour. Every other
+       event stays the widget's own: CM's handlers (drag, copy, …) must
+       never treat rendered DOM as editable content.                   */
+    ignoreEvent(event) {
+      if (event.type !== 'mousedown') return true;
+      return isInteractive(event.target);
+    }
   }
 
   /* ── YAML frontmatter widget ─────────────────────────────────────────
      Renders the frontmatter as the SAME "Properties" pill box the
      classic preview/reader shows (shared buildYamlRenderHtml in
      markdown_editor_core_cm.js — escapeHtml'd there). Clicking a pill
-     places the cursor on that source line, which reveals the raw YAML
-     and pops the suggestions menu (the pointer-selection contract with
-     yamlClickToComplete in cm_setup.js).                              */
+     places the cursor on that source line (posInYamlWidget), which
+     reveals the raw YAML and pops the suggestions menu (the pointer-
+     selection contract with yamlClickToComplete in cm_setup.js).     */
   class YamlWidget extends WidgetType {
     constructor(src) { super(); this.src = src; }
     eq(other) { return other.src === this.src; }
@@ -284,29 +241,39 @@
         wrap.textContent = this.src;
         wrap.classList.add('lp-render-fallback');
       }
-      /* Clicking a PILL lands the cursor at the start of that key's first
-         value (pills carry data-start = doc offset of their source line),
-         so the suggestions menu opens with the FULL value list for
-         exactly that key. Elsewhere in the box: line-fraction fallback. */
-      attachClickToEdit(wrap, this.src, (e, view) => {
-        const pill = e.target.closest ? e.target.closest('.yaml-pill') : null;
-        if (!pill || !pill.dataset || pill.dataset.start === undefined) return null;
-        const ds = parseInt(pill.dataset.start, 10);
-        if (!Number.isFinite(ds)) return null;
-        const line = view.state.doc.lineAt(Math.max(0, Math.min(ds, view.state.doc.length)));
-        const colon = line.text.indexOf(':');
-        if (colon === -1) return line.from;
-        let p = colon + 1;
-        while (p < line.text.length && /[\s\[]/.test(line.text[p])) p++;
-        return line.from + p;
-      });
+      wireWidgetDom(wrap);
       return wrap;
     }
-    /* CM must never ALSO handle events on the widget: its own pointer
-       handling would dispatch a competing cursor placement at the widget
-       boundary (which closed the menu before it could open).          */
-    ignoreEvent() { return true; }
+    ignoreEvent(event) {
+      if (event.type !== 'mousedown') return true;
+      return isInteractive(event.target);
+    }
   }
+
+  /* ── Reveal rule ─────────────────────────────────────────────────────
+     A block shows its raw markdown while the user is EDITING it:
+       • the cursor (empty selection) sits anywhere in it, edges included;
+       • a selection range STARTS in it — the anchor is where the user
+         began (the click that revealed the block), edges included, so a
+         block never collapses under a drag that started inside it.
+     The HEAD of a range never reveals a markdown block: a selection that
+     reaches into a rendered block leaves it rendered and the covered part
+     is painted inside the rendered text (paintSelection), exactly like
+     selecting across formatted text in a WYSIWYG editor; a block the
+     range spans entirely is selected as a unit (drawSelection's band +
+     the lp-selected outline). So nothing changes layout while a pointer
+     drags — the only reveal is the click that started it — which is
+     what keeps drags stable. Select-all likewise keeps everything
+     rendered except the block the anchor sits in.
+     The YAML pill box is not linear text, so a head inside it reveals
+     the raw frontmatter as before.                                    */
+  function revealedBy(from, to, r, linear) {
+    if (r.empty) return r.head >= from && r.head <= to;
+    if (r.anchor >= from && r.anchor <= to) return true;
+    return !linear && r.head > from && r.head < to;
+  }
+  const isRevealed = (selection, from, to, linear = true) =>
+    selection.ranges.some((r) => revealedBy(from, to, r, linear));
 
   /* ── Block segmentation + decoration build ───────────────────────── */
   function buildBlocks(state) {
@@ -314,8 +281,7 @@
     const ranges = [];
     const blockRanges = [];
     const fmEnd = frontmatterEnd(doc);
-    const selRanges = state.selection.ranges;
-    const intersects = (from, to) => selRanges.some((r) => r.from <= to && r.to >= from);
+    const sel = state.selection;
 
     const tree = syntaxTree(state);
     for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
@@ -324,8 +290,8 @@
       const from = doc.lineAt(node.from).from;
       const to = doc.lineAt(Math.min(node.to, doc.length)).to;
       if (to <= from) continue;
-      blockRanges.push({ from, to });
-      if (intersects(from, to)) continue;   // being edited — stays raw
+      blockRanges.push({ from, to, linear: true });
+      if (isRevealed(sel, from, to)) continue;   // being edited — stays raw
       ranges.push(Decoration.replace({
         widget: new BlockWidget(doc.sliceString(from, to)),
         block: true,
@@ -336,8 +302,8 @@
        not being edited (parity with reader mode); dim raw lines while
        the cursor is inside it.                                        */
     if (fmEnd) {
-      blockRanges.push({ from: 0, to: fmEnd });
-      if (!intersects(0, fmEnd)) {
+      blockRanges.push({ from: 0, to: fmEnd, linear: false });
+      if (!isRevealed(sel, 0, fmEnd, false)) {
         ranges.push(Decoration.replace({
           widget: new YamlWidget(doc.sliceString(0, fmEnd)),
           block: true,
@@ -373,17 +339,625 @@
     create(state) { return safeBuildBlocks(state); },
     update(value, tr) {
       if (tr.docChanged) return safeBuildBlocks(tr.state);
+      /* The parser finishes large documents in idle time, AFTER the
+         transaction that changed the text: a new tree means blocks the
+         previous build could not see yet.                             */
+      if (syntaxTree(tr.state) !== syntaxTree(tr.startState)) return safeBuildBlocks(tr.state);
       if (tr.selection) {
         /* Rebuild only when some block's rendered/raw status flips. */
-        const hits = (sel, b) => sel.ranges.some((r) => r.from <= b.to && r.to >= b.from);
         const flipped = value.blockRanges.some((b) =>
-          hits(tr.state.selection, b) !== hits(tr.startState.selection, b));
+          isRevealed(tr.state.selection, b.from, b.to, b.linear)
+            !== isRevealed(tr.startState.selection, b.from, b.to, b.linear));
         if (flipped) return safeBuildBlocks(tr.state);
       }
       return value;
     },
     provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
   });
+
+  /* ═══════════════════════════════════════════════════════════════════
+     POINTER MODEL
+     ═══════════════════════════════════════════════════════════════════ */
+
+  /* The bundle doesn't export EditorSelection — reach the class through
+     the live selection instance (static cursor/range/create). */
+  const SelectionOf = (view) => view.state.selection.constructor;
+  const isWs = (c) => /\s/.test(c);
+  const childIndex = (node) => Array.prototype.indexOf.call(node.parentNode.childNodes, node);
+
+  /* Block range record for a widget's DOM (from the field, by position). */
+  function blockForWrap(view, wrap) {
+    let from;
+    try { from = view.posAtDOM(wrap); } catch (_) { return null; }
+    const fv = view.state.field(blockField, false);
+    if (!fv) return null;
+    return fv.blockRanges.find((b) => b.from === from) || null;
+  }
+
+  /* One of our widget wrappers containing `target`, if it is in this view. */
+  function wrapOf(view, target) {
+    const wrap = (target && target.closest) ? target.closest('.lp-render, .lp-yaml') : null;
+    return (wrap && view.contentDOM.contains(wrap)) ? wrap : null;
+  }
+
+  /* Rendered block under a screen y, from CodeMirror's OWN block geometry
+     (no DOM hit-testing): the BlockInfo whose widget is one of ours, or
+     null when a raw line is there. Heights above/below the document clamp
+     to the first/last block, exactly like posAtCoords' 0 / doc.length. */
+  function renderedBlockAtY(view, y) {
+    let block;
+    try { block = view.elementAtHeight(y - view.documentTop); } catch (_) { return null; }
+    if (!block) return null;
+    const w = block.widget;
+    return (w instanceof BlockWidget || w instanceof YamlWidget) ? block : null;
+  }
+
+  function caretAt(x, y) {
+    try {
+      if (document.caretPositionFromPoint) {
+        const p = document.caretPositionFromPoint(x, y);
+        return p ? { node: p.offsetNode, offset: p.offset } : null;
+      }
+      if (document.caretRangeFromPoint) {
+        const r = document.caretRangeFromPoint(x, y);
+        return r ? { node: r.startContainer, offset: r.startOffset } : null;
+      }
+    } catch (_) { /* no caret API — line-level mapping only */ }
+    return null;
+  }
+
+  /* ── Rendered text ⇄ source alignment ────────────────────────────────
+     markdown-it's source_map rule (core_cm.js) stamps every top-level
+     token with data-sl / data-sl-end: line numbers within the text it
+     rendered — here the block's own source. Within such a segment the
+     rendered text is aligned to the source character by character:
+     a character is found at its next occurrence (whatever lies between
+     is markup — `**`, `[`, `> `, bullets, fences), whitespace is ignored
+     on both sides (the DOM collapses it, markdown reflows it), a
+     rendered character absent from the rest of the segment (typographer
+     output like “ or …) consumes one source character, and constructs
+     whose DOM text is NOT their source (images, KaTeX, footnote refs,
+     the `](url)` tail of a link) enter as opaque tokens that jump over
+     their markdown. The same aligner runs in both directions — click →
+     source offset, and source offset → rendered point for painting a
+     partial selection — so what is painted is what is selected.
+     Heuristic by nature: a miss lands on the right line at a nearby
+     column, never in another block.                                   */
+
+  /* Source range [start, end) of the stamped element `slEl` within `blockSrc`. */
+  function segmentOf(blockSrc, slEl) {
+    const lines = blockSrc.split('\n');
+    const sl = Math.max(0, Math.min(lines.length - 1, parseInt(slEl.getAttribute('data-sl'), 10) || 0));
+    let slEnd = parseInt(slEl.getAttribute('data-sl-end'), 10);
+    if (!Number.isFinite(slEnd) || slEnd <= sl) slEnd = lines.length;
+    slEnd = Math.min(lines.length, slEnd);
+    let start = 0;
+    for (let i = 0; i < sl; i++) start += lines[i].length + 1;
+    let end = start;
+    for (let i = sl; i < slEnd; i++) end += lines[i].length + (i < slEnd - 1 ? 1 : 0);
+    return { start, end };
+  }
+  function stampedAncestor(wrap, el) {
+    const slEl = (el && el.closest) ? el.closest('[data-sl]') : null;
+    return (slEl && wrap.contains(slEl)) ? slEl : null;
+  }
+
+  const OPAQUE = 'img, .katex, .footnote-ref, .code-copy-btn';
+  function opaqueToken(el) {
+    if (el.tagName === 'IMG') return { kind: 'img' };
+    if (el.classList.contains('katex')) return { kind: 'math' };
+    if (el.classList.contains('footnote-ref')) return { kind: 'fnref' };
+    return { kind: 'skip' };
+  }
+
+  /* Index just past the ')' matching the '(' at `open`, or -1. */
+  function closeParenAfter(src, open) {
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      const c = src[i];
+      if (c === '(') depth++;
+      else if (c === ')') { depth--; if (depth === 0) return i + 1; }
+    }
+    return -1;
+  }
+
+  /* Incremental aligner over one source segment. `si` is the source
+     offset just past everything consumed so far. */
+  function makeAligner(src) {
+    const n = src.length;
+    const a = { si: 0, trailing: false };
+    /* Source index a rendered character maps to (its next occurrence,
+       else the next non-space character as a substitution). */
+    a.peekChar = (c) => {
+      const j = src.indexOf(c, a.si);
+      if (j >= 0) return j;
+      let k = a.si;
+      while (k < n && isWs(src[k])) k++;
+      return k;
+    };
+    /* Source range [start, end) an opaque token jumps over, or null. */
+    a.peekToken = (tok) => {
+      const si = a.si;
+      if (tok.kind === 'img') {
+        const open = src.indexOf('![', si);
+        if (open < 0) return null;
+        const paren = src.indexOf('](', open);
+        const close = paren < 0 ? -1 : closeParenAfter(src, paren + 1);
+        return [open, close < 0 ? open + 2 : close];
+      }
+      if (tok.kind === 'math') {
+        const open = src.indexOf('$', si);
+        if (open < 0) return null;
+        const delim = src[open + 1] === '$' ? '$$' : '$';
+        const close = src.indexOf(delim, open + delim.length);
+        return [open, close < 0 ? open + delim.length : close + delim.length];
+      }
+      if (tok.kind === 'fnref') {
+        const open = src.indexOf('[^', si);
+        if (open < 0) return null;
+        const close = src.indexOf(']', open);
+        return [open, close < 0 ? open + 2 : close + 1];
+      }
+      if (tok.kind === 'linkclose') {
+        const m = /^\s*\]\(/.exec(src.slice(si));
+        if (!m) return null;
+        const close = closeParenAfter(src, si + m[0].length - 1);
+        return [si, close > 0 ? close : si + m[0].length];
+      }
+      return null;
+    };
+    a.feed = (item) => {
+      if (typeof item === 'string') {
+        if (!item) return;
+        if (isWs(item)) { a.trailing = true; return; }
+        a.trailing = false;
+        if (a.si >= n) return;
+        a.si = Math.min(n, a.peekChar(item) + 1);
+        return;
+      }
+      a.trailing = false;
+      const r = a.peekToken(item);
+      if (r) a.si = Math.min(n, r[1]);
+    };
+    /* The caret sat after a space: step past the source spaces too (never
+       across a line or into markup), so the cursor lands where clicked. */
+    a.finish = () => {
+      if (a.trailing) while (a.si < n && src[a.si] === ' ') a.si++;
+      return a.si;
+    };
+    return a;
+  }
+
+  /* Depth-first walk of the rendered text under `node`, in order. The
+     visitor gets (item, node, index): a character with its text node and
+     offset, '' at the END of every text node, an opaque token with its
+     element, or a 'linkclose' token after an <a>'s children. Opaque
+     subtrees are never entered. Returns true when the visitor stopped. */
+  function walkRendered(node, visit) {
+    if (node.nodeType === 3) {
+      const text = node.nodeValue;
+      for (let i = 0; i < text.length; i++) if (visit(text[i], node, i)) return true;
+      return visit('', node, text.length);
+    }
+    if (node.nodeType !== 1) return false;
+    if (node.matches(OPAQUE)) return visit(opaqueToken(node), node, 0);
+    for (let i = 0; i < node.childNodes.length; i++) {
+      if (walkRendered(node.childNodes[i], visit)) return true;
+    }
+    if (node.tagName === 'A') return visit({ kind: 'linkclose' }, node, node.childNodes.length);
+    return false;
+  }
+  /* The DOM point a visited item sits at (before it). */
+  function itemPoint(item, node, i) {
+    if (typeof item === 'string') return [node, i];
+    if (item.kind === 'linkclose') return [node, node.childNodes.length];
+    return [node.parentNode, childIndex(node)];
+  }
+
+  /* Rendered caret inside the stamped element `segEl` → offset within its
+     source segment `segSrc`. */
+  function offsetAtCaret(segEl, segSrc, caret) {
+    const al = makeAligner(segSrc);
+    const point = document.createRange();
+    try { point.setStart(caret.node, caret.offset); point.collapse(true); } catch (_) { return al.finish(); }
+    walkRendered(segEl, (item, node, i) => {
+      if (typeof item !== 'string' && item.kind !== 'linkclose' && node.contains(caret.node)) return true;
+      const [pn, po] = itemPoint(item, node, i);
+      let cmp;
+      try { cmp = point.comparePoint(pn, po); } catch (_) { cmp = -1; }
+      if (cmp !== -1) return true;       // reached (or passed) the caret
+      al.feed(item);
+      return false;
+    });
+    return al.finish();
+  }
+
+  /* Source offset (absolute) → rendered DOM point inside the widget, the
+     inverse of offsetAtCaret. Offsets between segments (blank lines inside
+     a block) resolve to the end of the preceding stamped element. */
+  function renderedPointAt(wrap, blockFrom, blockSrc, absOffset) {
+    const rel = absOffset - blockFrom;
+    let hit = null, before = null;
+    for (const el of wrap.querySelectorAll('[data-sl]')) {
+      const seg = segmentOf(blockSrc, el);
+      if (rel >= seg.start && rel <= seg.end) { hit = { el, seg }; break; }
+      if (rel > seg.end && (!before || seg.end > before.seg.end)) before = { el, seg };
+    }
+    if (!hit) {
+      if (before) return { node: before.el.parentNode, offset: childIndex(before.el) + 1 };
+      return rel <= 0 ? { node: wrap, offset: 0 } : { node: wrap, offset: wrap.childNodes.length };
+    }
+    const al = makeAligner(blockSrc.slice(hit.seg.start, hit.seg.end));
+    const target = rel - hit.seg.start;
+    let found = null;
+    walkRendered(hit.el, (item, node, i) => {
+      if (typeof item === 'string') {
+        if (!item) return false;
+        if (isWs(item)) {
+          if (al.si >= target) { found = itemPoint(item, node, i); return true; }
+          al.feed(item);
+          return false;
+        }
+        if (al.peekChar(item) >= target) { found = itemPoint(item, node, i); return true; }
+        al.feed(item);
+        return false;
+      }
+      const r = al.peekToken(item);
+      if (r && r[0] >= target) { found = itemPoint(item, node, i); return true; }
+      /* The offset falls INSIDE the construct's markdown: the construct is
+         only painted once the range covers all of it. */
+      if (r && r[1] > target) { found = itemPoint(item, node, i); return true; }
+      al.feed(item);
+      return false;
+    });
+    if (found) return { node: found[0], offset: found[1] };
+    return { node: hit.el, offset: hit.el.childNodes.length };
+  }
+
+  /* ── Pointer → document position ─────────────────────────────────── */
+
+  /* Nearest position OUTSIDE a block — for clicks on a widget's own frame
+     rather than any rendered content (e.g. beside a narrower table). A
+     near-miss on the neighbouring raw text must fall back to the raw
+     side instead of revealing the block whose hit-box begins there. */
+  function outsidePos(view, block, wrapRect, y) {
+    const doc = view.state.doc;
+    const upper = wrapRect.height > 0 && y < wrapRect.top + wrapRect.height / 2;
+    return upper ? Math.max(0, block.from - 1) : Math.min(doc.length, block.to + 1);
+  }
+
+  /* The far side of a block relative to where a drag started: selects the
+     block as a unit without ever putting the head inside it. */
+  function unitSide(view, block, anchorPos) {
+    const doc = view.state.doc;
+    return anchorPos <= block.from ? Math.min(doc.length, block.to + 1) : Math.max(0, block.from - 1);
+  }
+
+  /* A caret inside a rendered markdown block → absolute source position. */
+  function posAtCaretInBlock(view, block, wrap, caret) {
+    const src = view.state.doc.sliceString(block.from, block.to);
+    const el = caret.node.nodeType === 1 ? caret.node : caret.node.parentNode;
+    let slEl = stampedAncestor(wrap, el);
+    if (!slEl && caret.node.nodeType === 1) {
+      /* Caret between block children (the prose container): the start of
+         the next stamped element, else the end of the block. */
+      const next = caret.node.childNodes[caret.offset];
+      const stamped = next && next.nodeType === 1
+        ? (next.matches('[data-sl]') ? next : next.querySelector('[data-sl]')) : null;
+      if (!stamped) return block.to;
+      return Math.min(block.to, block.from + segmentOf(src, stamped).start);
+    }
+    if (!slEl) return block.from;
+    const seg = segmentOf(src, slEl);
+    const col = offsetAtCaret(slEl, src.slice(seg.start, seg.end), caret);
+    return Math.max(block.from, Math.min(block.to, block.from + seg.start + col));
+  }
+
+  /* Click inside a rendered markdown block → source position. */
+  function posInBlockWidget(view, block, wrap, target, x, y) {
+    const marginal = target === wrap || (target.classList && target.classList.contains('prose'));
+    if (marginal) return outsidePos(view, block, wrap.getBoundingClientRect(), y);
+    const caret = caretAt(x, y);
+    if (caret && caret.node && wrap.contains(caret.node)) return posAtCaretInBlock(view, block, wrap, caret);
+    /* No caret under the point (synthetic events, exotic engines): the
+       clicked element's first source line. */
+    const slEl = stampedAncestor(wrap, target);
+    if (!slEl) return block.from;
+    return block.from + segmentOf(view.state.doc.sliceString(block.from, block.to), slEl).start;
+  }
+
+  /* Click inside the YAML pill box → source position. A pill carries
+     data-start = doc offset of its source line; the cursor lands at the
+     start of that key's first value so the suggestions menu opens with
+     the full value list for exactly that key. Elsewhere in the box the
+     click's vertical position picks the frontmatter line.            */
+  function posInYamlWidget(view, block, wrap, target, x, y) {
+    const doc = view.state.doc;
+    const pill = target.closest ? target.closest('.yaml-pill') : null;
+    if (pill && pill.dataset && pill.dataset.start !== undefined) {
+      const ds = parseInt(pill.dataset.start, 10);
+      if (Number.isFinite(ds)) {
+        const line = doc.lineAt(Math.max(0, Math.min(ds, doc.length)));
+        const colon = line.text.indexOf(':');
+        if (colon === -1) return line.from;
+        let p = colon + 1;
+        while (p < line.text.length && /[\s\[]/.test(line.text[p])) p++;
+        return line.from + p;
+      }
+    }
+    const rect = wrap.getBoundingClientRect();
+    const lines = doc.sliceString(block.from, block.to).split('\n');
+    let pos = block.from;
+    if (rect.height > 0) {
+      const frac = Math.min(1, Math.max(0, (y - rect.top) / rect.height));
+      const lineIdx = Math.min(lines.length - 1, Math.floor(frac * lines.length));
+      for (let i = 0; i < lineIdx; i++) pos += lines[i].length + 1;
+    }
+    return pos;
+  }
+
+  /* A mousedown whose target lies in one of our widgets → {pos, bias},
+     else null (raw text: the caller uses posAtCoords). */
+  function resolveWidgetClick(view, event) {
+    const target = event.target;
+    const wrap = wrapOf(view, target);
+    if (!wrap) return null;
+    const block = blockForWrap(view, wrap);
+    if (!block) return null;
+    let pos;
+    try {
+      pos = wrap.classList.contains('lp-yaml')
+        ? posInYamlWidget(view, block, wrap, target, event.clientX, event.clientY)
+        : posInBlockWidget(view, block, wrap, target, event.clientX, event.clientY);
+    } catch (err) {
+      console.warn('[LivePreview] click mapping failed — using the block start:', err);
+      pos = block.from;
+    }
+    return { pos: Math.max(0, Math.min(view.state.doc.length, pos)), bias: 1 };
+  }
+
+  /* Which side of `pos` the pointer is on (cursor assoc at wrap points):
+     before if the point lies in the row that ENDS at pos, else after. */
+  function positionSide(view, pos, y) {
+    const line = view.state.doc.lineAt(pos);
+    if (pos === line.from) return 1;
+    if (pos === line.to) return -1;
+    const before = view.coordsAtPos(pos, -1);
+    return (before && y >= before.top && y <= before.bottom) ? -1 : 1;
+  }
+
+  function queryRaw(view, event) {
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY }, false);
+    return { pos, bias: positionSide(view, pos, event.clientY) };
+  }
+
+  /* A pointer MOVING over a rendered markdown block maps to the exact
+     character under it — the block stays rendered (the head never
+     reveals; see the reveal rule) and the covered part is painted by
+     paintSelection — so a selection extends across rendered blocks
+     character by character, like across formatted text in any WYSIWYG
+     editor. The YAML pill box is not linear text: it is selected as a
+     unit, as is any block the pointer is beside rather than over.     */
+  function queryMove(view, event, anchorPos) {
+    const x = event.clientX, y = event.clientY;
+    const wrap = wrapOf(view, document.elementFromPoint(x, y));
+    if (wrap) {
+      const block = blockForWrap(view, wrap);
+      if (block) {
+        if (!wrap.classList.contains('lp-yaml')) {
+          const caret = caretAt(x, y);
+          if (caret && caret.node && wrap.contains(caret.node)) {
+            try { return { pos: posAtCaretInBlock(view, block, wrap, caret), bias: 1 }; } catch (_) { /* unit */ }
+          }
+        }
+        return { pos: unitSide(view, block, anchorPos), bias: anchorPos <= block.from ? -1 : 1 };
+      }
+    }
+    const block = renderedBlockAtY(view, y);
+    if (block) return { pos: unitSide(view, block, anchorPos), bias: anchorPos <= block.from ? -1 : 1 };
+    return queryRaw(view, event);
+  }
+
+  /* Double-click → the run of same-category characters (a word, a
+     punctuation run, a whitespace run) around pos, like CM's own. */
+  function groupAt(view, pos, bias) {
+    const state = view.state;
+    const Sel = SelectionOf(view);
+    const line = state.doc.lineAt(pos);
+    if (line.length === 0) return Sel.cursor(pos);
+    const text = line.text;
+    let at = pos - line.from;
+    if (at === 0) bias = 1;
+    else if (at === text.length) bias = -1;
+    const categorize = state.charCategorizer(pos);
+    let from = at, to = at;
+    if (bias < 0) from = at - 1; else to = at + 1;
+    const cat = categorize(text.slice(from, to));
+    while (from > 0 && categorize(text[from - 1]) === cat) from--;
+    while (to < text.length && categorize(text[to]) === cat) to++;
+    return Sel.range(line.from + from, line.from + to);
+  }
+
+  function rangeForClick(view, pos, bias, type) {
+    const Sel = SelectionOf(view);
+    if (type === 1) return Sel.cursor(pos, bias);
+    if (type === 2) return groupAt(view, pos, bias);
+    const line = view.state.doc.lineAt(pos);
+    const to = line.to < view.state.doc.length ? line.to + 1 : line.to;
+    return Sel.range(line.from, to);
+  }
+
+  /* After a click the layout reflows — the clicked block becomes raw
+     text, the previously edited one re-renders — so the source row the
+     cursor landed on may no longer be under the pointer. Re-measure in
+     CodeMirror's own measure phase (same frame, no flicker) and scroll
+     by exactly the drift; nothing moves when the row already contains
+     the pointer.                                                      */
+  function pinRowUnderPointer(view, pos, bias, pointerY) {
+    const doc = view.state.doc; // the measure may run after a file switch — then it is void
+    view.requestMeasure({
+      key: pinRowUnderPointer,
+      read(v) {
+        if (v.state.doc !== doc) return 0;
+        const c = v.coordsAtPos(pos, bias);
+        if (!c) return 0;
+        if (c.top - 1 <= pointerY && c.bottom + 1 >= pointerY) return 0;
+        return (c.top + c.bottom) / 2 - pointerY;
+      },
+      write(delta, v) {
+        if (!delta || v.state.doc !== doc) return;
+        const sd = v.scrollDOM;
+        const max = Math.max(0, sd.scrollHeight - sd.clientHeight);
+        sd.scrollTop = Math.max(0, Math.min(max, sd.scrollTop + delta));
+      },
+    });
+  }
+
+  /* ── Mouse selection style ───────────────────────────────────────────
+     Installed through EditorView.mouseSelectionStyle, so CodeMirror's
+     own MouseSelection machinery (document-level move/up listeners,
+     autoscroll at the viewport edges, shift-extend, click-inside-
+     selection drag detection, focus) drives every gesture; this style
+     only decides WHERE a pointer event points:
+       • mousedown on a rendered widget → the mapped source position
+         (click-to-edit; the block reveals through the reveal rule);
+       • mousemove → queryMove (character-precise inside rendered
+         blocks, unit for the YAML box);
+       • anything on raw text → posAtCoords, exactly like the default.
+     Click counting (double = word, triple = line) lives here because
+     the default's counter never sees widget clicks; a repeat click
+     reuses the first click's mapped position, so a double-click on a
+     rendered word selects THAT word even though the raw text has
+     shifted under the pointer since the first click.                 */
+  const lastClick = { time: 0, x: 0, y: 0, count: 0, pos: null };
+  function clickCount(event) {
+    const now = Date.now();
+    const repeat = now - lastClick.time < 400
+      && Math.abs(event.clientX - lastClick.x) < 2
+      && Math.abs(event.clientY - lastClick.y) < 2;
+    lastClick.count = repeat ? (lastClick.count % 3) + 1 : 1;
+    lastClick.time = now;
+    lastClick.x = event.clientX;
+    lastClick.y = event.clientY;
+    return lastClick.count;
+  }
+
+  function lpMouseSelection(view, event) {
+    if (event.button !== 0 && event.button !== 2) return null;
+    const widgetHit = resolveWidgetClick(view, event);
+    /* Right button: on a rendered block place the cursor there (so the
+       context menu acts on that block) and never drag; on raw text the
+       browser's own caret placement applies, as in the classic editor. */
+    if (event.button === 2 && !widgetHit) return null;
+    const type = clickCount(event);
+    let start = widgetHit;
+    if (type > 1 && lastClick.pos != null) {
+      start = { pos: Math.min(lastClick.pos, view.state.doc.length), bias: 1 };
+    }
+    if (!start) start = queryRaw(view, event);
+    lastClick.pos = start.pos;
+
+    const Sel = SelectionOf(view);
+    const stationary = event.button === 2;
+    const pointerY = event.clientY;
+    let startSel = view.state.selection;
+    let pinPending = true;
+    return {
+      update(update) {
+        if (update.docChanged) {
+          start.pos = update.changes.mapPos(start.pos);
+          startSel = startSel.map(update.changes);
+        }
+        if (pinPending && update.selectionSet) {
+          pinPending = false;
+          pinRowUnderPointer(update.view, start.pos, start.bias, pointerY);
+        }
+      },
+      get(curEvent, extend) {
+        const cur = (curEvent === event || stationary) ? start : queryMove(view, curEvent, start.pos);
+        let range = rangeForClick(view, cur.pos, cur.bias, type);
+        if (cur.pos !== start.pos && !extend) {
+          const startRange = rangeForClick(view, start.pos, start.bias, type);
+          const from = Math.min(startRange.from, range.from);
+          const to = Math.max(startRange.to, range.to);
+          range = from < range.from ? Sel.range(from, to) : Sel.range(to, from);
+        }
+        if (extend) return startSel.replaceRange(startSel.main.extend(range.from, range.to));
+        return Sel.create([range]);
+      },
+    };
+  }
+
+  /* ── Selection painter ───────────────────────────────────────────────
+     drawSelection knows nothing about the text inside a widget: its band
+     covers raw lines and stops at a widget's edge (and paints BEHIND
+     widgets, where code blocks and images hide it). So for rendered
+     blocks the selection is painted here, in the measure phase's write
+     step (never inside an update):
+       • a block the range SPANS gets `lp-selected` (CSS outline) — the
+         band already tints its transparent parts;
+       • a block the range reaches INTO gets the covered part of its
+         rendered text highlighted through the CSS Custom Highlight API
+         (::highlight(revery-lp-selection)), mapping the source offsets
+         back to rendered DOM points with the same aligner clicks use.
+         Without the API (older WebKitGTK) such a block falls back to the
+         outline, as does the YAML box.
+     Class toggles on widget DOM are legal (widgets own their DOM; CM
+     ignores mutations inside them).                                   */
+  const HIGHLIGHT_NAME = 'revery-lp-selection';
+  const hasHighlightApi = typeof Highlight === 'function' && typeof CSS !== 'undefined' && !!CSS.highlights;
+
+  function partialRange(view, wrap, b, r) {
+    const src = view.state.doc.sliceString(b.from, b.to);
+    const start = r.from <= b.from ? { node: wrap, offset: 0 } : renderedPointAt(wrap, b.from, src, r.from);
+    const end = r.to >= b.to ? { node: wrap, offset: wrap.childNodes.length } : renderedPointAt(wrap, b.from, src, r.to);
+    try {
+      const range = document.createRange();
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset);
+      return range.collapsed ? null : range;
+    } catch (_) { return null; }
+  }
+
+  function paintSelection(view) {
+    const ranges = view.state.selection.ranges.filter((r) => !r.empty);
+    const fv = view.state.field(blockField, false);
+    const partials = [];
+    view.contentDOM.querySelectorAll('.lp-render, .lp-yaml').forEach((wrap) => {
+      let spanned = false;
+      const b = (ranges.length && fv) ? blockForWrap(view, wrap) : null;
+      if (b) {
+        const paintable = hasHighlightApi && !wrap.classList.contains('lp-yaml');
+        for (const r of ranges) {
+          if (r.from <= b.from && r.to >= b.to) { spanned = true; break; }
+          if (r.from < b.to && r.to > b.from) {        // reaches into the block
+            const range = paintable ? partialRange(view, wrap, b, r) : null;
+            if (range) partials.push(range);
+            else if (!paintable) spanned = true;         // fallback: the unit outline
+          }
+        }
+      }
+      wrap.classList.toggle('lp-selected', spanned);
+    });
+    if (hasHighlightApi) {
+      if (partials.length) CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...partials));
+      else CSS.highlights.delete(HIGHLIGHT_NAME);
+    }
+  }
+
+  const selectionPainter = ViewPlugin ? ViewPlugin.fromClass(class {
+    constructor(view) { this.schedule(view); }
+    update(update) {
+      if (update.selectionSet || update.docChanged || update.viewportChanged) this.schedule(update.view);
+    }
+    schedule(view) {
+      /* Keyed: repeated scheduling within one measure cycle collapses to one run. */
+      view.requestMeasure({ key: paintSelection, read() { return null; }, write(_, v) { paintSelection(v); } });
+    }
+    destroy() {
+      if (hasHighlightApi) CSS.highlights.delete(HIGHLIGHT_NAME);
+    }
+  }) : null;
 
   /* ── Line-by-line vertical cursor motion across rendered blocks ─────
      A multi-line rendered block is one replace widget: its raw lines have
@@ -392,7 +966,7 @@
      more than one document line away — or can't move at all (widget at
      the doc edge) — and step to the adjacent document line instead. The
      selection touching that line flips the block to raw text via the
-     intersect rule in buildBlocks, in the same transaction. Motion inside
+     reveal rule in buildBlocks, in the same transaction. Motion inside
      raw text (incl. visual rows of soft-wrapped lines) stays default.
      Home/End/PageUp/PageDown are left alone on purpose: page keys as
      fast block-wise travel is desirable.                              */
@@ -468,8 +1042,17 @@
          from the guess: a wrapped paragraph is one doc line spanning
          several visual rows, and entering it from below must land on
          its BOTTOM row (the guess sits near column 0 = the top row). */
+      /* Only when the landing REVEALED the line: extending a selection
+         into a block leaves it rendered (head never reveals), and over a
+         block widget posAtCoords answers with the widget's start or end
+         by vertical half — it would fling the head to the block end. */
+      let stillCovered = false;
+      const fv2 = view.state.field(blockField, false);
+      if (fv2) fv2.deco.between(target.from, target.to, (from, to) => {
+        if (to > from) { stillCovered = true; return false; }
+      });
       const refPos = forward ? target.from : target.to;
-      const lineCoords = view.coordsAtPos(refPos, forward ? 1 : -1);
+      const lineCoords = stillCovered ? null : view.coordsAtPos(refPos, forward ? 1 : -1);
       if (lineCoords) {
         const x = view.contentDOM.getBoundingClientRect().left + goal;
         const p = view.posAtCoords({ x, y: (lineCoords.top + lineCoords.bottom) / 2 });
@@ -495,13 +1078,14 @@
   }
 
   window.buildLivePreviewExtension = function () {
-    if (!keymap || !Prec) return [blockField];
-    return [
-      blockField,
-      Prec.high(keymap.of([
+    const ext = [blockField, EditorView.mouseSelectionStyle.of(lpMouseSelection)];
+    if (selectionPainter) ext.push(selectionPainter);
+    if (keymap && Prec) {
+      ext.push(Prec.high(keymap.of([
         { key: 'ArrowDown', run: (v) => moveByDocLine(v, true, false), shift: (v) => moveByDocLine(v, true, true) },
         { key: 'ArrowUp', run: (v) => moveByDocLine(v, false, false), shift: (v) => moveByDocLine(v, false, true) },
-      ])),
-    ];
+      ])));
+    }
+    return ext;
   };
 })();

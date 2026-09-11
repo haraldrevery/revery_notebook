@@ -2295,6 +2295,37 @@ body.live-preview-active #editor .cm-scroller {
 .lp-render .prose > :last-child  { margin-bottom: 0; }
 /* Renderer unavailable / empty output — the raw source is shown instead. */
 .lp-render-fallback { white-space: pre-wrap; font-family: var(--font-mono, monospace); }
+/* Selection inside rendered blocks is painted by the live preview's
+   selection painter (markdown_editor_livepreview.js), never by the
+   browser: CodeMirror hides native selection only under .cm-line, and
+   the DOM selection it mirrors ends at a widget's EDGE — the browser
+   would tint the whole block in its own colour.                       */
+.lp-render ::selection,
+.lp-yaml ::selection {
+  background-color: transparent !important;
+}
+/* A block the selection SPANS is selected as a unit. drawSelection's
+   band paints behind the widget, where opaque code blocks and images
+   hide it, so the marker adds an outline that reads on every content
+   type and theme.                                                     */
+.lp-render.lp-selected,
+.lp-yaml.lp-selected {
+  outline: 2px solid var(--accent, rgba(128, 128, 128, 0.6));
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+/* A block the selection reaches INTO: the covered rendered text carries
+   a CSS Custom Highlight — same tint as .cm-selectionBackground in the
+   CodeMirror theme (markdown_editor_cm_setup.js), so raw and rendered
+   parts of one selection look alike.                                  */
+.lp-render::highlight(revery-lp-selection),
+.lp-render *::highlight(revery-lp-selection) {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+[data-theme="light"] .lp-render::highlight(revery-lp-selection),
+[data-theme="light"] .lp-render *::highlight(revery-lp-selection) {
+  background-color: rgba(0, 0, 0, 0.22);
+}
 
 /* Background texture parity: same per-theme overlay recipe as #preview
    (the --bg_oacity opacity setting and slow-hardware suppression operate

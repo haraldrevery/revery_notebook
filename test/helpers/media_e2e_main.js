@@ -1,6 +1,6 @@
 'use strict';
 
-/* Electron main for the DESKTOP media E2E. find_e2e_main.js runs the app
+/* Electron main for the DESKTOP media E2E. web_e2e_main.js runs the app
    in web mode (no preload); this one boots the REAL electron/main.js —
    preload, IPC handlers, path validation, atomic writes, the sidebar in
    desktop mode — against a temporary project folder, then drives the

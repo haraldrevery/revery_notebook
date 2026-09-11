@@ -1,7 +1,8 @@
 'use strict';
 
 /* E2E check for the worker-based regex search: spawns the real Electron
-   binary with test/helpers/find_e2e_main.js, which loads www/index.html
+   binary with the generic web-mode main (test/helpers/web_e2e_main.js),
+   which loads www/index.html
    and drives the actual find bar. Verifies the three properties Stage 5
    promised:
      1. safe patterns the old heuristic rejected (e.g. `(alpha|beta)`) work;
@@ -20,13 +21,17 @@ const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY ||
 
 test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 90000 }, async () => {
   const electronBin = require('electron'); // path string under plain node
-  const mainScript  = path.join(__dirname, 'helpers', 'find_e2e_main.js');
+  const mainScript  = path.join(__dirname, 'helpers', 'web_e2e_main.js');
+  const driver      = path.join(__dirname, 'helpers', 'find_e2e_driver.js');
 
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE; // VSCode terminals leak this; it breaks require('electron') in the child
 
   const output = await new Promise((resolve, reject) => {
-    const child = spawn(electronBin, [mainScript], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    /* 75s deadline: a healthy run takes ~50s, so it means "hung", not "slow";
+       kept below this test's 90s timeout so the deadline message is what a
+       hang reports. */
+    const child = spawn(electronBin, [mainScript, driver, '75000'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });

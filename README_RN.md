@@ -50,6 +50,8 @@ the browser (a live demo of the software before you install it).
 - **CodeMirror 6** editor: syntax highlighting, undo/redo, find highlights.
 - **Live Preview mode** (toggle in Settings): the document renders *inside* the
   editor, Obsidian-style — the block you are editing shows its raw markdown.
+  Clicking rendered text puts the cursor on that word, and selections extend
+  character by character into other blocks, which stay rendered.
 - Bold, italic, headings, strikethrough, code blocks, links, images, task
   lists, tables, horizontal rules, and footnotes from the **Toolbar** menu.
 - **Path autocomplete** in link destinations (desktop): typing inside
