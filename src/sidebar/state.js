@@ -100,7 +100,7 @@ export function pendingNoteDir() {
 }
 
 function parentDir(p) {
-  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\'));
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
   if (i < 0) return '';
   return i === 0 ? p[0] : p.slice(0, i);
 }

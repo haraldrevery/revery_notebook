@@ -14,6 +14,7 @@ import { initCloseHandler, runBoot } from './lifecycle.js';
 import { getYamlIndex } from './yaml_index.js';
 import { initSearch } from './search.js';
 import { listLinkCompletions } from './link_complete.js';
+import { icon } from './icons.js';
 import { pendingNoteDir } from './state.js';
 import * as paths from './paths.js';
 
@@ -26,6 +27,12 @@ window.sidebarYamlIndex = getYamlIndex;
    media/note listings for `![...](path)` destinations. Returns null in web
    mode (no filesystem), which keeps the completion source inert there. */
 window.sidebarListLinkCompletions = listLinkCompletions;
+
+/* The app's icon set (svg_icons_to_use → icons.js) for the editor's
+   completion menu: link-path rows show a folder / image / note glyph
+   (cm_setup.js addToOptions). Same generated table the tree uses, so the
+   icons policy (Harald Revery glyphs only) holds in the editor too. */
+window.sidebarIcon = icon;
 
 /* The app's one set of path rules (src/sidebar/paths.js) for the editor
    scripts: preview image resolution (core_cm.js resolveProjectMediaPath),

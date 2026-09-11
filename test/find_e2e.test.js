@@ -134,7 +134,8 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 90000
     clickOpens: true, valueSuggests: true,
     accepts: true, bodyQuiet: true, midTokenClean: true,
     pillOpensMenu: true, pillValueMenu: true, commaListValues: true,
-  }, 'frontmatter autocomplete must suggest keys/values, open on click (incl. LP pills), accept via arrows+enter, replace whole tokens, index comma lists, and stay silent outside frontmatter');
+    skinFollowsEditor: true, tabAcceptsFirst: true,
+  }, 'frontmatter autocomplete must suggest keys/values, open on click (incl. LP pills), accept via arrows+enter, replace whole tokens, index comma lists, stay silent outside frontmatter, wear the editor font (not CM\'s stock skin), and accept the first row on Tab');
 
   // 13b. export suite: LaTeX templates/engines/TOC + PDF options, menu entries
   assert.deepEqual(r.exportSuite, {

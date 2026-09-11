@@ -185,5 +185,47 @@
     out.autosave = { savedAfterTyping: matched, dirty: window.sidebarIsDirty ? window.sidebarIsDirty() : null };
   }
 
+  /* 8. Link-path completion through the real desktop wiring (sidebar
+        bundle feed + IPC readDirectory + CodeMirror source). Active note
+        is sub/pic.md here, so `../su` must climb to the root and offer
+        only `sub/`; rows carry the app's glyph; the menu wears the editor
+        font; Tab accepts the first row; a folder accept re-opens the menu
+        one level down; a file accept closes it. */
+  {
+    const typeText = async (s) => {
+      for (const ch of s) {
+        const at = window.cmView.state.selection.main.head;
+        window.cmView.dispatch({ changes: { from: at, insert: ch }, selection: { anchor: at + 1 }, userEvent: 'input.type' });
+        await sleep(30);
+      }
+    };
+    const menu = () => document.querySelector('.cm-tooltip-autocomplete');
+    const labels = () => Array.from(document.querySelectorAll('.cm-tooltip-autocomplete .cm-completionLabel')).map((e) => e.textContent);
+    const tab = async () => {
+      await sleep(400); // clear the engine's interactionDelay
+      window.cmView.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+      await sleep(400);
+    };
+    const len = editor.value.length;
+    window.cmView.focus();
+    window.cmView.dispatch({ changes: { from: len, insert: '\n' }, selection: { anchor: len + 1 } });
+    await typeText('![](../su');
+    const opened = !!(await until(() => menu() && labels().length, 4000));
+    const firstLabels = labels();
+    const glyph = !!document.querySelector('.cm-tooltip-autocomplete li .cm-completion-kind svg');
+    const ul = document.querySelector('.cm-tooltip-autocomplete > ul');
+    const fontMatches = !!ul && getComputedStyle(ul).fontFamily === getComputedStyle(window.cmView.contentDOM).fontFamily;
+    await tab();
+    const afterFolder = editor.value.slice(-'![](../sub/'.length);
+    const reopened = !!(await until(() => menu() && labels().length, 4000));
+    const secondLabels = labels();
+    await typeText('pic.p');
+    await until(() => labels().length === 1, 2000);
+    await tab();
+    const afterFile = editor.value.slice(-'![](../sub/pic.png'.length);
+    const closed = !menu();
+    out.linkComplete = { opened, firstLabels, glyph, fontMatches, afterFolder, reopened, secondLabels, afterFile, closed };
+  }
+
   return out;
 })()

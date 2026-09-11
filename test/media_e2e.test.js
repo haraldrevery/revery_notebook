@@ -94,4 +94,15 @@ test('media drop/paste/preview end-to-end in the real Electron app', { skip: !ha
 
   // 8. no dialogs
   assert.deepEqual(r.dialogs, [], 'no native dialog may be needed for a normal media flow\n' + why);
+
+  // 9. link-path completion (desktop wiring: bundle feed + IPC + editor source)
+  assert.equal(r.linkComplete.opened, true, 'typing inside ![](…) must open the path menu\n' + why);
+  assert.deepEqual(r.linkComplete.firstLabels, ['sub/'], '`..` climbs to the root; only the matching folder is offered\n' + why);
+  assert.equal(r.linkComplete.glyph, true, 'rows carry the app icon glyph\n' + why);
+  assert.equal(r.linkComplete.fontMatches, true, 'the menu must inherit the editor font\n' + why);
+  assert.equal(r.linkComplete.afterFolder, '![](../sub/', 'Tab accepts the folder and appends the slash\n' + why);
+  assert.equal(r.linkComplete.reopened, true, 'a folder accept re-opens the menu one level down\n' + why);
+  assert.ok(r.linkComplete.secondLabels.includes('pic.png') && r.linkComplete.secondLabels.includes('pic.md'), why);
+  assert.equal(r.linkComplete.afterFile, '![](../sub/pic.png', 'Tab accepts the file with the app\'s link encoding\n' + why);
+  assert.equal(r.linkComplete.closed, true, why);
 });

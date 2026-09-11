@@ -501,6 +501,84 @@
     });
   }
 
+  // src/sidebar/state.js
+  var btnSidebar = document.getElementById("btn-sidebar");
+  var sidebarPanel = document.getElementById("project-sidebar");
+  var sidebarDivider = document.getElementById("sidebar-divider");
+  var folderNameEl = document.getElementById("sidebar-folder-name");
+  var btnProjectsBtn = document.getElementById("sidebar-projects-btn");
+  var btnOpenFolder = document.getElementById("sidebar-open-folder");
+  var btnNewFile = document.getElementById("sidebar-new-file");
+  var btnNewFolder = document.getElementById("sidebar-new-folder");
+  var btnToggleAll = document.getElementById("sidebar-toggle-all");
+  var btnSortBtn = document.getElementById("sidebar-sort-btn");
+  var btnViewBtn = document.getElementById("sidebar-view-btn");
+  var treeEl = document.getElementById("sidebar-tree");
+  var docTitleEl = document.getElementById("doc-title");
+  var btnSidebarMobile = document.getElementById("btn-sidebar-mobile");
+  var S = {
+    sidebarOpen: false,
+    rootPath: null,
+    // Currently open root folder
+    activeFilePath: null,
+    // File open in the editor
+    selectedDirPath: null,
+    // Last folder clicked in the tree (for new file/folder)
+    isDirty: false,
+    // True when editor differs from saved file
+    _scratchpadVolatileKey: null,
+    // string | null — current placeholder path
+    /* sidebarViewMode : 'tree' | 'card'  (persisted to localStorage) */
+    sidebarViewMode: "tree",
+    cardViewDir: null,
+    /* Media file shown in the preview while no note is open (fileops.js
+       openMediaFile). Display + naming only: the tree highlights it, and
+       the scratchpad auto-create (save.js) names the new note after it and
+       places it beside it (pendingNoteDir). Cleared whenever the editor
+       moves on to a file, a folder switch, or the scratchpad creates the
+       note. */
+    previewMediaPath: null,
+    selectionAnchor: null,
+    // Last non-shift clicked path (range anchor)
+    _dragItems: [],
+    // [{path, type}] currently being dragged
+    /* Serialize async FS operations — prevents simultaneous move/rename/delete
+       from corrupting state if the user clicks very quickly. */
+    _operationLock: false,
+    /* Watcher suppression: after we write ourselves we ignore the next
+       watcher event for this many ms to avoid a false "external change" dialog */
+    _suppressWatchUntil: 0,
+    _externalChangeInProgress: false,
+    _replaceGeneration: 0,
+    _conflictHoldPath: null
+  };
+  try {
+    const vm = localStorage.getItem("revery_sidebar_view");
+    if (vm === "card" || vm === "tree") S.sidebarViewMode = vm;
+  } catch {
+  }
+  var expandedDirs = /* @__PURE__ */ new Set();
+  var selectedItems = /* @__PURE__ */ new Set();
+  var _previewCache = /* @__PURE__ */ new Map();
+  var SUPPRESS_MS = 2e3;
+  var SCRATCHPAD_PREFIX = "__revery_scratchpad__/";
+  function ensureScratchpadVolatileKey() {
+    if (S._scratchpadVolatileKey) return S._scratchpadVolatileKey;
+    const rnd = Array.from(crypto.getRandomValues(new Uint8Array(6))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    S._scratchpadVolatileKey = SCRATCHPAD_PREFIX + rnd;
+    return S._scratchpadVolatileKey;
+  }
+  function pendingNoteDir() {
+    if (S.activeFilePath) return parentDir(S.activeFilePath);
+    if (S.previewMediaPath) return parentDir(S.previewMediaPath) || S.rootPath || null;
+    return S.selectedDirPath || S.rootPath || null;
+  }
+  function parentDir(p) {
+    const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+    if (i < 0) return "";
+    return i === 0 ? p[0] : p.slice(0, i);
+  }
+
   // src/sidebar/paths.js
   var paths_exports = {};
   __export(paths_exports, {
@@ -593,79 +671,6 @@
     const name = baseNameOf(mediaPath);
     const rel = baseDir ? relativePath(baseDir, mediaPath) : name;
     return `![${name}](${encodeLinkDest(rel)})`;
-  }
-
-  // src/sidebar/state.js
-  var btnSidebar = document.getElementById("btn-sidebar");
-  var sidebarPanel = document.getElementById("project-sidebar");
-  var sidebarDivider = document.getElementById("sidebar-divider");
-  var folderNameEl = document.getElementById("sidebar-folder-name");
-  var btnProjectsBtn = document.getElementById("sidebar-projects-btn");
-  var btnOpenFolder = document.getElementById("sidebar-open-folder");
-  var btnNewFile = document.getElementById("sidebar-new-file");
-  var btnNewFolder = document.getElementById("sidebar-new-folder");
-  var btnToggleAll = document.getElementById("sidebar-toggle-all");
-  var btnSortBtn = document.getElementById("sidebar-sort-btn");
-  var btnViewBtn = document.getElementById("sidebar-view-btn");
-  var treeEl = document.getElementById("sidebar-tree");
-  var docTitleEl = document.getElementById("doc-title");
-  var btnSidebarMobile = document.getElementById("btn-sidebar-mobile");
-  var S = {
-    sidebarOpen: false,
-    rootPath: null,
-    // Currently open root folder
-    activeFilePath: null,
-    // File open in the editor
-    selectedDirPath: null,
-    // Last folder clicked in the tree (for new file/folder)
-    isDirty: false,
-    // True when editor differs from saved file
-    _scratchpadVolatileKey: null,
-    // string | null — current placeholder path
-    /* sidebarViewMode : 'tree' | 'card'  (persisted to localStorage) */
-    sidebarViewMode: "tree",
-    cardViewDir: null,
-    /* Media file shown in the preview while no note is open (fileops.js
-       openMediaFile). Display + naming only: the tree highlights it, and
-       the scratchpad auto-create (save.js) names the new note after it and
-       places it beside it (pendingNoteDir). Cleared whenever the editor
-       moves on to a file, a folder switch, or the scratchpad creates the
-       note. */
-    previewMediaPath: null,
-    selectionAnchor: null,
-    // Last non-shift clicked path (range anchor)
-    _dragItems: [],
-    // [{path, type}] currently being dragged
-    /* Serialize async FS operations — prevents simultaneous move/rename/delete
-       from corrupting state if the user clicks very quickly. */
-    _operationLock: false,
-    /* Watcher suppression: after we write ourselves we ignore the next
-       watcher event for this many ms to avoid a false "external change" dialog */
-    _suppressWatchUntil: 0,
-    _externalChangeInProgress: false,
-    _replaceGeneration: 0,
-    _conflictHoldPath: null
-  };
-  try {
-    const vm = localStorage.getItem("revery_sidebar_view");
-    if (vm === "card" || vm === "tree") S.sidebarViewMode = vm;
-  } catch {
-  }
-  var expandedDirs = /* @__PURE__ */ new Set();
-  var selectedItems = /* @__PURE__ */ new Set();
-  var _previewCache = /* @__PURE__ */ new Map();
-  var SUPPRESS_MS = 2e3;
-  var SCRATCHPAD_PREFIX = "__revery_scratchpad__/";
-  function ensureScratchpadVolatileKey() {
-    if (S._scratchpadVolatileKey) return S._scratchpadVolatileKey;
-    const rnd = Array.from(crypto.getRandomValues(new Uint8Array(6))).map((b) => b.toString(16).padStart(2, "0")).join("");
-    S._scratchpadVolatileKey = SCRATCHPAD_PREFIX + rnd;
-    return S._scratchpadVolatileKey;
-  }
-  function pendingNoteDir() {
-    if (S.activeFilePath) return dirOf(S.activeFilePath);
-    if (S.previewMediaPath) return dirOf(S.previewMediaPath) || normalizePath(S.rootPath || "") || null;
-    return normalizePath(S.selectedDirPath || S.rootPath || "") || null;
   }
 
   // src/sidebar/helpers.js
@@ -4430,12 +4435,14 @@ Restore these changes, or discard and keep the saved version.`,
     for (const e of entries) {
       if (!e || !e.name || e.name.startsWith(".")) continue;
       const isDir = e.type === "dir";
+      let kind = "folder";
       if (!isDir) {
         const cat = getFileCategory(e.name);
         if (cat !== "media" && cat !== "text") continue;
+        kind = cat === "media" ? "image" : "note";
       }
       if (segLower && !e.name.toLowerCase().startsWith(segLower)) continue;
-      out.push({ name: e.name, isDir });
+      out.push({ name: e.name, isDir, kind });
     }
     out.sort((a, b) => b.isDir - a.isDir || a.name.localeCompare(b.name));
     return { rawSegLength: rawSeg.length, entries: out.slice(0, 60) };
@@ -4444,6 +4451,7 @@ Restore these changes, or discard and keep the saved version.`,
   // src/sidebar/index.js
   window.sidebarYamlIndex = getYamlIndex;
   window.sidebarListLinkCompletions = listLinkCompletions;
+  window.sidebarIcon = icon;
   window.ReveryPaths = Object.freeze({ ...paths_exports });
   window.sidebarGetLinkBaseDir = pendingNoteDir;
   if (!window.NativeAPI || !window.NativeAPI.isDesktop) {

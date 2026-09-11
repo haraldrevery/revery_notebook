@@ -29,7 +29,7 @@ const {
     history, historyKeymap, defaultKeymap,
     markdown, Strikethrough, TaskList, Table, codeLanguages, syntaxHighlighting, defaultHighlightStyle,
     lineNumbers,
-    autocompletion, startCompletion, completionStatus
+    autocompletion, startCompletion, completionStatus, acceptCompletion, moveCompletionSelection
   } = CM;  // Note: language-data pack omitted (see codemirror-bundle.js)
 
 const lineNumbersCompartment = new Compartment();
@@ -478,7 +478,8 @@ const lineNumbersCompartment = new Compartment();
     const from = context.pos - res.rawSegLength;
     const options = res.entries.map((e) => ({
       label: e.name + (e.isDir ? '/' : ''),
-      type: e.isDir ? 'folder' : 'file',
+      /* 'folder' | 'image' | 'note' — drives the row glyph (5f). */
+      type: e.kind || (e.isDir ? 'folder' : 'note'),
       apply: (view, _completion, applyFrom, applyTo) => {
         const insert = _encodeLinkSeg(e.name) + (e.isDir ? '/' : '');
         view.dispatch({
@@ -498,6 +499,44 @@ const lineNumbersCompartment = new Compartment();
       validFor: /^[^()\s/]*$/,
     };
   }
+
+  // ── 5f. Completion menu: Tab accepts, rows carry a kind glyph ──────────
+  /* Tab = "take it" (VS Code muscle memory). selectOnOpen:false means a
+     freshly opened menu highlights nothing, so Enter keeps inserting
+     newlines (frontmatter needs that); Tab accepts the highlighted row,
+     or the FIRST row when none is highlighted yet. While a menu is open
+     Tab never falls through to the 4-space insert (5a): four spaces
+     inside a link destination or a YAML value is never what was meant.
+     The engine's interactionDelay (~75 ms after open) makes both calls
+     no-ops — Tab is then simply swallowed, nothing is inserted.       */
+  const completionTabKeymap = [{
+    key: 'Tab',
+    run: (view) => {
+      if (completionStatus(view.state) !== 'active') return false;
+      if (acceptCompletion(view)) return true;
+      moveCompletionSelection(true)(view);
+      acceptCompletion(view);
+      return true;
+    },
+  }];
+
+  /* Row glyph for link-path rows only (type 'folder' | 'image' | 'note'),
+     drawn from the app's own icon set — src/sidebar/icons.js, exposed by
+     the sidebar bundle as window.sidebarIcon (desktop only; the link
+     source is inert without that bundle anyway). YAML rows carry no
+     type and render without a glyph. Styled by .cm-completion-kind in
+     revery_notebook_style.css; the engine's own icon column stays off. */
+  const completionKindGlyph = {
+    render: (completion) => {
+      const name = { folder: 'folder', image: 'image', note: 'file' }[completion.type];
+      if (!name || typeof window.sidebarIcon !== 'function') return null;
+      const wrap = document.createElement('span');
+      wrap.className = 'cm-completion-kind';
+      wrap.appendChild(window.sidebarIcon(name));
+      return wrap;
+    },
+    position: 20,
+  };
 
   // ═════════════════════════════════════════════════════════════════════════
   // 6.  BUILD INITIAL EDITOR STATE
@@ -529,11 +568,17 @@ const lineNumbersCompartment = new Compartment();
          parens) and returns null everywhere else, so they can never
          conflict and the engine stays inert outside both. selectOnOpen:
          false keeps Enter inserting newlines until the user arrows onto
-         an option (menus auto-open on click/typing — never steal Enter).
-         icons:false matches the app's clean menu aesthetic.           */
-      autocompletion({ override: [yamlCompletionSource, linkPathCompletionSource], selectOnOpen: false, icons: false }),
+         an option (menus auto-open on click/typing — never steal Enter);
+         Tab accepts (5f). icons:false keeps the engine's icon column
+         off — link rows get the app's own glyph via addToOptions.    */
+      autocompletion({
+        override: [yamlCompletionSource, linkPathCompletionSource],
+        selectOnOpen: false,
+        icons: false,
+        addToOptions: [completionKindGlyph],
+      }),
       yamlClickToComplete,
-      Prec.highest(keymap.of(tabKeymap)),
+      Prec.highest(keymap.of([...completionTabKeymap, ...tabKeymap])), // completion Tab first (5f), then 5a
       Prec.high(keymap.of([...escapeKeymap, ...autoWrapKeymap])),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       notebookTheme,

@@ -1535,6 +1535,36 @@
   yamlComplete.commaListValues = commaOpened && cl.includes('red') && cl.includes('green blue');
   if (CM.closeCompletion) CM.closeCompletion(window.cmView);
 
+  /* Skin: the menu inherits the EDITOR font (never CodeMirror's stock
+     generic monospace) and never shows the engine's blue selection bar —
+     regression guard for the #editor-prefixed rules that must outrank
+     CM's scoped base theme. Then: Tab accepts the FIRST row when nothing
+     is highlighted yet (VS Code habit), instead of inserting spaces. */
+  replaceEditorContent('---\ntags: [alpha, beta]\ntags: \n---\n\nbody');
+  const sPos = editor.value.indexOf('tags: \n') + 6;
+  window.cmView.focus();
+  window.cmView.dispatch({ selection: { anchor: sPos }, userEvent: 'select.pointer' });
+  await fmWait();
+  await sleep(400);
+  {
+    const ul = document.querySelector('.cm-tooltip-autocomplete > ul');
+    const contentFont = getComputedStyle(window.cmView.contentDOM).fontFamily;
+    fmCd.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await sleep(150);
+    const sel = document.querySelector('.cm-tooltip-autocomplete li[aria-selected]');
+    yamlComplete.skinFollowsEditor = !!ul && getComputedStyle(ul).fontFamily === contentFont
+      && !!sel && getComputedStyle(sel).backgroundColor !== 'rgb(17, 119, 204)';
+    if (CM.closeCompletion) CM.closeCompletion(window.cmView);
+    await sleep(150);
+    window.cmView.dispatch({ selection: { anchor: sPos }, userEvent: 'select.pointer' });
+    await fmWait();
+    await sleep(400);
+    const noneSelected = !document.querySelector('.cm-tooltip-autocomplete li[aria-selected]');
+    fmCd.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    await sleep(250);
+    yamlComplete.tabAcceptsFirst = noneSelected && /^tags: (alpha|beta)$/.test(editor.value.split('\n')[2]);
+  }
+
   /* Outline +/- buttons scale only the outline font var, persisted. */
   const pctBefore = window.getOutlineFontSize();
   const varBefore = document.documentElement.style.getPropertyValue('--outline-font-size');

@@ -717,6 +717,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output; `buildZipFromEntries` (LaTeX-project assembler) auto parent-dirs + unsafe-name rejection |
 | `test/link_rewrite.test.js` | The pure link rewriter behind rename/move link-updating: encoding round-trips (%20/%25/parens/unicode), `../` traversal, folder-prefix moves, self-moved files, fenced/inline code opacity, scheme/anchor immunity, undo (inverse-mapping) round-trip |
 | `test/find_e2e.test.js` | Boots the REAL app in Electron and asserts ~19 feature suites: regex worker + ReDoS, slow-hardware mode, backgrounds pipeline, live-preview parity, YAML autocomplete, export builders (PDF/LaTeX incl. Revery templates + engine gating), custom templates, custom fonts, link-path completion gating, Advanced Options, divider/menu interaction, the PDF print page graft |
+| `test/link_complete.test.js` | The link-path completion feed: desktop-only, root containment (`..` may climb, never leave; absolute/URL quiet), folders+images+notes only, decoded prefix filter with raw `rawSegLength`, `kind` per row, Windows spellings, size cap |
 | `test/paths.test.js` | The single path-rule module behind preview, export, link rewriting, autocomplete and media ingest: normalisation, resolve/relative (incl. Windows case-insensitivity), encode/decode round-trips, root containment (sibling-prefix attack, verbatim prefix) |
 | `test/tauri_config.test.js` | Pins the per-platform file-drop transport to the Tauri config: the Windows override mirrors the main window except `dragDropEnabled:false`, and `drop_transport.js` agrees with it |
 | `test/media_e2e.test.js` | Boots the REAL Electron main (preload, IPC, atomic writes) on a temporary project and drives real DragEvent/ClipboardEvent drops: one encoded link per image, preview resolves it, non-media never copied, sidebar payload inserts once, image click previews from its own folder, media dropped while previewing lands beside the note it creates with every link resolving, paste, autosave, no native dialog |
@@ -816,6 +817,24 @@ should consume it rather than growing its own walker. Caps: 800 files,
 1 MB/file, 200 keys, 300 values per key. Web mode indexes the current
 document only. Read-only by construction.
 
+**Menu skin & keys** (shared with the link-path menu below): the
+`#editor .cm-tooltip.cm-tooltip-autocomplete…` block in
+`revery_notebook_style.css` skins the popup to the EDITOR — it inherits
+the editor font family (`--editor-font`, custom fonts included) and
+scales with the editor text size (em units off `#editor`'s inline
+font-size), palette from the theme variables. The `#editor` prefix is
+load-bearing: CodeMirror's base theme is scoped to a generated class on
+the editor element (`.ͼ1 .cm-tooltip.cm-tooltip-autocomplete > ul`,
+specificity 0,3,1), so un-prefixed rules lose silently — the menu once
+shipped in the browser's generic monospace with CM's blue selection bar
+for exactly that reason. Keys: menus open with nothing highlighted
+(`selectOnOpen:false`) so Enter still inserts a newline; ↑/↓ highlight;
+Enter accepts a highlighted row; **Tab accepts the highlighted row, or
+the first row when none is highlighted** (cm_setup.js §5f, ahead of the
+4-space Tab), and is swallowed rather than inserting spaces while a menu
+is open; Escape closes; Ctrl+Space re-opens. The web-mode E2E checks the
+computed font and selection colour, not just DOM presence.
+
 ### Project Search
 
 The sidebar's magnifier (icon: the 🔍 glyph extracted from the Harald
@@ -858,9 +877,22 @@ hit that.
   the Harald bold-underline rule handle customs automatically.
 - **Link-path autocomplete** (`src/sidebar/link_complete.js` + a second
   CodeMirror completion source in `markdown_editor_cm_setup.js`): typing
-  inside `![...](here)` suggests folders/media/notes, resolved with the
-  SAME `resolveRel` semantics as the renderer and root-contained;
-  accepting a folder descends. Returns null in web mode (source inert).
+  inside `![...](here)` / `[...](here)` suggests folders, images and
+  notes reachable from the active note's folder, resolved with the SAME
+  `paths.js` rules as the renderer (`..` climbs, never past the project
+  root; absolute paths and URLs list nothing) and inserted with the same
+  `encodeLinkDest` encoding. Folders first, then names; dot-entries and
+  non-image/non-note files are hidden; prefix filter on the DECODED
+  segment (`work%20st` matches "work stuff"); 60 rows max. Each row
+  carries a `kind` (folder / image / note) rendered as a glyph from the
+  app icon set (`window.sidebarIcon`, exported by the bundle). Accepting
+  a folder inserts `name/` and re-opens the menu one level down; Tab
+  accepts (see YAML menu keys above). Returns null in web mode (source
+  inert). Unit-tested in `test/link_complete.test.js`; the desktop E2E
+  (`media_e2e`) drives it through the real IPC. Note: a leading `/` is an
+  absolute filesystem path here (as in the renderer), NOT "project root"
+  as in VS Code/GitHub — changing that is a `paths.js` rule change that
+  must land in renderer, link rewriter and completion together.
 - **i18n conventions**: every user-visible string goes through
   `window.t()`; interpolations use `{n}`/`{name}` placeholder keys +
   `.replace()` so Swedish word order stays natural. Brand names and the

@@ -24,9 +24,12 @@ import { resolvePath, isInsideRoot, hasUrlScheme, decodeLinkDest } from './paths
  *                          exactly as it appears in the document (may be
  *                          percent-encoded — links usually are).
  * @returns {Promise<null | { rawSegLength: number,
- *                            entries: Array<{name: string, isDir: boolean}> }>}
+ *                            entries: Array<{name: string, isDir: boolean,
+ *                                            kind: 'folder'|'image'|'note'}> }>}
  *   rawSegLength — length of the segment after the last '/', in RAW text
  *   (the completion source replaces exactly that range).
+ *   kind         — what the row is, for the menu's glyph; derived from the
+ *                  same getFileCategory the sidebar tree uses.
  */
 export async function listLinkCompletions(rawDest) {
   if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return null;
@@ -57,12 +60,14 @@ export async function listLinkCompletions(rawDest) {
   for (const e of entries) {
     if (!e || !e.name || e.name.startsWith('.')) continue;
     const isDir = e.type === 'dir';
+    let kind = 'folder';
     if (!isDir) {
       const cat = getFileCategory(e.name);
       if (cat !== 'media' && cat !== 'text') continue; // folders + media + notes
+      kind = cat === 'media' ? 'image' : 'note';
     }
     if (segLower && !e.name.toLowerCase().startsWith(segLower)) continue;
-    out.push({ name: e.name, isDir });
+    out.push({ name: e.name, isDir, kind });
   }
   out.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name));
   return { rawSegLength: rawSeg.length, entries: out.slice(0, 60) };
