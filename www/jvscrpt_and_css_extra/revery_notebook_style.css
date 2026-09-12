@@ -79,10 +79,19 @@ body.desktop-app:not(.is-macos) #win-controls {
 body.desktop-app.is-macos #topbar {
   padding-left: 80px; /* ~3 traffic-light buttons + gap */
 }
-   /*in markdown_editor_menus.js, which injects a <style id="ui-scale-prose-fix">
-   tag with #preview .prose h1/h2/prose-lg rules calculated from uiSize and
-   previewTextSize. Those rules have higher specificity than prose.css and take
-   effect without needing !important or CSS custom properties here. */
+/* Heading scale: every level is a fixed multiple of the body text size, so
+   the hierarchy keeps the same proportions for any preview font, preview
+   text size or UI size (--text-body already carries both compensations,
+   see applyTextSize() in markdown_editor_menus.js). The steps shrink toward
+   h6, which sits just under body size because headings are uppercase and
+   capitals read larger than lowercase at the same size. These rules beat
+   every heading size in prose_rn.css, so this is the one place to tune. */
+:is(#preview, .lp-render) .prose h1 { font-size: calc(var(--text-body) * 2.6); }
+:is(#preview, .lp-render) .prose h2 { font-size: calc(var(--text-body) * 2); }
+:is(#preview, .lp-render) .prose h3 { font-size: calc(var(--text-body) * 1.5); }
+:is(#preview, .lp-render) .prose h4 { font-size: calc(var(--text-body) * 1.2); }
+:is(#preview, .lp-render) .prose h5 { font-size: calc(var(--text-body) * 1.05); }
+:is(#preview, .lp-render) .prose h6 { font-size: calc(var(--text-body) * 0.95); }
 
 /* Replaces injected <style> for Font Types */
 #editor { 

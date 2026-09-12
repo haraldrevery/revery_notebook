@@ -437,9 +437,10 @@ function applyTextSize() {
   document.documentElement.style.setProperty('--text-body-mobile', ((1.07 * previewScale) / uiScale).toFixed(3) + 'rem');
   // Scale the editor textarea font directly (hardcoded 0.96rem baseline)
   document.getElementById('editor').style.fontSize = ((0.96 * editorScale) / uiScale).toFixed(3) + 'rem';
-  // Keep headings and code-block sizes in sync with the new text scale.
-  // These use hardcoded rem values in prose_rn.css so they need the same
-  // combined UI-compensation + text-scale treatment applied here.
+  // Keep the prose-lg base (code blocks, tables…) in sync with the new text
+  // scale. It is a hardcoded rem value in prose_rn.css so it needs the same
+  // combined UI-compensation + text-scale treatment applied here. Headings
+  // follow --text-body directly (see revery_notebook_style.css).
   applyUiSizeProseCompensation();
 }
 
@@ -533,14 +534,13 @@ window.setPreviewTextSize = function (pct) {
 })();
 
 /* Apply UI size: injects a <style> override that counteracts the root
-   font-size change for prose headings, which use hardcoded rem values in
-   prose_rn.css (h1=3rem, h2=1.875rem) and the prose-lg base (1.125rem) that
-   drives h3/h4 via em. Without this, UI menu size bleeds into the preview.
-   The outline items are already covered by --outline-font-size above, and
-   prose p/li are already covered by --text-body/--text-body-mobile.
-   textSize is also factored in here because these elements use hardcoded
-   rem values that bypass --text-body, so this is the single place where
-   both the UI-bleed compensation and the text scale are applied together. */
+   font-size change for the prose-lg base (1.125rem), which drives the
+   em-sized prose elements (code blocks, tables, captions…). Without this,
+   UI menu size bleeds into the preview. Headings are sized from
+   --text-body (heading scale in revery_notebook_style.css), the outline
+   items by --outline-font-size above, and prose p/li by
+   --text-body/--text-body-mobile. textSize is also factored in here
+   because the base is a hardcoded rem value that bypasses --text-body. */
 function applyUiSizeProseCompensation() {
   let styleEl = document.getElementById('ui-scale-prose-fix');
   if (!styleEl) {
@@ -551,12 +551,9 @@ function applyUiSizeProseCompensation() {
   const inv    = (1 / (uiSize / 100)).toFixed(4);
   const tScale = (previewTextSize / 100).toFixed(4);
   /* .lp-render is the live preview's rendered-block scope: it must get
-     the exact same compensation or its headings drift from the preview. */
-  styleEl.textContent = [
-    `:is(#preview, .lp-render) .prose h1       { font-size: calc(3rem      * ${inv} * ${tScale}); }`,
-    `:is(#preview, .lp-render) .prose h2       { font-size: calc(1.875rem  * ${inv} * ${tScale}); }`,
-    `:is(#preview, .lp-render) .prose.prose-lg { font-size: calc(1.125rem  * ${inv} * ${tScale}); }`
-  ].join('\n');
+     the exact same compensation or its blocks drift from the preview. */
+  styleEl.textContent =
+    `:is(#preview, .lp-render) .prose.prose-lg { font-size: calc(1.125rem * ${inv} * ${tScale}); }`;
 }
 
 /* Apply reader mode padding: constrains the prose content width so text
