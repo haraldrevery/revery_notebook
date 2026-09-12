@@ -383,6 +383,8 @@ body {
 .menu-container::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
 
 .menu-container.show { display: flex; }
+/* Anchored here, not inline: smartPositionDropdown() strips inline top/right. */
+#settings-dropdown,
 #toolbar-dropdown { top: 38px; right: 0; }
 .menu-item {
   background: none;
@@ -978,13 +980,15 @@ body.reader-mode-active #preview-pane .pane-label { display: none !important; }
 
 body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; }
 
-/* Desktop edit mode: place the Outline button between Toolbar and Export.
-   Default order is 0, so unordered buttons (Reader Mode, Settings, Toolbar)
-   keep their DOM order; Outline / Export / win-controls slot in after them. */
+/* Desktop edit mode: Toolbar before Settings (the DOM has Settings first,
+   which mobile keeps), then Outline / Export / win-controls. Default order
+   is 0, so unordered buttons (Reader Mode) keep their DOM order in front. */
 @media (min-width: 821px) {
-  body:not(.reader-mode-active) #btn-reader-outline { order: 1; }
-  body:not(.reader-mode-active) #btn-export         { order: 2; }
-  body:not(.reader-mode-active) #win-controls       { order: 3; }
+  body:not(.reader-mode-active) #topbar-right > div:has(#btn-toolbar)  { order: 1; }
+  body:not(.reader-mode-active) #topbar-right > div:has(#btn-settings) { order: 2; }
+  body:not(.reader-mode-active) #btn-reader-outline { order: 3; }
+  body:not(.reader-mode-active) #btn-export         { order: 4; }
+  body:not(.reader-mode-active) #win-controls       { order: 5; }
 }
 
 @media (max-width: 820px) {
