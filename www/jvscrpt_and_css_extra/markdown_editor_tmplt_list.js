@@ -10,8 +10,8 @@ const yamlTemplates = [
     content: `---\ntitle: Blog Title\ndate: ${getTodayStr()}\ntags: [tag_1, tag_2]\nimage: /notebook_thumbnails/default.jpg\ndescription: Blog description.\ndraft: true\n---\n\n`
   },
   {
-    label: 'LLM Entry',
-    content: `---\ntitle: "Title of post"\nllm_Model: "Model name"\nprompt_version: 4\ncategory: [category_1, category_2]\ntags: [tag_1, tag_2, tag_3, tag_4]\ndate: ${getTodayStr()}\ndescription: "A short description of the post."\n---\n\n`
+    label: 'Entry',
+    content: `---\ntitle: "Title of post"\ndate: ${getTodayStr()}\ndescription: "A short description of the post."\ntags: [tag_1, tag_2, tag_3, tag_4]\ncategory: [category_1, category_2]\nauthor: "Forename_Surname"\nversion: 1\ndate: false\n---\n\n`
   }
   // Add as many as you want here!
 ];
