@@ -3044,6 +3044,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       thumb.replaceChildren(icon("image"));
     } else if (category === "media") {
       const img = document.createElement("img");
+      img.draggable = false;
       img.alt = entry.name;
       img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
       try {

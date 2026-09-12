@@ -18,7 +18,9 @@
      8. no native dialog was needed at any point;
      9. in live preview, a drop on a rendered block goes in as its own
         paragraph after the source line under the pointer (after a whole
-        code fence, never inside it).
+        code fence, never inside it);
+     10. in card view the media card owns the drag — its thumbnail <img> is
+        not draggable, so grabbing the picture carries the card payload.
    Skipped when no display server is available (same rule as find_e2e). */
 
 const { test } = require('node:test');
@@ -116,4 +118,8 @@ test('media drop/paste/preview end-to-end in the real Electron app', { skip: !ha
     'a drop on a rendered code line goes after the whole fence, never inside it\n' + why);
   assert.deepEqual(r.lpDrop.paragraph, { found: true, count: 1, before: ['intro paragraph here', ''], after: ['', '- alpha item'] },
     'a drop on a rendered paragraph goes in as its own paragraph right after it\n' + why);
+
+  // 11. card view: the card owns the drag, picture included
+  assert.deepEqual(r.cardDrag, { found: true, imgDraggable: false, cardDraggable: true, payloadIsCard: true },
+    'grabbing a media card by its picture must drag the CARD (non-draggable <img>) with the card payload\n' + why);
 });

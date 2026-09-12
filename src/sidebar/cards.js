@@ -95,6 +95,10 @@ let _cardGeneration = 0;
     } else if (category === 'media') {
       /* Try to show the actual image */
       const img = document.createElement('img');
+      /* The CARD owns the drag (same rule as the tree row's children in
+         tree.js): an <img> is draggable on its own, so grabbing the
+         picture started a native image drag instead of the card's. */
+      img.draggable = false;
       img.alt   = entry.name;
       img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
       /* toMediaUrl is synchronous — no await needed */

@@ -285,5 +285,30 @@
     window.setLivePreviewMode(false);
   }
 
+  /* 10. Card view: the CARD owns the drag. A media card's thumbnail is an
+         <img>, which browsers drag on their own — grabbing the picture
+         started a native image drag instead of the card's. The <img> must
+         be non-draggable so the card is the drag source wherever it is
+         grabbed, and its dragstart carries the card's payload. (Which
+         element the browser picks as drag source cannot be driven by a
+         synthetic event — imgDraggable is the guard.) */
+  {
+    const viewBtn = document.getElementById('sidebar-view-btn');
+    viewBtn.click();
+    const img = await until(() => document.querySelector('.sidebar-card-media .sidebar-card-thumb img'), 5000);
+    const card = img && img.closest('.sidebar-card');
+    out.cardDrag = { found: !!card };
+    if (card) {
+      out.cardDrag.imgDraggable = img.draggable;
+      out.cardDrag.cardDraggable = card.draggable;
+      const dt = new DataTransfer();
+      img.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      out.cardDrag.payloadIsCard = dt.getData('application/x-revery-path') === card.dataset.path;
+      card.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
+    }
+    viewBtn.click(); // back to the tree view
+    await until(() => !document.querySelector('.sidebar-card'), 5000);
+  }
+
   return out;
 })()
