@@ -5,7 +5,7 @@
    decided once by drop_transport.js. */
 import { S, treeEl, selectedItems } from './state.js';
 import { updateMultiSelectHighlight } from './tree.js';
-import { copyIntoFolder, ingestMediaAt, filesToSources, pathsToSources, docPosAtClient } from './media_ingest.js';
+import { copyIntoFolder, ingestMediaAtDrop, filesToSources, pathsToSources, dropTargetAt } from './media_ingest.js';
 import { fileDropTransport, isOsFileDrop } from './drop_transport.js';
 import { moveNodes } from './fileops.js';
 
@@ -207,7 +207,7 @@ export function initDnd() {
         const { x, y } = toClient(pos);
         const el = document.elementFromPoint(x, y);
         if (el && el.closest && el.closest('#editor')) {
-          ingestMediaAt(pathsToSources(paths), docPosAtClient(x, y));
+          ingestMediaAtDrop(pathsToSources(paths), dropTargetAt(x, y));
         }
       },
     }).catch(() => { /* listener registration failed — drop simply won't work */ });

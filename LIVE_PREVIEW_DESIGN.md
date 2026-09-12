@@ -204,13 +204,15 @@ a bare StreamLanguage, but lang-markdown's nesting reads
 colors intermittently in BOTH editors. Fixed by resolving a
 LanguageSupport wrapper (bundle rebuilt).
 
-Click-to-edit scroll pinning (v2 follow-up after user soak): a plain
+Click-to-edit scroll pinning (v2 follow-up after user soak; superseded
+by the top-edge anchoring in §10): a plain
 `scrollIntoView: true` made the view jump when a widget swapped to raw
 text (heights reflow above and below). The mousedown now dispatches an
 `EditorView.scrollIntoView(pos, { y: 'start', yMargin })` effect with
 yMargin = the pointer's offset from the scroller top, so the clicked
 source line stays exactly under the pointer after the reflow. E2E
-`clickUnderPointer` asserts the property (polls — measure/rAF lags
+`clickUnderPointer` asserted the property — it is now `clickKeepsTop`,
+the top-edge property of §10 (probes poll: measure/rAF lags
 under a parallel test run; also note widget DOM only exists inside the
 drawn viewport, so probes must scroll via CM before querying it).
 
@@ -288,10 +290,10 @@ event over rendered content mean?*
   hidden inside widgets (CodeMirror only hides it under `.cm-line`).
   Keyboard extension (Shift+Arrow) into a rendered block behaves the same
   way; typing then replaces the selected source.
-- **Row pinning** after a click is a `requestMeasure` read/write in the
-  same frame: it scrolls only by the drift of the clicked source row from
-  the pointer (zero when the reflow left it in place) and is void if the
-  document changed before the frame ran (file switch).
+- **Top-edge anchoring** after a click (replaced row pinning — see §10):
+  the clicked block's top edge keeps its screen position; the scroll
+  correction runs after CodeMirror's measure cycle, before paint, and is
+  void if the document changed in between (file switch).
 - **Repeat clicks** (double = word, triple = line) are counted here,
   reusing the first click's mapped position, so a double-click on a
   rendered word selects that word even though the raw text has shifted
@@ -305,4 +307,49 @@ mouse events. Harness note: the hidden Electron window's
 `requestAnimationFrame` is unreliable, so the driver forces CodeMirror's
 measure cycle (`view.coordsAtPos`) where a visible window would simply
 have painted the next frame — that is what applies pending
-scroll-into-view targets, the pin and the marker.
+scroll-into-view targets, the top-edge correction and the marker.
+
+## 10. v2 geometry — what the height map may assume
+
+Three soak reports — a click on a block's border scrolled the page,
+images dropped from the file panel landed rows too low, revealing a block
+made the whole text jump — traced to one invisible cause and one design
+choice.
+
+- **Widgets must contain their margins.** CodeMirror sizes a block widget
+  by its own box. Nested margins (list items, a blockquote's paragraph)
+  collapsed OUT of `.lp-render`, so the height map fell behind the screen
+  by their sum: −78 px by the second section of a test note, −160 px by
+  the third. Everything that reads the height map — `posAtCoords`, block
+  lookup by height, the drop position — then pointed at a later block: a
+  click 3 px above a paragraph revealed the paragraph and the pin
+  scrolled it under the pointer; a drop on a list's first item appended
+  the link to the end of the NEXT heading. `.lp-render` / `.lp-yaml` are
+  `display: flow-root`: drift 0 px, layout unchanged (the margins already
+  took that space, just outside the box). The E2E asserts the invariant
+  on a note with lists, quotes, code and tables above the probe points —
+  the older probe documents had none, which is why it was never seen.
+- **A click keeps the clicked block's TOP edge in place** (replaces §9's
+  row pinning, which split every height change between the text above
+  and below the click). The top of what was clicked — the rendered block,
+  or the raw line — stays at its screen y, so a block that is shorter or
+  taller raw changes size downward only. Accepted cost: when raw text is
+  taller than its rendering (soft line breaks) the caret can land a row
+  below the pointer. Timing is load-bearing: CodeMirror's own scroll
+  anchoring compensates height changes ABOVE the viewport once every
+  measure request has drained, so a correction made inside a request
+  doubled it (measured: the clicked block jumped by the full collapse of
+  an off-screen block). The correction runs in a microtask queued from
+  the measure's write phase — after the whole cycle, before paint — and
+  only corrects what is left.
+- **Beside a block** (the padding left/right of the column) a click reads
+  the row at that height, not CodeMirror's answer for a point beside a
+  widget (the block's first or last line).
+- **Drops** (`window.livePreviewDropPos`, called by media_ingest.js): the
+  point maps like a click to a source line and the media goes in as its
+  own paragraph after that line (`src/sidebar/block_insert.js`,
+  unit-tested) — after the whole construct where splitting would corrupt
+  it (code, tables, HTML blocks, setext headings, blockquotes, `$$`
+  paragraphs, frontmatter) and, in a list, after the item holding the
+  line. The classic editor still inserts at the character under the
+  pointer.

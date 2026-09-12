@@ -2288,9 +2288,19 @@ body.live-preview-active #editor .cm-scroller {
   /* The CM content area is white-space:pre — rendered HTML must not
      show the renderer's source newlines as literal whitespace.        */
   white-space: normal;
+  /* A block widget must CONTAIN its children's vertical margins.
+     CodeMirror measures a widget by its own box; a margin collapsing out
+     of it (list items, a blockquote's paragraph, …) takes up space that
+     CodeMirror never counts, so its height map drifts from the screen by
+     the sum of every such margin above — and clicks, drops and scroll
+     targets resolve to the wrong block. flow-root stops the collapse; the
+     layout is unchanged (the margins already took that space, just
+     outside the box).                                                  */
+  display: flow-root;
 }
-/* Blank raw lines between blocks provide the vertical rhythm; the
-   prose margins inside each widget must not double it at the edges.   */
+/* Blank raw lines between blocks provide the vertical rhythm; the prose
+   margins of a widget's top-level elements must not double it at the
+   edges. (Nested margins stay inside the widget — flow-root above.)    */
 .lp-render .prose > :first-child { margin-top: 0; }
 .lp-render .prose > :last-child  { margin-bottom: 0; }
 /* Renderer unavailable / empty output — the raw source is shown instead. */
@@ -2546,6 +2556,7 @@ body.live-preview-active #editor-pane {
 .lp-yaml {
   cursor: pointer;
   white-space: normal;
+  display: flow-root; /* contain child margins — see .lp-render */
 }
 .lp-yaml .yaml-render { margin-top: 4px; }
 

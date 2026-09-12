@@ -3302,6 +3302,13 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     })();
   }
 
+  // src/sidebar/block_insert.js
+  function paragraphInsertion(before, after, block) {
+    const lead = before === "" || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+    const trail = after.startsWith("\n\n") ? "" : after === "" || after.startsWith("\n") ? "\n" : "\n\n";
+    return { insert: lead + block + trail, cursor: lead.length + block.length + 1 };
+  }
+
   // src/sidebar/media_ingest.js
   var DROP_MAX_BYTES = 20 * 1024 * 1024;
   var sourceName = (src) => src.kind === "file" ? src.file.name : baseNameOf(src.path);
@@ -3382,7 +3389,32 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
     return editor.selectionStart;
   }
+  function dropTargetAt(x, y) {
+    const lpPos = typeof window.livePreviewDropPos === "function" ? window.livePreviewDropPos(x, y) : null;
+    if (lpPos != null) return { pos: lpPos, paragraph: true };
+    return { pos: docPosAtClient(x, y), paragraph: false };
+  }
+  function insertAtTarget(target, links) {
+    if (!target.paragraph) {
+      window.insertWithUndo(target.pos, target.pos, links + "\n");
+      return;
+    }
+    const doc = window.cmView.state.doc;
+    const pos = Math.max(0, Math.min(target.pos, doc.length));
+    const { insert, cursor } = paragraphInsertion(
+      doc.sliceString(Math.max(0, pos - 2), pos),
+      doc.sliceString(pos, pos + 2),
+      links
+    );
+    window.insertWithUndo(pos, pos, insert, pos + cursor);
+  }
   function ingestMediaAt(sources, from, to = from) {
+    return ingestMedia(sources, (links) => window.insertWithUndo(from, to, links + "\n"));
+  }
+  function ingestMediaAtDrop(sources, target) {
+    return ingestMedia(sources, (links) => insertAtTarget(target, links));
+  }
+  function ingestMedia(sources, insert) {
     const media = sources.filter(isMediaSource);
     if (!media.length) {
       if (sources.length) explainNonMediaDrop();
@@ -3401,19 +3433,18 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return withOperationLock(async () => {
       const { finals, errors } = await copySources(media, dir);
       if (finals.length) {
-        const links = finals.map((p) => mediaMarkdown(p, dir)).join("\n") + "\n";
-        window.insertWithUndo(from, to, links);
+        insert(finals.map((p) => mediaMarkdown(p, dir)).join("\n"));
         expandedDirs.add(dir);
         await renderTree();
       }
       reportCopyIssues(errors, "{n} file(s) could not be added:");
     });
   }
-  function insertSidebarItem(dataTransfer, at) {
+  function insertSidebarItem(dataTransfer, target) {
     const itemPath = dataTransfer.getData(SIDEBAR_ITEM_MIME);
     if (!itemPath) return;
     if (getFileCategory(baseNameOf(itemPath)) !== "media") return;
-    window.insertWithUndo(at, at, mediaMarkdown(itemPath) + "\n");
+    insertAtTarget(target, mediaMarkdown(itemPath));
   }
   function explainNonMediaDrop() {
     if (typeof window.showStatusWarning === "function") {
@@ -3452,14 +3483,14 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (types.includes(SIDEBAR_ITEM_MIME)) {
         e.preventDefault();
         e.stopPropagation();
-        insertSidebarItem(dt, docPosAtClient(e.clientX, e.clientY));
+        insertSidebarItem(dt, dropTargetAt(e.clientX, e.clientY));
         return;
       }
       if (!isOsFileDrop(dt)) return;
       e.preventDefault();
       e.stopPropagation();
       if (transport !== "dom") return;
-      ingestMediaAt(filesToSources(dt.files), docPosAtClient(e.clientX, e.clientY));
+      ingestMediaAtDrop(filesToSources(dt.files), dropTargetAt(e.clientX, e.clientY));
     }, true);
     dom.addEventListener("paste", (e) => {
       const items = e.clipboardData && e.clipboardData.items;
@@ -3593,7 +3624,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           const { x, y } = toClient(pos);
           const el = document.elementFromPoint(x, y);
           if (el && el.closest && el.closest("#editor")) {
-            ingestMediaAt(pathsToSources(paths), docPosAtClient(x, y));
+            ingestMediaAtDrop(pathsToSources(paths), dropTargetAt(x, y));
           }
         }
       }).catch(() => {

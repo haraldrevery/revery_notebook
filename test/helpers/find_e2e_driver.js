@@ -395,9 +395,13 @@
   await sleep(300);
   lpV2.tableReturns = !!document.querySelector('.lp-render table');
 
-  /* Click-to-edit must not make the view jump: after the widget→raw
-     swap (plus surrounding blocks reflowing) the clicked line must
-     still sit at the pointer's height (scroll pinning). */
+  /* A click on a rendered block must not make the view jump: whatever
+     reflows (the block edited before re-renders, a clicked block swaps
+     to raw), the clicked block's TOP EDGE keeps its height on screen.
+     The click lands on the widget's own frame, which routes to the
+     nearest position outside the table — this used to scroll that line
+     under the pointer (the reported "click on a block's border scrolls
+     the page"). */
   const longDoc = [];
   for (let i = 0; i < 15; i++) longDoc.push('Paragraph number ' + i + ' with some filler text.', '');
   longDoc.push('| Col A | Col B |', '|---|---|', '| a | b |', '| c | d |', '');
@@ -405,7 +409,7 @@
   replaceEditorContent(longDoc.join('\n'));
   editor.setSelectionRange(editor.value.length, editor.value.length);
   await sleep(500);
-  lpV2.clickUnderPointer = await (async () => {
+  lpV2.clickKeepsTop = await (async () => {
     const view = window.cmView;
     if (!view) return false;
     /* Scroll the table's DOC position into view through CM itself —
@@ -434,17 +438,25 @@
     }
     if (!wrapEl) return false;
     const clickY = rect.top + rect.height / 2;
+    /* The blank line right above the table is raw before and after the
+       click: its height on screen is the table's top edge. */
+    const aboveLine = view.state.doc.lineAt(tPos).number - 1;
+    const aboveTop = () => { const c = view.coordsAtPos(view.state.doc.line(aboveLine).from); return c ? c.top : null; };
+    const top0 = aboveTop();
+    const headBefore = view.state.selection.main.head;
     wrapEl.dispatchEvent(new MouseEvent('mousedown', {
       bubbles: true, cancelable: true,
       clientX: rect.left + 10, clientY: clickY,
     }));
-    const lineH = view.defaultLineHeight || 24;
-    for (let w = 0; w < 3000; w += 150) {
-      await sleep(150);
-      const coords = view.coordsAtPos(view.state.selection.main.head);
-      if (coords && Math.abs(coords.top - clickY) <= 1.5 * lineH) return true;
-    }
-    return false;
+    for (let w = 0; w < 3000 && view.state.selection.main.head === headBefore; w += 150) await sleep(150);
+    view.coordsAtPos(view.state.selection.main.head); // run the pending measure (and the correction after it)
+    await sleep(300);
+    const head = view.state.selection.main.head;
+    const tableEnd = editor.value.indexOf('| c | d |') + '| c | d |'.length;
+    const top1 = aboveTop();
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: rect.left + 10, clientY: clickY }));
+    return head >= tPos - 1 && head <= tableEnd + 1
+      && top0 != null && top1 != null && Math.abs(top1 - top0) <= 1.5;
   })();
 
   /* Outline click must NAVIGATE only: no selection change, no reveal. */

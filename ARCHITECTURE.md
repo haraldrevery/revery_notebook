@@ -38,7 +38,8 @@ revery_notebook/
 ├── src/sidebar/                      ← Sidebar source modules (state, save, tree, cards,
 │                                        fileops, dnd, media_ingest, search, yaml_index,
 │                                        project_scan, link_complete, …). Pure + unit-tested:
-│                                        paths [the ONLY path rules], link_rewrite, drop_transport
+│                                        paths [the ONLY path rules], link_rewrite, drop_transport,
+│                                        block_insert
 ├── electron/
 │   ├── main.js                       ← Main process wiring: window, IPC, policy
 │   ├── fs_core.js                    ← Pure FS logic (atomic writes, settings store) — unit tested
@@ -272,6 +273,12 @@ One ingest, one path module, one drop transport per platform:
   (`SIDEBAR_ITEM_MIME`); dropping one on the editor inserts the link relative
   to the note at drop time. `text/plain` still carries the markdown for
   external targets. There is no drop handler in the editor scripts anymore.
+  In live preview a drop cannot aim at a character (the blocks are
+  rendered HTML), so `window.livePreviewDropPos`
+  (markdown_editor_livepreview.js) maps the point to a source line and
+  the link goes in as its own paragraph after it — after the whole code
+  block, table, quote or list item where splitting there would break it
+  (`src/sidebar/block_insert.js`). The classic editor is unchanged.
 - **`src/sidebar/drop_transport.js`** decides, once, which channel delivers
   OS files: `dom` (Electron everywhere; Tauri on Windows) or `native`
   (Tauri on Linux/macOS — WebKitGTK cannot read dropped File bytes). Exactly
@@ -719,10 +726,11 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/find_e2e.test.js` | Boots the REAL app in Electron and asserts ~19 feature suites: regex worker + ReDoS, slow-hardware mode, backgrounds pipeline, live-preview parity, YAML autocomplete, export builders (PDF/LaTeX incl. Revery templates + engine gating), custom templates, custom fonts, link-path completion gating, Advanced Options, divider/menu interaction, the PDF print page graft |
 | `test/latex_compile.test.js` | Builds every document in `helpers/latex_cases.js` through the real exporter (web-mode Electron) and compiles each with pdflatex: headings after tables, false `$` spans, footnotes in headings, `[bracket]` items, deep nesting, entities, Unicode/emoji. Skipped without a display or pdflatex |
 | `test/link_complete.test.js` | The link-path completion feed: desktop-only, root containment (`..` may climb, never leave; absolute/URL quiet), folders+images+notes only, decoded prefix filter with raw `rawSegLength`, `kind` per row, Windows spellings, size cap |
+| `test/block_insert.test.js` | The pure paragraph inserter behind live-preview drops: blank line on each side only where missing, never glued onto text (also from a stale mid-line point), document start/end, multi-link blocks, cursor on the blank line after |
 | `test/paths.test.js` | The single path-rule module behind preview, export, link rewriting, autocomplete and media ingest: normalisation, resolve/relative (incl. Windows case-insensitivity), encode/decode round-trips, root containment (sibling-prefix attack, verbatim prefix) |
 | `test/tauri_config.test.js` | Pins the per-platform file-drop transport to the Tauri config: the Windows override mirrors the main window except `dragDropEnabled:false`, and `drop_transport.js` agrees with it |
-| `test/media_e2e.test.js` | Boots the REAL Electron main (preload, IPC, atomic writes) on a temporary project and drives real DragEvent/ClipboardEvent drops: one encoded link per image, preview resolves it, non-media never copied, sidebar payload inserts once, image click previews from its own folder, media dropped while previewing lands beside the note it creates with every link resolving, paste, autosave, no native dialog |
-| `test/livepreview_e2e.test.js` | Boots the REAL app in Electron (web mode, via the generic `test/helpers/web_e2e_main.js` + `lp_e2e_driver.js`) and drives the live preview with DOM mouse events: a click on rendered text lands on THAT word of the source (paragraph, list item, code line, table cell, lower row of a wrapped paragraph kept under the pointer), a drag started on a rendered block selects text, a drag into a rendered block extends character by character with the covered rendered text painted (CSS Custom Highlight) while the block stays rendered, a block the range spans is marked as a unit, heads stay stable over widgets, double-click selects the word, shift-click extends, right-click places the cursor without dragging, select-all keeps spanned blocks rendered, Shift+Arrow into a rendered block paints exactly the selected characters and typing replaces them in the source, arrow keys still reveal, checkboxes and YAML pills keep their behaviour |
+| `test/media_e2e.test.js` | Boots the REAL Electron main (preload, IPC, atomic writes) on a temporary project and drives real DragEvent/ClipboardEvent drops: one encoded link per image, preview resolves it, non-media never copied, sidebar payload inserts once, image click previews from its own folder, media dropped while previewing lands beside the note it creates with every link resolving, paste, autosave, no native dialog; in live preview a sidebar image dropped on a rendered list item / code line / paragraph lands as its own paragraph after that item / after the whole fence / after the paragraph |
+| `test/livepreview_e2e.test.js` | Boots the REAL app in Electron (web mode, via the generic `test/helpers/web_e2e_main.js` + `lp_e2e_driver.js`) and drives the live preview with DOM mouse events: a click on rendered text lands on THAT word of the source (paragraph, list item, code line, table cell, lower row of a wrapped paragraph) with the clicked block's top edge kept in place, CodeMirror's height map matches the screen below lists/quotes/code/tables, a click on the blank line at a block's edge reveals nothing and never scrolls, a click beside a block lands on the row at that height, revealing a block shifts only what is below it (also when the previously edited block re-renders above — on screen or scrolled out of view), a drag started on a rendered block selects text, a drag into a rendered block extends character by character with the covered rendered text painted (CSS Custom Highlight) while the block stays rendered, a block the range spans is marked as a unit, heads stay stable over widgets, double-click selects the word, shift-click extends, right-click places the cursor without dragging, select-all keeps spanned blocks rendered, Shift+Arrow into a rendered block paints exactly the selected characters and typing replaces them in the source, arrow keys still reveal, checkboxes and YAML pills keep their behaviour |
 | `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side

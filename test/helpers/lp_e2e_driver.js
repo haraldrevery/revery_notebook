@@ -87,10 +87,10 @@
   const press   = async (x, y, opts) => { mouse('mousedown', x, y, opts); await sleep(200); await settle(); };
   const moveTo  = async (x, y, opts) => { mouse('mousemove', x, y, opts); await sleep(120); };
   const release = async (x, y, opts) => { mouse('mouseup', x, y, Object.assign({}, opts, { buttons: 0 })); await sleep(120); };
-  const rowContains = (pos, y) => {
-    const c = view.coordsAtPos(pos);
-    return !!c && c.top - 2 <= y && c.bottom + 2 >= y;
-  };
+  /* Screen top of a document line (drawn raw lines; blank lines between
+     blocks are raw in both states, so they measure a block's top edge). */
+  const lineTop = (n) => { const c = view.coordsAtPos(view.state.doc.line(n).from); return c ? c.top : null; };
+  const kept = (a, b) => a != null && b != null && Math.abs(a - b) <= 1;
   const selectedWidget = (text) => {
     const w = widgetWith(text);
     return !!w && w.classList.contains('lp-selected');
@@ -124,19 +124,22 @@
 
   window.setLivePreviewMode(true);
 
-  /* A. Click a rendered word: cursor lands on that word in the source. */
+  /* A. Click a rendered word: cursor lands on that word in the source,
+        and the block's top edge stays where it was (line 2 is the blank
+        line right above it). */
   await setDoc(DOC);
   {
     const p = wordPoint(widgetWith('bold words'), 'words');
     R.clickWord = { found: !!p };
     if (p) {
+      const aboveTop = lineTop(2);
       await press(p.x, p.y);
       const span = srcSpan('first paragraph', 'words');
       R.clickWord.revealed = !widgetWith('bold words') && cmText().includes('**bold words**');
       R.clickWord.onLine = lineOf(main().head).text.startsWith('first paragraph');
       R.clickWord.inWord = within(main().head, span);
       R.clickWord.collapsed = main().empty;
-      R.clickWord.rowUnderPointer = rowContains(main().head, p.y);
+      R.clickWord.topKept = kept(aboveTop, lineTop(2));
       await release(p.x, p.y);
     }
   }
@@ -181,8 +184,8 @@
   }
 
   /* E. A wrapped paragraph (one doc line, several visual rows): a click
-        on a word in a lower row lands on that word, and the row stays
-        under the pointer after the widget->raw swap. */
+        on a word in a lower row lands on that word, and the paragraph's
+        top edge stays put through the widget->raw swap. */
   {
     const words = [];
     for (let i = 0; i < 90; i++) words.push('w' + i);
@@ -194,9 +197,10 @@
     if (p) {
       const wrapRect = w.getBoundingClientRect();
       R.clickWrappedRow.lowerRow = p.y > wrapRect.top + 30;
+      const aboveTop = lineTop(2);
       await press(p.x, p.y);
       R.clickWrappedRow.inWord = within(main().head, srcSpan('wrapped paragraph', 'w60'));
-      R.clickWrappedRow.rowUnderPointer = rowContains(main().head, p.y);
+      R.clickWrappedRow.topKept = kept(aboveTop, lineTop(2));
       await release(p.x, p.y);
     }
   }
@@ -470,6 +474,154 @@
       await release(r.left + 8, r.top + r.height / 2);
     }
   }
+
+  /* ── Geometry: height map, edge and side clicks, layout-shift direction.
+     A long document with lists, blockquotes, code and tables ABOVE the
+     probed blocks: their nested margins used to collapse out of the
+     widgets, so CodeMirror's height map drifted from the screen by their
+     sum — edge clicks then revealed the neighbouring block and drops
+     landed lines too low. (The documents above have no list or quote
+     before a probed block, which is why none of them could see it.) */
+  const SECTION = (n) => [
+    `# Section ${n}`, '',
+    `para${n} ` + 'filler words '.repeat(30).trim(), '',
+    `- one ${n}`, `- two ${n}`, `- three ${n}`, '',
+    `> quote ${n} a`, `> quote ${n} b`, '',
+    '```js', `const v${n} = 1;`, '```', '',
+    '| h | k |', '|---|---|', `| c${n} | d |`, '',
+    `soft${n} line one`, `soft${n} line two`, `soft${n} line three`, '',
+  ].join('\n');
+  const LONG = [SECTION(1), SECTION(2), SECTION(3), 'end line'].join('\n');
+  const BLANK2 = LONG.indexOf('\n') + 1; // line 2 is blank: a cursor there reveals nothing
+  const scrollToText = async (text) => {
+    view.dispatch({ effects: CM.EditorView.scrollIntoView(view.state.doc.toString().indexOf(text), { y: 'center' }) });
+    await settle();
+    await settle();
+  };
+  /* Line numbers of the blank lines right above and below a widget's block. */
+  const blankAround = (w) => {
+    const doc = view.state.doc;
+    const first = doc.lineAt(view.posAtDOM(w)).number;
+    let last = first;
+    while (last < doc.lines && doc.line(last + 1).text !== '') last++;
+    return { above: first - 1, below: last + 1 };
+  };
+  const rawLine = (text) => Array.from(document.querySelectorAll('#editor .cm-line')).some((l) => l.textContent === text);
+
+  /* P. The height map agrees with the screen for every drawn widget. */
+  await setDoc(LONG, BLANK2);
+  await scrollToText('para2');
+  {
+    const drifts = widgets().map((w) =>
+      Math.abs(view.documentTop + view.lineBlockAt(view.posAtDOM(w)).top - w.getBoundingClientRect().top));
+    R.heightMap = { widgets: drifts.length, maxDrift: Math.round(Math.max(0, ...drifts)) };
+  }
+
+  /* Q. A click on the blank line just above / below a rendered block —
+        the band where the selection outline is drawn — puts the cursor on
+        that blank line: nothing reveals, nothing scrolls. */
+  const edgeClick = async (fromBottom) => {
+    await setDoc(LONG, BLANK2);
+    await scrollToText('para2');
+    const w = widgetWith('para2');
+    if (!w) return { found: false };
+    const r = w.getBoundingClientRect();
+    const x = r.left + 40;
+    const y = fromBottom ? r.bottom + 3 : r.top - 3;
+    const s0 = view.scrollDOM.scrollTop;
+    await press(x, y);
+    await release(x, y);
+    await settle();
+    return {
+      found: true,
+      onBlankLine: lineOf(main().head).text === '',
+      stillRendered: !!widgetWith('para2'),
+      noScroll: Math.abs(view.scrollDOM.scrollTop - s0) <= 1,
+    };
+  };
+  R.edgeAbove = await edgeClick(false);
+  R.edgeBelow = await edgeClick(true);
+
+  /* R. A click in the padding BESIDE a lower row of a wrapped paragraph
+        lands on that row — not on the block's first or last line — and
+        the paragraph's top edge stays put. */
+  await setDoc(LONG, BLANK2);
+  await scrollToText('para2');
+  {
+    const w = widgetWith('para2');
+    R.sideClick = { found: !!w };
+    if (w) {
+      const r = w.getBoundingClientRect();
+      const x = r.left - 20;
+      const y = r.top + r.height * 0.75;
+      const line = srcSpan('para2', 'para2').line;
+      const aboveTop = lineTop(line.number - 1);
+      R.sideClick.targetIsPadding = document.elementFromPoint(x, y) === view.contentDOM;
+      await press(x, y);
+      await release(x, y);
+      const head = main().head;
+      R.sideClick.onLine = lineOf(head).number === line.number;
+      R.sideClick.lowerRow = head > line.from + 40 && head < line.to - 20;
+      R.sideClick.topKept = kept(aboveTop, lineTop(line.number - 1));
+    }
+  }
+
+  /* S. Revealing a block changes its height; the change goes BELOW it and
+        the line above keeps its place — for a block that is shorter raw
+        (a heading) and one that is taller raw (soft line breaks). */
+  const shiftCase = async (text, word) => {
+    await setDoc(LONG, BLANK2);
+    await scrollToText(text);
+    const w = widgetWith(text);
+    const p = w && wordPoint(w, word);
+    if (!p) return { found: false };
+    const { above, below } = blankAround(w);
+    const aboveTop = lineTop(above);
+    const belowTop = lineTop(below);
+    await press(p.x, p.y);
+    await release(p.x, p.y);
+    return {
+      found: true,
+      revealed: !widgetWith(text),
+      belowMoved: Math.abs(lineTop(below) - belowTop) > 5,
+      aboveKept: kept(aboveTop, lineTop(above)),
+    };
+  };
+  R.shiftHeading = await shiftCase('Section 2', 'Section');
+  R.shiftSoftLines = await shiftCase('soft2 line one', 'two');
+
+  /* T. The block being edited re-renders when another block below it is
+        clicked: the clicked block keeps its place although the content
+        above it shrank — with the shrinking block on screen, and scrolled
+        out of view above (where CodeMirror's own scroll anchoring also
+        acts; the two must not add up). */
+  const collapseCase = async (targetText, targetWord, scrollFirst) => {
+    await setDoc(LONG, BLANK2);
+    await scrollToText('soft1 line one');
+    const s1 = widgetWith('soft1 line one');
+    const p1 = s1 && wordPoint(s1, 'two');
+    if (!p1) return { found: false };
+    await press(p1.x, p1.y);
+    await release(p1.x, p1.y);
+    const firstRevealed = rawLine('soft1 line two');
+    await sleep(450); // never a double-click
+    if (scrollFirst) await scrollToText(targetText);
+    const w = widgetWith(targetText);
+    const p = w && wordPoint(w, targetWord);
+    if (!p) return { found: false, firstRevealed };
+    const { above } = blankAround(w);
+    const aboveTop = lineTop(above);
+    await press(p.x, p.y);
+    await release(p.x, p.y);
+    return {
+      found: true,
+      firstRevealed,
+      firstRerendered: !rawLine('soft1 line two'),
+      aboveKept: kept(aboveTop, lineTop(above)),
+    };
+  };
+  R.collapseAbove = await collapseCase('Section 2', 'Section', false);
+  R.collapseOffscreen = await collapseCase('para3', 'filler', true);
 
   window.setLivePreviewMode(false);
   await sleep(200);

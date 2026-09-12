@@ -738,14 +738,20 @@ const lineNumbersCompartment = new Compartment();
   // 9.  insertWithUndo  (replaces the execCommand-based implementation)
   // ═════════════════════════════════════════════════════════════════════════
 
-  window.insertWithUndo = function (start, end, text) {
+  window.insertWithUndo = function (start, end, text, cursor) {
     const doc  = window.cmView.state.doc;
     const from = Math.max(0, Math.min(start, doc.length));
     const to   = Math.max(from, Math.min(end, doc.length));
+    // Cursor after the inserted text, unless the caller names a position
+    // in the NEW document (live-preview drops park it on the blank line
+    // after the paragraph they insert).
+    const newLength = doc.length - (to - from) + text.length;
+    const anchor = (typeof cursor === 'number' && Number.isFinite(cursor))
+      ? Math.max(0, Math.min(cursor, newLength))
+      : from + text.length;
     window.cmView.dispatch({
       changes: { from, to, insert: text },
-      // Place cursor after inserted text
-      selection: { anchor: from + text.length },
+      selection: { anchor },
       userEvent: 'input',
     });
   };

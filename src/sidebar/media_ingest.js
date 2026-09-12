@@ -21,6 +21,12 @@
    sidebar row's text/plain payload twice. Sidebar rows announce themselves
    with SIDEBAR_ITEM_MIME (tree.js / cards.js dragstart).
 
+   In live preview a drop cannot aim at a character — the blocks are
+   rendered HTML — so markdown_editor_livepreview.js maps the point to a
+   source line and the media goes in as its own paragraph after it
+   (dropTargetAt + block_insert.js). The classic editor keeps inserting
+   at the character under the pointer.
+
    Desktop-only: in web mode there is no project folder and nothing here
    attaches. */
 
@@ -29,6 +35,7 @@ import { getFileCategory, mediaMarkdown, arrayBufferToBase64 } from './helpers.j
 import { baseNameOf } from './paths.js';
 import { renderTree } from './tree.js';
 import { fileDropTransport, isOsFileDrop, SIDEBAR_ITEM_MIME } from './drop_transport.js';
+import { paragraphInsertion } from './block_insert.js';
 
 export const DROP_MAX_BYTES = 20 * 1024 * 1024; // matches both backends' copy cap
 
@@ -127,11 +134,46 @@ export function docPosAtClient(x, y) {
   return editor.selectionStart;
 }
 
-/** Media dropped or pasted on the EDITOR: copy into the folder the link
-    will live in, then replace [from, to) with one `![name](relative)` per
-    file. Non-media sources are ignored here by design — the editor takes
-    images; other files are copied by dropping them on the file panel. */
+/** Where a drop at a client point inserts: { pos, paragraph }. Live
+    preview answers with a line end and the media goes in as its own
+    paragraph there; otherwise the character under the pointer. */
+export function dropTargetAt(x, y) {
+  const lpPos = typeof window.livePreviewDropPos === 'function' ? window.livePreviewDropPos(x, y) : null;
+  if (lpPos != null) return { pos: lpPos, paragraph: true };
+  return { pos: docPosAtClient(x, y), paragraph: false };
+}
+
+/* Insert media markdown (one or more link lines, no trailing newline) at
+   a drop target. The paragraph form re-reads its neighbours at insertion
+   time, so it never glues onto text even if the document changed while
+   the files were being copied. */
+function insertAtTarget(target, links) {
+  if (!target.paragraph) {
+    window.insertWithUndo(target.pos, target.pos, links + '\n'); // cursor lands after the links
+    return;
+  }
+  const doc = window.cmView.state.doc;
+  const pos = Math.max(0, Math.min(target.pos, doc.length));
+  const { insert, cursor } = paragraphInsertion(
+    doc.sliceString(Math.max(0, pos - 2), pos), doc.sliceString(pos, pos + 2), links);
+  window.insertWithUndo(pos, pos, insert, pos + cursor);
+}
+
+/** Media pasted on the EDITOR: replace [from, to) with the links. */
 export function ingestMediaAt(sources, from, to = from) {
+  return ingestMedia(sources, (links) => window.insertWithUndo(from, to, links + '\n')); // cursor lands after the links
+}
+
+/** Media dropped on the EDITOR at a dropTargetAt() target. */
+export function ingestMediaAtDrop(sources, target) {
+  return ingestMedia(sources, (links) => insertAtTarget(target, links));
+}
+
+/* Copy into the folder the link will live in, then hand one
+   `![name](relative)` line per file to `insert`. Non-media sources are
+   ignored here by design — the editor takes images; other files are
+   copied by dropping them on the file panel. */
+function ingestMedia(sources, insert) {
   const media = sources.filter(isMediaSource);
   if (!media.length) {
     if (sources.length) explainNonMediaDrop(); // same answer on every transport
@@ -149,8 +191,7 @@ export function ingestMediaAt(sources, from, to = from) {
   return withOperationLock(async () => {
     const { finals, errors } = await copySources(media, dir);
     if (finals.length) {
-      const links = finals.map((p) => mediaMarkdown(p, dir)).join('\n') + '\n';
-      window.insertWithUndo(from, to, links); // cursor lands after the links
+      insert(finals.map((p) => mediaMarkdown(p, dir)).join('\n'));
       expandedDirs.add(dir);
       await renderTree();
     }
@@ -160,11 +201,11 @@ export function ingestMediaAt(sources, from, to = from) {
 
 /** A sidebar row dropped on the editor: media inserts its link relative
     to the note; notes and other files insert nothing. */
-function insertSidebarItem(dataTransfer, at) {
+function insertSidebarItem(dataTransfer, target) {
   const itemPath = dataTransfer.getData(SIDEBAR_ITEM_MIME);
   if (!itemPath) return;
   if (getFileCategory(baseNameOf(itemPath)) !== 'media') return;
-  window.insertWithUndo(at, at, mediaMarkdown(itemPath) + '\n');
+  insertAtTarget(target, mediaMarkdown(itemPath));
 }
 
 function explainNonMediaDrop() {
@@ -205,7 +246,7 @@ export function initMediaIngest() {
     if (types.includes(SIDEBAR_ITEM_MIME)) {
       e.preventDefault();
       e.stopPropagation();
-      insertSidebarItem(dt, docPosAtClient(e.clientX, e.clientY));
+      insertSidebarItem(dt, dropTargetAt(e.clientX, e.clientY));
       return;
     }
     if (!isOsFileDrop(dt)) return; // plain text drags stay CodeMirror's
@@ -215,7 +256,7 @@ export function initMediaIngest() {
     e.preventDefault();
     e.stopPropagation();
     if (transport !== 'dom') return; // the native event delivers this drop (dnd.js)
-    ingestMediaAt(filesToSources(dt.files), docPosAtClient(e.clientX, e.clientY));
+    ingestMediaAtDrop(filesToSources(dt.files), dropTargetAt(e.clientX, e.clientY));
   }, true);
 
   dom.addEventListener('paste', (e) => {

@@ -696,24 +696,51 @@
     return pos;
   }
 
-  /* A mousedown whose target lies in one of our widgets → {pos, bias},
-     else null (raw text: the caller uses posAtCoords). */
-  function resolveWidgetClick(view, event) {
-    const target = event.target;
-    const wrap = wrapOf(view, target);
+  /* The rendered block beside screen height y, by DOM geometry — for a
+     pointer in the content padding left/right of a block, where the
+     event target is .cm-content itself. */
+  function wrapAtY(view, y) {
+    for (const wrap of view.contentDOM.querySelectorAll('.lp-render, .lp-yaml')) {
+      const r = wrap.getBoundingClientRect();
+      if (y >= r.top && y < r.bottom) return wrap;
+    }
+    return null;
+  }
+
+  /* A pointer at (x, y) over DOM `target` → {pos, bias, anchor} when it
+     lies on or beside one of our widgets, else null (raw text: the caller
+     uses posAtCoords). `anchor` is the block's start — what a click keeps
+     in place through the reflow (keepInPlace).
+     Beside a block (the padding left/right of the content column) the
+     pointer reads the row at that height, as if it were just inside the
+     block's element there. CodeMirror's own answer for that spot is the
+     block's first or last line, whichever half is nearer — a click beside
+     the middle of a list revealed it with the cursor rows away. */
+  function resolveWidgetPoint(view, target, x, y) {
+    let wrap = wrapOf(view, target);
+    if (!wrap && target === view.contentDOM) {
+      wrap = wrapAtY(view, y);
+      if (!wrap) return null;
+      const r = wrap.getBoundingClientRect();
+      const inner = document.elementFromPoint(r.left + r.width / 2, y);
+      if (!inner || !wrap.contains(inner)) return null;
+      const ir = inner.getBoundingClientRect();
+      target = inner;
+      x = Math.min(Math.max(x, ir.left + 1), ir.right - 1);
+    }
     if (!wrap) return null;
     const block = blockForWrap(view, wrap);
     if (!block) return null;
     let pos;
     try {
       pos = wrap.classList.contains('lp-yaml')
-        ? posInYamlWidget(view, block, wrap, target, event.clientX, event.clientY)
-        : posInBlockWidget(view, block, wrap, target, event.clientX, event.clientY);
+        ? posInYamlWidget(view, block, wrap, target, x, y)
+        : posInBlockWidget(view, block, wrap, target, x, y);
     } catch (err) {
       console.warn('[LivePreview] click mapping failed — using the block start:', err);
       pos = block.from;
     }
-    return { pos: Math.max(0, Math.min(view.state.doc.length, pos)), bias: 1 };
+    return { pos: Math.max(0, Math.min(view.state.doc.length, pos)), bias: 1, anchor: block.from };
   }
 
   /* Which side of `pos` the pointer is on (cursor assoc at wrap points):
@@ -787,28 +814,46 @@
     return Sel.range(line.from, to);
   }
 
-  /* After a click the layout reflows — the clicked block becomes raw
-     text, the previously edited one re-renders — so the source row the
-     cursor landed on may no longer be under the pointer. Re-measure in
-     CodeMirror's own measure phase (same frame, no flicker) and scroll
-     by exactly the drift; nothing moves when the row already contains
-     the pointer.                                                      */
-  function pinRowUnderPointer(view, pos, bias, pointerY) {
-    const doc = view.state.doc; // the measure may run after a file switch — then it is void
+  /* Screen y of the top edge of the block holding `pos` — a rendered
+     block's widget, or a raw line. From CodeMirror's height map, which
+     matches the screen because widgets contain their margins (.lp-render
+     CSS); the same measure is taken before and after a click.         */
+  function screenTop(view, pos) {
+    return view.documentTop + view.lineBlockAt(pos).top;
+  }
+
+  /* After a click the layout reflows: the clicked block swaps to raw text
+     (its own height changes) and the block that was being edited
+     re-renders. Keep the TOP EDGE of what was clicked where it was on
+     screen, so the clicked block grows or shrinks downward and nothing
+     above it moves — the text no longer jumps both ways around the
+     click. Scrolls by exactly the remaining displacement: zero unless
+     something above the clicked block changed height. When the raw text
+     is taller than its rendering (soft line breaks) the caret can land a
+     row below the pointer — the accepted cost of a page that stays put.
+     Void if the document changed in between (file switch).
+     WHEN: after CodeMirror's whole measure cycle, not inside it. For a
+     height change ABOVE the viewport, CodeMirror's own scroll anchoring
+     compensates too — and it runs after every measure request has
+     drained, so a correction made in a request doubled it (measured: the
+     clicked block jumped by the full collapse of an off-screen block).
+     A microtask queued from the cycle's write phase runs once the cycle
+     (anchoring included) is complete and still before the browser
+     paints: it sees the final layout and corrects only what is left.  */
+  function keepInPlace(view, anchor, topBefore) {
+    const doc = view.state.doc;
     view.requestMeasure({
-      key: pinRowUnderPointer,
-      read(v) {
-        if (v.state.doc !== doc) return 0;
-        const c = v.coordsAtPos(pos, bias);
-        if (!c) return 0;
-        if (c.top - 1 <= pointerY && c.bottom + 1 >= pointerY) return 0;
-        return (c.top + c.bottom) / 2 - pointerY;
-      },
-      write(delta, v) {
-        if (!delta || v.state.doc !== doc) return;
-        const sd = v.scrollDOM;
-        const max = Math.max(0, sd.scrollHeight - sd.clientHeight);
-        sd.scrollTop = Math.max(0, Math.min(max, sd.scrollTop + delta));
+      key: keepInPlace,
+      read() { return null; },
+      write(_, v) {
+        queueMicrotask(() => {
+          if (v.state.doc !== doc) return;
+          const delta = screenTop(v, Math.min(anchor, doc.length)) - topBefore;
+          if (Math.abs(delta) < 1) return;
+          const sd = v.scrollDOM;
+          const max = Math.max(0, sd.scrollHeight - sd.clientHeight);
+          sd.scrollTop = Math.max(0, Math.min(max, sd.scrollTop + delta));
+        });
       },
     });
   }
@@ -819,8 +864,9 @@
      autoscroll at the viewport edges, shift-extend, click-inside-
      selection drag detection, focus) drives every gesture; this style
      only decides WHERE a pointer event points:
-       • mousedown on a rendered widget → the mapped source position
-         (click-to-edit; the block reveals through the reveal rule);
+       • mousedown on (or beside) a rendered widget → the mapped source
+         position (click-to-edit; the block reveals through the reveal
+         rule) — the clicked block's top edge stays put (keepInPlace);
        • mousemove → queryMove (character-precise inside rendered
          blocks, unit for the YAML box);
        • anything on raw text → posAtCoords, exactly like the default.
@@ -844,7 +890,7 @@
 
   function lpMouseSelection(view, event) {
     if (event.button !== 0 && event.button !== 2) return null;
-    const widgetHit = resolveWidgetClick(view, event);
+    const widgetHit = resolveWidgetPoint(view, event.target, event.clientX, event.clientY);
     /* Right button: on a rendered block place the cursor there (so the
        context menu acts on that block) and never drag; on raw text the
        browser's own caret placement applies, as in the classic editor. */
@@ -859,18 +905,23 @@
 
     const Sel = SelectionOf(view);
     const stationary = event.button === 2;
-    const pointerY = event.clientY;
+    /* What this click keeps in place through the reflow: the rendered
+       block under the pointer, else the raw line clicked. Measured now,
+       before the click's own transaction changes the layout. */
+    let anchor = widgetHit ? widgetHit.anchor : view.state.doc.lineAt(start.pos).from;
+    const anchorTop = screenTop(view, anchor);
     let startSel = view.state.selection;
     let pinPending = true;
     return {
       update(update) {
         if (update.docChanged) {
           start.pos = update.changes.mapPos(start.pos);
+          anchor = update.changes.mapPos(anchor);
           startSel = startSel.map(update.changes);
         }
         if (pinPending && update.selectionSet) {
           pinPending = false;
-          pinRowUnderPointer(update.view, start.pos, start.bias, pointerY);
+          keepInPlace(update.view, anchor, anchorTop);
         }
       },
       get(curEvent, extend) {
@@ -1076,6 +1127,53 @@
     }
     return true;
   }
+
+  /* ── Drops ───────────────────────────────────────────────────────────
+     A rendered block has no character geometry for a drop to aim at, so
+     media dropped on the live preview goes in as its OWN paragraph after
+     the source line under the pointer (media_ingest.js inserts it through
+     block_insert.js). The line comes from the same mapping as a click.
+     Where splitting at that line would corrupt a construct or swallow the
+     link, the paragraph goes after the whole construct instead: code
+     (fenced or indented), tables, HTML blocks, setext headings,
+     blockquotes, paragraphs holding $$ math, the YAML frontmatter — and
+     in lists the list ITEM holding the line (an unindented paragraph
+     between an item and its continuation lines would detach them).    */
+  const KEEP_WHOLE = new Set([
+    'FencedCode', 'CodeBlock', 'Table', 'HTMLBlock', 'CommentBlock',
+    'ProcessingInstructionBlock', 'SetextHeading1', 'SetextHeading2', 'Blockquote',
+  ]);
+  function dropLineEnd(state, pos) {
+    const doc = state.doc;
+    const fmEnd = frontmatterEnd(doc);
+    if (fmEnd && pos <= fmEnd) return fmEnd;
+    const line = doc.lineAt(pos);
+    const endOf = (node) => doc.lineAt(Math.min(node.to, doc.length)).to;
+    let end = line.to;
+    let inItem = false;
+    for (let n = syntaxTree(state).resolveInner(line.to, -1); n; n = n.parent) {
+      if (KEEP_WHOLE.has(n.name)) end = Math.max(end, endOf(n));
+      else if (n.name === 'ListItem' && !inItem) { inItem = true; end = Math.max(end, endOf(n)); }
+      else if (n.name === 'Paragraph' && doc.sliceString(n.from, n.to).includes('$$')) end = Math.max(end, endOf(n));
+    }
+    return end;
+  }
+
+  /* Insertion offset (a line end) for media dropped at client point
+     (x, y), or null when live preview is off — the caller then inserts
+     at the character under the pointer, as in the classic editor. */
+  window.livePreviewDropPos = function (x, y) {
+    const view = window.cmView;
+    if (!view || !view.state.field(blockField, false)) return null;
+    try {
+      const hit = resolveWidgetPoint(view, document.elementFromPoint(x, y), x, y);
+      const pos = hit ? hit.pos : view.posAtCoords({ x, y }, false);
+      return dropLineEnd(view.state, pos);
+    } catch (err) {
+      console.warn('[LivePreview] drop mapping failed — inserting at the pointer:', err);
+      return null;
+    }
+  };
 
   window.buildLivePreviewExtension = function () {
     const ext = [blockField, EditorView.mouseSelectionStyle.of(lpMouseSelection)];

@@ -15,7 +15,10 @@
         (destination and link base agree);
      6. pasting a screenshot works the same way;
      7. typing afterwards reaches disk through the normal autosave path;
-     8. no native dialog was needed at any point.
+     8. no native dialog was needed at any point;
+     9. in live preview, a drop on a rendered block goes in as its own
+        paragraph after the source line under the pointer (after a whole
+        code fence, never inside it).
    Skipped when no display server is available (same rule as find_e2e). */
 
 const { test } = require('node:test');
@@ -105,4 +108,12 @@ test('media drop/paste/preview end-to-end in the real Electron app', { skip: !ha
   assert.ok(r.linkComplete.secondLabels.includes('pic.png') && r.linkComplete.secondLabels.includes('pic.md'), why);
   assert.equal(r.linkComplete.afterFile, '![](../sub/pic.png', 'Tab accepts the file with the app\'s link encoding\n' + why);
   assert.equal(r.linkComplete.closed, true, why);
+
+  // 10. live preview drops: own paragraph after the pointed source line
+  assert.deepEqual(r.lpDrop.listItem, { found: true, count: 1, before: ['- beta item', ''], after: ['', '- gamma item'] },
+    'a drop on a rendered list item goes in as its own paragraph right after that item\n' + why);
+  assert.deepEqual(r.lpDrop.codeLine, { found: true, count: 1, before: ['```', ''], after: ['', 'tail text'] },
+    'a drop on a rendered code line goes after the whole fence, never inside it\n' + why);
+  assert.deepEqual(r.lpDrop.paragraph, { found: true, count: 1, before: ['intro paragraph here', ''], after: ['', '- alpha item'] },
+    'a drop on a rendered paragraph goes in as its own paragraph right after it\n' + why);
 });

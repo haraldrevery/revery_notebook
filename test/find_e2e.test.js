@@ -113,7 +113,7 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 90000
     sizeMatchesPreview: true, h1Parity: true, sizeNotEditorBound: true,
     familyFollows: true, familyRestores: true, katexSizeParity: true,
     tableRendered: true, tableParity: true, tableClickReveals: true, tableReturns: true,
-    clickUnderPointer: true, outlineScrollOnly: true, readerOutlineScrolls: true,
+    clickKeepsTop: true, outlineScrollOnly: true, readerOutlineScrolls: true,
     edgeClickNoSteal: true, outlineSyncs: true, paddingParity: true,
     readerPadding: true, readerPaddingResets: true,
     readerDragResizes: true, readerDragToggleOff: true, readerDragCustomRow: true,

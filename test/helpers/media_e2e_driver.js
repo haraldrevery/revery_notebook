@@ -227,5 +227,63 @@
     out.linkComplete = { opened, firstLabels, glyph, fontMatches, afterFolder, reopened, secondLabels, afterFile, closed };
   }
 
+  /* 9. Live preview: rendered blocks have no character geometry, so a
+        sidebar image dropped on one goes in as its OWN paragraph after the
+        source line under the pointer — never at a block edge, never glued
+        onto text, never inside a code fence. */
+  {
+    window.setLivePreviewMode(true);
+    const DOC = ['# Drop test', '', 'intro paragraph here', '',
+      '- alpha item', '- beta item', '- gamma item', '',
+      '```js', 'const code = 1;', 'more code', '```', '', 'tail text', ''].join('\n');
+    const isLink = (l) => /^!\[pic\.png\]\([^)]*pic\.png\)$/.test(l);
+    const wordPoint = (wrap, word) => {
+      const tw = document.createTreeWalker(wrap, NodeFilter.SHOW_TEXT);
+      let n;
+      while ((n = tw.nextNode())) {
+        const i = n.nodeValue.indexOf(word);
+        if (i < 0) continue;
+        const rg = document.createRange();
+        rg.setStart(n, i);
+        rg.setEnd(n, i + word.length);
+        const b = rg.getBoundingClientRect();
+        if (b.width) return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+      }
+      return null;
+    };
+    const dropOnWord = async (blockText, word) => {
+      replaceEditorContent(DOC);
+      window.cmView.dispatch({ selection: { anchor: DOC.indexOf('\n') + 1 } }); // blank line: every block renders
+      await sleep(400);
+      window.cmView.coordsAtPos(0); // run the pending measure, as the next frame would
+      await sleep(100);
+      const wrap = Array.from(document.querySelectorAll('#editor .cm-content .lp-render'))
+        .find((el) => el.textContent.includes(blockText));
+      const p = wrap && wordPoint(wrap, word);
+      if (!p) return { found: false };
+      const dt = new DataTransfer();
+      dt.setData('text/plain', '![pic.png](sub/pic.png)');
+      dt.setData('application/x-revery-path', PROJECT + '/sub/pic.png');
+      (document.elementFromPoint(p.x, p.y) || window.cmView.contentDOM).dispatchEvent(new DragEvent('drop', {
+        bubbles: true, cancelable: true, dataTransfer: dt, clientX: p.x, clientY: p.y,
+      }));
+      await sleep(300);
+      const lines = editor.value.split('\n');
+      const i = lines.findIndex(isLink);
+      return {
+        found: true,
+        count: lines.filter(isLink).length,
+        before: i < 0 ? null : lines.slice(Math.max(0, i - 2), i),
+        after: i < 0 ? null : lines.slice(i + 1, i + 3),
+      };
+    };
+    out.lpDrop = {
+      listItem: await dropOnWord('beta item', 'beta'),
+      codeLine: await dropOnWord('more code', 'more'),
+      paragraph: await dropOnWord('intro paragraph', 'paragraph'),
+    };
+    window.setLivePreviewMode(false);
+  }
+
   return out;
 })()

@@ -39,16 +39,16 @@ test('live preview pointer model end-to-end', { skip: !hasDisplay, timeout: 9000
   const r = JSON.parse(line.slice('E2E-RESULT: '.length));
 
   assert.deepEqual(r.clickWord,
-    { found: true, revealed: true, onLine: true, inWord: true, collapsed: true, rowUnderPointer: true },
-    'clicking a rendered word must reveal its block with the cursor ON that word, row kept under the pointer');
+    { found: true, revealed: true, onLine: true, inWord: true, collapsed: true, topKept: true },
+    'clicking a rendered word must reveal its block with the cursor ON that word, the block\'s top edge kept in place');
   assert.deepEqual(r.clickListItem, { found: true, onLine: true, inWord: true },
     'clicking a list item must land on that item line, inside the clicked word');
   assert.deepEqual(r.clickCodeLine, { found: true, onLine: true, inWord: true },
     'clicking inside a fenced code block must land on that code line, inside the clicked token');
   assert.deepEqual(r.clickTableCell, { found: true, onLine: true, inWord: true },
     'clicking a table cell must land on that row line, inside the cell text');
-  assert.deepEqual(r.clickWrappedRow, { found: true, lowerRow: true, inWord: true, rowUnderPointer: true },
-    'clicking a lower visual row of a wrapped paragraph must land on that word and keep the row under the pointer');
+  assert.deepEqual(r.clickWrappedRow, { found: true, lowerRow: true, inWord: true, topKept: true },
+    'clicking a lower visual row of a wrapped paragraph must land on that word and keep the paragraph\'s top edge in place');
   assert.deepEqual(r.dragFromWidget,
     { found: true, targetVisible: true, nonEmpty: true, anchorInFirst: true, headInInside: true, blockRaw: true },
     'a drag starting on a rendered block must select text inside it');
@@ -81,5 +81,21 @@ test('live preview pointer model end-to-end', { skip: !hasDisplay, timeout: 9000
     'a mousedown on a task checkbox must neither reveal the block nor edit the document');
   assert.deepEqual(r.yamlPill, { found: true, onStatusLine: true, revealed: true },
     'clicking a YAML pill must reveal the frontmatter with the cursor on that key line');
+  assert.ok(r.heightMap.widgets >= 8 && r.heightMap.maxDrift <= 1,
+    `CodeMirror's height map must match the screen for every rendered block, even below lists and quotes (widgets must contain their margins): ${JSON.stringify(r.heightMap)}`);
+  assert.deepEqual(r.edgeAbove, { found: true, onBlankLine: true, stillRendered: true, noScroll: true },
+    'a click on the blank line just above a rendered block must land on that line: no reveal, no scroll');
+  assert.deepEqual(r.edgeBelow, { found: true, onBlankLine: true, stillRendered: true, noScroll: true },
+    'a click on the blank line just below a rendered block must land on that line: no reveal, no scroll');
+  assert.deepEqual(r.sideClick, { found: true, targetIsPadding: true, onLine: true, lowerRow: true, topKept: true },
+    'a click in the padding beside a lower row of a rendered paragraph must land on that row, the top edge kept in place');
+  assert.deepEqual(r.shiftHeading, { found: true, revealed: true, belowMoved: true, aboveKept: true },
+    'revealing a heading (shorter raw) must shift only what is below it');
+  assert.deepEqual(r.shiftSoftLines, { found: true, revealed: true, belowMoved: true, aboveKept: true },
+    'revealing soft-break lines (taller raw) must shift only what is below them');
+  assert.deepEqual(r.collapseAbove, { found: true, firstRevealed: true, firstRerendered: true, aboveKept: true },
+    'when the block being edited re-renders above, the newly clicked block must keep its place');
+  assert.deepEqual(r.collapseOffscreen, { found: true, firstRevealed: true, firstRerendered: true, aboveKept: true },
+    'when the block being edited re-renders out of view above, the clicked block must keep its place (no double compensation with CodeMirror\'s scroll anchoring)');
   assert.equal(r.offClean, true, 'toggling live preview off must remove every widget');
 });
