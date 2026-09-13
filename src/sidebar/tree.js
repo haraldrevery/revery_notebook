@@ -1,8 +1,7 @@
 /* tree.js — tree rendering, sorting, expand/collapse, multi-select
    helpers, context menu, active-file highlighting. */
 import { S, treeEl, btnSortBtn, btnToggleAll, expandedDirs, selectedItems, _previewCache } from './state.js';
-import { getFileCategory, mediaMarkdown } from './helpers.js';
-import { SIDEBAR_ITEM_MIME } from './drop_transport.js';
+import { getFileCategory, setSidebarDragData } from './helpers.js';
 import { icon } from './icons.js';
 import { renderCards, highlightActiveFileCards } from './cards.js';
 import { openFile, openMediaFile, openUnsupportedFile, createNewFile, createNewFolder,
@@ -403,24 +402,9 @@ async function renderNode(containerEl, dirPath, depth, generation = 0) {   // �
         S._dragItems = getVisibleItems()
           .filter(el => selectedItems.has(el.dataset.path))
           .map(el => ({ path: el.dataset.path, type: el.dataset.type }));
-        /* Two payloads:
-             • SIDEBAR_ITEM_MIME — the item's absolute path. The editor's
-               drop handler (media_ingest.js) recognises our own rows by it
-               and inserts the link itself, relative to the note at DROP
-               time, so CodeMirror's default text insertion never runs.
-             • text/plain — the markdown for media (empty otherwise), so
-               dragging into another application still yields the link.
-               Also what makes some browsers start the drag at all.       */
-        const dragCategory = getFileCategory(entry.name);
-
-        /* effectAllowed:
-             'move'     → files/folders being moved within the sidebar tree
-             'copyMove' → media files: can be moved in tree OR copied as a
-                          markdown reference into the editor. Without 'copy'
-                          in effectAllowed the browser cancels that drop.  */
-        e.dataTransfer.effectAllowed = dragCategory === 'media' ? 'copyMove' : 'move';
-        e.dataTransfer.setData(SIDEBAR_ITEM_MIME, entry.path);
-        e.dataTransfer.setData('text/plain', dragCategory === 'media' ? mediaMarkdown(entry.path) : '');
+        /* The whole selection travels as one drag (helpers.js). text/plain
+           is always set — also what makes some browsers start the drag. */
+        setSidebarDragData(e.dataTransfer, S._dragItems);
 
         /* Apply ghost opacity AFTER the drag image is snapshotted */
         requestAnimationFrame(() => {

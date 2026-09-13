@@ -673,6 +673,45 @@
     return `![${name}](${encodeLinkDest(rel)})`;
   }
 
+  // src/sidebar/drop_transport.js
+  function decideFileDropTransport(env, platform) {
+    if (env !== "tauri") return "dom";
+    return /^win/i.test(String(platform || "")) ? "dom" : "native";
+  }
+  function fileDropTransport() {
+    const env = window.NativeAPI ? window.NativeAPI.env : "web";
+    return decideFileDropTransport(env, navigator.platform);
+  }
+  function isOsFileDrop(dt) {
+    if (!dt) return false;
+    if (dt.files && dt.files.length) return true;
+    const types = Array.from(dt.types || []);
+    if (types.includes("Files")) return true;
+    if (types.includes("text/uri-list")) {
+      let list = "";
+      try {
+        list = dt.getData("text/uri-list") || "";
+      } catch (_) {
+      }
+      return /^file:/im.test(list);
+    }
+    return false;
+  }
+  var SIDEBAR_ITEM_MIME = "application/x-revery-path";
+  function encodeSidebarPayload(paths) {
+    return JSON.stringify(paths);
+  }
+  function decodeSidebarPayload(raw) {
+    if (!raw) return [];
+    if (raw[0] !== "[") return [raw];
+    try {
+      const list = JSON.parse(raw);
+      return Array.isArray(list) ? list.filter((p) => typeof p === "string" && p) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
   // src/sidebar/helpers.js
   function arrayBufferToBase64(buf) {
     const bytes = new Uint8Array(buf);
@@ -710,6 +749,13 @@
   }
   function mediaMarkdown(mediaPath, fromDir) {
     return mediaLinkMarkdown(mediaPath, fromDir || pendingNoteDir());
+  }
+  function setSidebarDragData(dataTransfer, items) {
+    const files = items.filter((it) => it.type === "file").map((it) => it.path);
+    const media = files.filter((p) => getFileCategory(baseNameOf(p)) === "media");
+    dataTransfer.effectAllowed = media.length ? "copyMove" : "move";
+    dataTransfer.setData(SIDEBAR_ITEM_MIME, encodeSidebarPayload(files));
+    dataTransfer.setData("text/plain", media.map((p) => mediaMarkdown(p)).join("\n"));
   }
   async function uniqueDestPath(targetDir, name, type) {
     const sep = targetDir.endsWith("/") || targetDir.endsWith("\\") ? "" : "/";
@@ -782,32 +828,6 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       buttons: [window.t("OK")]
     });
   }
-
-  // src/sidebar/drop_transport.js
-  function decideFileDropTransport(env, platform) {
-    if (env !== "tauri") return "dom";
-    return /^win/i.test(String(platform || "")) ? "dom" : "native";
-  }
-  function fileDropTransport() {
-    const env = window.NativeAPI ? window.NativeAPI.env : "web";
-    return decideFileDropTransport(env, navigator.platform);
-  }
-  function isOsFileDrop(dt) {
-    if (!dt) return false;
-    if (dt.files && dt.files.length) return true;
-    const types = Array.from(dt.types || []);
-    if (types.includes("Files")) return true;
-    if (types.includes("text/uri-list")) {
-      let list = "";
-      try {
-        list = dt.getData("text/uri-list") || "";
-      } catch (_) {
-      }
-      return /^file:/im.test(list);
-    }
-    return false;
-  }
-  var SIDEBAR_ITEM_MIME = "application/x-revery-path";
 
   // src/sidebar/icons.js
   var ICONS = {
@@ -2786,10 +2806,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           updateMultiSelectHighlight();
         }
         S._dragItems = getVisibleItems().filter((el) => selectedItems.has(el.dataset.path)).map((el) => ({ path: el.dataset.path, type: el.dataset.type }));
-        const dragCategory = getFileCategory(entry.name);
-        e.dataTransfer.effectAllowed = dragCategory === "media" ? "copyMove" : "move";
-        e.dataTransfer.setData(SIDEBAR_ITEM_MIME, entry.path);
-        e.dataTransfer.setData("text/plain", dragCategory === "media" ? mediaMarkdown(entry.path) : "");
+        setSidebarDragData(e.dataTransfer, S._dragItems);
         requestAnimationFrame(() => {
           treeEl.querySelectorAll(".sidebar-item").forEach((el) => {
             el.classList.toggle("drag-source-active", selectedItems.has(el.dataset.path));
@@ -3135,9 +3152,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         updateMultiSelectHighlight();
       }
       S._dragItems = Array.from(treeEl.querySelectorAll(".sidebar-card")).filter((el) => selectedItems.has(el.dataset.path)).map((el) => ({ path: el.dataset.path, type: el.dataset.type }));
-      e.dataTransfer.effectAllowed = category === "media" ? "copyMove" : "move";
-      e.dataTransfer.setData(SIDEBAR_ITEM_MIME, entry.path);
-      e.dataTransfer.setData("text/plain", category === "media" ? mediaMarkdown(entry.path) : "");
+      setSidebarDragData(e.dataTransfer, S._dragItems);
       requestAnimationFrame(() => {
         treeEl.querySelectorAll(".sidebar-card").forEach((el) => {
           el.classList.toggle("drag-source-active", selectedItems.has(el.dataset.path));
@@ -3441,11 +3456,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       reportCopyIssues(errors, "{n} file(s) could not be added:");
     });
   }
-  function insertSidebarItem(dataTransfer, target) {
-    const itemPath = dataTransfer.getData(SIDEBAR_ITEM_MIME);
-    if (!itemPath) return;
-    if (getFileCategory(baseNameOf(itemPath)) !== "media") return;
-    insertAtTarget(target, mediaMarkdown(itemPath));
+  function insertSidebarItems(dataTransfer, target) {
+    const media = decodeSidebarPayload(dataTransfer.getData(SIDEBAR_ITEM_MIME)).filter((p) => getFileCategory(baseNameOf(p)) === "media");
+    if (!media.length) return;
+    insertAtTarget(target, media.map((p) => mediaMarkdown(p)).join("\n"));
   }
   function explainNonMediaDrop() {
     if (typeof window.showStatusWarning === "function") {
@@ -3484,7 +3498,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (types.includes(SIDEBAR_ITEM_MIME)) {
         e.preventDefault();
         e.stopPropagation();
-        insertSidebarItem(dt, dropTargetAt(e.clientX, e.clientY));
+        insertSidebarItems(dt, dropTargetAt(e.clientX, e.clientY));
         return;
       }
       if (!isOsFileDrop(dt)) return;

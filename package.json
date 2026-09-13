@@ -16,8 +16,8 @@
   "scripts": {
     "start:electron": "electron .",
     "build:electron": "electron-builder",
-    "start:tauri": "tauri dev   --config tauri/tauri.conf.json",
-    "build:tauri": "tauri build --config tauri/tauri.conf.json",
+    "start:tauri": "tauri dev",
+    "build:tauri": "tauri build",
     "test": "node --test \"test/**/*.test.js\"",
     "test:rust": "cargo test --manifest-path tauri/Cargo.toml",
     "build:sidebar": "node build_tools/build_sidebar.js",

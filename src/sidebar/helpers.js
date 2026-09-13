@@ -3,7 +3,8 @@
    paths.js; this file adds the pieces that need sidebar state or the
    filesystem. */
 import { pendingNoteDir } from './state.js';
-import { mediaLinkMarkdown } from './paths.js';
+import { mediaLinkMarkdown, baseNameOf } from './paths.js';
+import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
 
   /* File bytes → base64 in 32 KB chunks (fromCharCode arg-count limits).
      Used by the media ingest for DOM File sources. */
@@ -66,6 +67,29 @@ import { mediaLinkMarkdown } from './paths.js';
    */
   function mediaMarkdown(mediaPath, fromDir) {
     return mediaLinkMarkdown(mediaPath, fromDir || pendingNoteDir());
+  }
+
+  /**
+   * The payloads of a sidebar drag (tree rows and cards alike), for every
+   * dragged item — the whole multi-selection, in tree order:
+   *   • SIDEBAR_ITEM_MIME — the dragged files' absolute paths. The editor's
+   *     drop handler (media_ingest.js) recognises our own drags by it and
+   *     inserts one link per media file itself, relative to the note at
+   *     DROP time, so CodeMirror's default text insertion never runs.
+   *   • text/plain — the media links, one per line, so dragging into
+   *     another application still yields them.
+   * effectAllowed: 'copyMove' when media is dragged (moved in the tree OR
+   * linked into the editor — without 'copy' the browser cancels that drop),
+   * else 'move'.
+   * @param {DataTransfer} dataTransfer
+   * @param {{path: string, type: string}[]} items
+   */
+  function setSidebarDragData(dataTransfer, items) {
+    const files = items.filter((it) => it.type === 'file').map((it) => it.path);
+    const media = files.filter((p) => getFileCategory(baseNameOf(p)) === 'media');
+    dataTransfer.effectAllowed = media.length ? 'copyMove' : 'move';
+    dataTransfer.setData(SIDEBAR_ITEM_MIME, encodeSidebarPayload(files));
+    dataTransfer.setData('text/plain', media.map((p) => mediaMarkdown(p)).join('\n'));
   }
 
   /**
@@ -172,5 +196,5 @@ import { mediaLinkMarkdown } from './paths.js';
     });
   }
 
-export { stripMarkdownForPreview, getFileCategory, mediaMarkdown, uniqueDestPath,
+export { stripMarkdownForPreview, getFileCategory, mediaMarkdown, setSidebarDragData, uniqueDestPath,
          uniquePath, scanBakOrphansIn, reportBakOrphans, arrayBufferToBase64 };

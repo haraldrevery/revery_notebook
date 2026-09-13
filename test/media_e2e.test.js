@@ -73,6 +73,15 @@ test('media drop/paste/preview end-to-end in the real Electron app', { skip: !ha
   assert.equal(r.sidebarDrop.selectionCollapsed, true, why);
   assert.equal(r.sidebarDrop.noStrayText, true, why);
 
+  // 3b. multi-selection dragged from the real tree
+  assert.deepEqual(r.multiDrag, {
+    rowsFound: true,
+    payload: ['<project>/sub/a-one.png', '<project>/sub/b-two.png'],
+    plainText: '![a-one.png](sub/a-one.png)\n![b-two.png](sub/b-two.png)',
+    linkCounts: [1, 1],
+    onConsecutiveLines: true,
+  }, 'a multi-selection drags as one payload and lands one link per image, each on its own line, in tree order\n' + why);
+
   // 4. media click in a subfolder
   assert.equal(r.mediaPreview.rowFound, true, why);
   assert.equal(r.mediaPreview.editorText, '![pic.png](pic.png)', why);

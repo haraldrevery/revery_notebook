@@ -113,6 +113,38 @@
     };
   }
 
+  /* 3b. A multi-selection dragged from the REAL tree: two images picked
+         with Ctrl+click travel as ONE drag, and dropping it on the editor
+         inserts one link per image, each on its own line, in tree order. */
+  {
+    const subPath = PROJECT + '/sub';
+    const fileRow = (p) => document.querySelector(`.sidebar-file[data-path="${CSS.escape(p)}"]`);
+    const subRow = await until(() => document.querySelector(`.sidebar-dir[data-path="${CSS.escape(subPath)}"]`));
+    if (subRow && !subRow.classList.contains('expanded')) subRow.click();
+    const a = await until(() => fileRow(subPath + '/a-one.png'));
+    const b = await until(() => fileRow(subPath + '/b-two.png'));
+    out.multiDrag = { rowsFound: !!(a && b) };
+    if (a && b) {
+      const linkA = '![a-one.png](sub/a-one.png)';
+      const linkB = '![b-two.png](sub/b-two.png)';
+      a.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+      const dt = new DataTransfer();
+      b.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      let payload = null;
+      try {
+        payload = JSON.parse(dt.getData('application/x-revery-path')).map((p) => norm(p).replace(norm(PROJECT), '<project>'));
+      } catch (_) { /* reported as null */ }
+      out.multiDrag.payload = payload;
+      out.multiDrag.plainText = dt.getData('text/plain');
+      dropOnEditor(dt);
+      b.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
+      await sleep(400);
+      out.multiDrag.linkCounts = [count(editor.value, linkA), count(editor.value, linkB)];
+      out.multiDrag.onConsecutiveLines = editor.value.includes(linkA + '\n' + linkB + '\n');
+    }
+  }
+
   /* 4. Click an image in a SUBFOLDER: the preview shows it (resolved
         against the folder the future note will live in), no file is
         created yet, and the editor holds a link relative to that folder. */
@@ -303,7 +335,9 @@
       out.cardDrag.cardDraggable = card.draggable;
       const dt = new DataTransfer();
       img.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
-      out.cardDrag.payloadIsCard = dt.getData('application/x-revery-path') === card.dataset.path;
+      let payload = [];
+      try { payload = JSON.parse(dt.getData('application/x-revery-path')); } catch (_) { /* not the card's */ }
+      out.cardDrag.payloadIsCard = payload.length === 1 && payload[0] === card.dataset.path;
       card.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
     }
     viewBtn.click(); // back to the tree view

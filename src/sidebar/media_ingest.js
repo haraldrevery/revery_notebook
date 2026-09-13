@@ -34,7 +34,7 @@ import { S, expandedDirs, pendingNoteDir } from './state.js';
 import { getFileCategory, mediaMarkdown, arrayBufferToBase64 } from './helpers.js';
 import { baseNameOf } from './paths.js';
 import { renderTree } from './tree.js';
-import { fileDropTransport, isOsFileDrop, SIDEBAR_ITEM_MIME } from './drop_transport.js';
+import { fileDropTransport, isOsFileDrop, SIDEBAR_ITEM_MIME, decodeSidebarPayload } from './drop_transport.js';
 import { paragraphInsertion } from './block_insert.js';
 
 export const DROP_MAX_BYTES = 20 * 1024 * 1024; // matches both backends' copy cap
@@ -199,13 +199,14 @@ function ingestMedia(sources, insert) {
   });
 }
 
-/** A sidebar row dropped on the editor: media inserts its link relative
-    to the note; notes and other files insert nothing. */
-function insertSidebarItem(dataTransfer, target) {
-  const itemPath = dataTransfer.getData(SIDEBAR_ITEM_MIME);
-  if (!itemPath) return;
-  if (getFileCategory(baseNameOf(itemPath)) !== 'media') return;
-  insertAtTarget(target, mediaMarkdown(itemPath));
+/** Sidebar rows dropped on the editor: one link per media file, in tree
+    order, each on its own line, relative to the note; notes and other
+    files insert nothing. */
+function insertSidebarItems(dataTransfer, target) {
+  const media = decodeSidebarPayload(dataTransfer.getData(SIDEBAR_ITEM_MIME))
+    .filter((p) => getFileCategory(baseNameOf(p)) === 'media');
+  if (!media.length) return;
+  insertAtTarget(target, media.map((p) => mediaMarkdown(p)).join('\n'));
 }
 
 function explainNonMediaDrop() {
@@ -246,7 +247,7 @@ export function initMediaIngest() {
     if (types.includes(SIDEBAR_ITEM_MIME)) {
       e.preventDefault();
       e.stopPropagation();
-      insertSidebarItem(dt, dropTargetAt(e.clientX, e.clientY));
+      insertSidebarItems(dt, dropTargetAt(e.clientX, e.clientY));
       return;
     }
     if (!isOsFileDrop(dt)) return; // plain text drags stay CodeMirror's

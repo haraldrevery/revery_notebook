@@ -45,7 +45,25 @@ export function isOsFileDrop(dt) {
 }
 
 /** DataTransfer type set by the sidebar's dragstart (tree rows and cards)
-    carrying the item's absolute path, so the editor can recognise its own
-    rows on drop. text/plain still carries the markdown for external
-    targets. */
+    carrying the dragged files' absolute paths, so the editor can recognise
+    its own rows on drop. text/plain still carries the markdown for
+    external targets. */
 export const SIDEBAR_ITEM_MIME = 'application/x-revery-path';
+
+/** SIDEBAR_ITEM_MIME payload: every dragged file, in tree order, as a JSON
+    array — a multi-selection travels as one drag. A bare path decodes as
+    a single item; anything malformed decodes as nothing. */
+export function encodeSidebarPayload(paths) {
+  return JSON.stringify(paths);
+}
+
+export function decodeSidebarPayload(raw) {
+  if (!raw) return [];
+  if (raw[0] !== '[') return [raw];
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((p) => typeof p === 'string' && p) : [];
+  } catch (_) {
+    return [];
+  }
+}

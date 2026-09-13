@@ -48,7 +48,9 @@ revery_notebook/
 ├── tauri/
 │   ├── Cargo.toml / tauri.conf.json  ← Rust deps, window config, CSP
 │   ├── tauri.windows.conf.json       ← Windows-only override (dragDropEnabled:false) — see
-│   │                                    "Media & drag-and-drop"; must mirror the main window
+│   │                                    "Media & drag-and-drop"; must mirror the main window.
+│   │                                    Never pass `--config tauri/tauri.conf.json` to the CLI:
+│   │                                    it is merged AFTER this file and undoes it
 │   ├── capabilities/                 ← Window permission sets (main + minimal pdf-print-*)
 │   └── src/main.rs                   ← #[tauri::command] implementations + tests
 ├── build_tools/                      ← esbuild scripts (CM bundle + sidebar bundle) +
@@ -270,9 +272,11 @@ One ingest, one path module, one drop transport per platform:
   a text file's contents or a `file://` URL). The editor accepts images only;
   other OS files get a status toast pointing at the file panel. Sidebar rows
   and cards announce themselves with the `application/x-revery-path` type
-  (`SIDEBAR_ITEM_MIME`); dropping one on the editor inserts the link relative
-  to the note at drop time. `text/plain` still carries the markdown for
-  external targets. There is no drop handler in the editor scripts anymore.
+  (`SIDEBAR_ITEM_MIME`), whose value is a JSON array of every dragged file
+  in tree order — a multi-selection travels as one drag
+  (`setSidebarDragData`, helpers.js). Dropping it on the editor inserts one
+  link per media file, each on its own line, relative to the note at drop
+  time. `text/plain` still carries the markdown for external targets. There is no drop handler in the editor scripts anymore.
   In live preview a drop cannot aim at a character (the blocks are
   rendered HTML), so `window.livePreviewDropPos`
   (markdown_editor_livepreview.js) maps the point to a source line and
@@ -288,7 +292,13 @@ One ingest, one path module, one drop transport per platform:
   (sidebar→editor links, drag-to-move). `test/tauri_config.test.js` pins the
   runtime rule to the config and the override to the base window (Tauri
   merges platform files with RFC 7396, which replaces the whole `windows`
-  array — edit both files when the main window changes).
+  array — edit both files when the main window changes). The same merge
+  bites at build time: the CLI forwards every `--config` argument as
+  `TAURI_CONFIG`, which tauri-build and tauri-codegen merge AFTER the
+  platform file, so `tauri build --config tauri/tauri.conf.json` shipped
+  `dragDropEnabled:true` on Windows (every HTML5 drag dead AND OS drops
+  ignored, since the JS listens to the DOM there). The npm scripts run the
+  CLI without `--config`; the test evaluates their effective config.
 - **`src/sidebar/paths.js`** holds every path rule (normalise, resolve,
   relative, encode/decode, root containment — case-insensitive for Windows
   spellings). The sidebar imports it; the editor scripts reach it as
@@ -728,8 +738,8 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/link_complete.test.js` | The link-path completion feed: desktop-only, root containment (`..` may climb, never leave; absolute/URL quiet), folders+images+notes only, decoded prefix filter with raw `rawSegLength`, `kind` per row, Windows spellings, size cap |
 | `test/block_insert.test.js` | The pure paragraph inserter behind live-preview drops: blank line on each side only where missing, never glued onto text (also from a stale mid-line point), document start/end, multi-link blocks, cursor on the blank line after |
 | `test/paths.test.js` | The single path-rule module behind preview, export, link rewriting, autocomplete and media ingest: normalisation, resolve/relative (incl. Windows case-insensitivity), encode/decode round-trips, root containment (sibling-prefix attack, verbatim prefix) |
-| `test/tauri_config.test.js` | Pins the per-platform file-drop transport to the Tauri config: the Windows override mirrors the main window except `dragDropEnabled:false`, and `drop_transport.js` agrees with it |
-| `test/media_e2e.test.js` | Boots the REAL Electron main (preload, IPC, atomic writes) on a temporary project and drives real DragEvent/ClipboardEvent drops: one encoded link per image, preview resolves it, non-media never copied, sidebar payload inserts once, image click previews from its own folder, media dropped while previewing lands beside the note it creates with every link resolving, paste, autosave, no native dialog; in live preview a sidebar image dropped on a rendered list item / code line / paragraph lands as its own paragraph after that item / after the whole fence / after the paragraph; in card view a media card owns the drag (its thumbnail `<img>` is non-draggable), so grabbing the picture carries the card payload |
+| `test/tauri_config.test.js` | Pins the per-platform file-drop transport to the Tauri config: the Windows override mirrors the main window except `dragDropEnabled:false`, `drop_transport.js` agrees with it, and every npm `tauri build`/`dev` script produces that window once its `--config` arguments are merged the way tauri-codegen does; plus the sidebar drag payload's encode/decode |
+| `test/media_e2e.test.js` | Boots the REAL Electron main (preload, IPC, atomic writes) on a temporary project and drives real DragEvent/ClipboardEvent drops: one encoded link per image, preview resolves it, non-media never copied, sidebar payload inserts once, a Ctrl+click multi-selection dragged from the real tree inserts one link per image on consecutive lines in tree order, image click previews from its own folder, media dropped while previewing lands beside the note it creates with every link resolving, paste, autosave, no native dialog; in live preview a sidebar image dropped on a rendered list item / code line / paragraph lands as its own paragraph after that item / after the whole fence / after the paragraph; in card view a media card owns the drag (its thumbnail `<img>` is non-draggable), so grabbing the picture carries the card payload |
 | `test/livepreview_e2e.test.js` | Boots the REAL app in Electron (web mode, via the generic `test/helpers/web_e2e_main.js` + `lp_e2e_driver.js`) and drives the live preview with DOM mouse events: a click on rendered text lands on THAT word of the source (paragraph, list item, code line, table cell, lower row of a wrapped paragraph) with the clicked block's top edge kept in place, CodeMirror's height map matches the screen below lists/quotes/code/tables, a click on the blank line at a block's edge reveals nothing and never scrolls, a click beside a block lands on the row at that height, revealing a block shifts only what is below it (also when the previously edited block re-renders above — on screen or scrolled out of view), a drag started on a rendered block selects text, a drag into a rendered block extends character by character with the covered rendered text painted (CSS Custom Highlight) while the block stays rendered, a block the range spans is marked as a unit, heads stay stable over widgets, double-click selects the word, shift-click extends, right-click places the cursor without dragging, select-all keeps spanned blocks rendered, Shift+Arrow into a rendered block paints exactly the selected characters and typing replaces them in the source, arrow keys still reveal, checkboxes and YAML pills keep their behaviour |
 | `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
 
@@ -965,12 +975,17 @@ hit that.
    replace `app.path().app_config_dir()` with `app.path_resolver().app_config_dir()`,
    and use `tauri::api::dialog` instead of `tauri-plugin-dialog`.
 
-6. **HTML5 drag-and-drop on Windows (Tauri)** — ✅ RESOLVED: with wry's
-   drag-drop handler enabled, WebView2's drop target is replaced and no
-   HTML5 drag inside the page reaches the renderer (sidebar→editor links,
+6. **HTML5 drag-and-drop on Windows (Tauri)** — with wry's drag-drop
+   handler enabled, WebView2's drop target is replaced and no HTML5 drag
+   inside the page reaches the renderer (sidebar→editor links,
    drag-to-move were dead on Windows). `tauri/tauri.windows.conf.json`
    disables it there; `src/sidebar/drop_transport.js` routes OS file drops
    through the DOM on that platform. Linux/macOS keep the native event.
+   The first version of this fix never reached a binary: `npm run
+   build:tauri` passed `--config tauri/tauri.conf.json`, which the build
+   merges after the platform file (see "Media & drag-and-drop"). Fixed
+   2026-09-13 in package.json and pinned by `test/tauri_config.test.js`;
+   still unconfirmed on a real Windows build at the time of writing.
 
 7. **Media links from the Tauri copy commands on Windows** — ✅ RESOLVED:
    `copy_into_folder`, `copy_path_into_folder` and `save_file` returned

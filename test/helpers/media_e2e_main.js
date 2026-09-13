@@ -35,6 +35,8 @@ const notePath = path.join(project, 'note.md');
 fs.mkdirSync(path.join(project, 'sub'));
 fs.writeFileSync(notePath, '# Note\n\n');
 fs.writeFileSync(path.join(project, 'sub', 'pic.png'), PNG);
+fs.writeFileSync(path.join(project, 'sub', 'a-one.png'), PNG); // multi-selection drag probe
+fs.writeFileSync(path.join(project, 'sub', 'b-two.png'), PNG);
 
 /* Seed settings so boot restores this project and note without a dialog.
    trustedRoots is what fs:set-root-path checks; the migration flag keeps

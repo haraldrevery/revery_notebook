@@ -1,7 +1,6 @@
 /* cards.js — card view: grid rendering, previews, view-mode toggle. */
 import { S, treeEl, btnViewBtn, btnToggleAll, btnSortBtn, selectedItems, _previewCache } from './state.js';
-import { stripMarkdownForPreview, getFileCategory, mediaMarkdown } from './helpers.js';
-import { SIDEBAR_ITEM_MIME } from './drop_transport.js';
+import { stripMarkdownForPreview, getFileCategory, setSidebarDragData } from './helpers.js';
 import { sortEntries, renderTree, updateMultiSelectHighlight, showContextMenu } from './tree.js';
 import { openFile, openMediaFile, openUnsupportedFile } from './fileops.js';
 import { icon } from './icons.js';
@@ -215,10 +214,8 @@ let _cardGeneration = 0;
         .filter(el => selectedItems.has(el.dataset.path))
         .map(el => ({ path: el.dataset.path, type: el.dataset.type }));
 
-      /* Same two payloads as a tree row (see tree.js dragstart). */
-      e.dataTransfer.effectAllowed = category === 'media' ? 'copyMove' : 'move';
-      e.dataTransfer.setData(SIDEBAR_ITEM_MIME, entry.path);
-      e.dataTransfer.setData('text/plain', category === 'media' ? mediaMarkdown(entry.path) : '');
+      /* Same payloads as a tree row: the whole selection (helpers.js). */
+      setSidebarDragData(e.dataTransfer, S._dragItems);
 
       requestAnimationFrame(() => {
         treeEl.querySelectorAll('.sidebar-card').forEach(el => {
