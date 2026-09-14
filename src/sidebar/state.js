@@ -49,12 +49,17 @@ export const S = {
   /* Serialize async FS operations — prevents simultaneous move/rename/delete
      from corrupting state if the user clicks very quickly. */
   _operationLock:   false,
-  /* Watcher suppression: after we write ourselves we ignore the next
-     watcher event for this many ms to avoid a false "external change" dialog */
-  _suppressWatchUntil: 0,
   _externalChangeInProgress: false,
   _replaceGeneration: 0,
+  /* Auto-save hold (save.js setAutosaveHold): the held file's path, and why
+     — 'conflict' | 'missing' | 'unreadable'. */
   _conflictHoldPath: null,
+  _holdReason: null,
+  /* What is on disk for the active file (save.js rememberDiskContent): the
+     exact text last read from or written to it, and its line-ending style.
+     The watcher compares against this to recognise our own writes. */
+  _diskBaseline: null,
+  _diskEol: '\n',
 };
 
 try {
@@ -66,8 +71,6 @@ try {
 export const expandedDirs  = new Set();
 export const selectedItems = new Set(); // Set<path> of all multi-selected items
 export const _previewCache = new Map(); // Map<filePath, previewText>
-
-export const SUPPRESS_MS = 2000;
 
 export const SCRATCHPAD_PREFIX = '__revery_scratchpad__/';
 

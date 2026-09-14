@@ -1,14 +1,16 @@
 /* lifecycle.js — unified close-time handler and the boot sequence
    (session restore, crash recovery, scratchpad recovery). */
 import { S, docTitleEl, folderNameEl, expandedDirs,
-         SUPPRESS_MS, SCRATCHPAD_PREFIX } from './state.js';
-import { saveActiveFile, markClean, markDirty, scheduleAutoSave, cancelPendingAutoSave } from './save.js';
+         SCRATCHPAD_PREFIX } from './state.js';
+import { saveActiveFile, markClean, markDirty, scheduleAutoSave, cancelPendingAutoSave,
+         rememberDiskContent } from './save.js';
+import { normalizeEol } from './eol.js';
 import { renderTree, highlightActiveFile } from './tree.js';
 import { updateViewBtn } from './cards.js';
 import { openSidebar } from './panel.js';
 import { startWatchingFile } from './watcher.js';
 import { openFile } from './fileops.js';
-import { uniquePath, reportBakOrphans } from './helpers.js';
+import { uniquePath, reportBakOrphans, fileExistsViaListing } from './helpers.js';
 import { loadProjects, recordProjectOpen, seedProjectsCache, PROJECTS_KEY } from './projects.js';
 
 async function sidebarHandleClose() {
@@ -108,6 +110,50 @@ window.NativeAPI.onWindowClose(sidebarHandleClose);
          Escape = Not now (keeps the backup). Discard requires a click.
          Requires fix #2: on Tauri this 3-button dialog goes through the
          HTML fallback, which honors defaultId/cancelId.                 */
+  /* Rename journal reconciliation (the inline title rename journals
+     from → to before renaming). If the app died after the rename but
+     before the last-opened pointer was updated, the pointer still names
+     `from`. Repair it only when `from` is DEFINITELY gone and `to`
+     DEFINITELY exists; anything uncertain leaves lastFile untouched and
+     keeps the journal for the next boot. Must run AFTER setRootPath:
+     both backends refuse every file-system call until a root is set,
+     which is why this check, when it ran earlier, could never succeed.
+     Never throws. */
+  async function reconcilePendingRename(journal, lastFile) {
+    if (!journal) return lastFile;
+    let result = lastFile;
+    let keepJournal = false;
+    try {
+      if (typeof journal.from === 'string' && typeof journal.to === 'string'
+          && lastFile === journal.from) {
+        const fromExists = await fileExistsViaListing(journal.from);
+        const toExists   = (fromExists === false) ? await fileExistsViaListing(journal.to) : null;
+        if (fromExists === null || (fromExists === false && toExists === null)) {
+          keepJournal = true; // could not tell — decide on a later boot
+        } else if (fromExists === false && toExists === true) {
+          console.info('[Sidebar Boot] Reconciling pending rename: %s → %s', journal.from, journal.to);
+          result = journal.to;
+          try {
+            await window.NativeAPI.setLastOpenedFile(journal.to);
+          } catch (e) {
+            // The corrected in-memory value is used anyway; the next boot
+            // re-reconciles because the journal is kept.
+            console.warn('[Sidebar Boot] Could not persist reconciled lastOpenedFile:', e);
+            keepJournal = true;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Sidebar Boot] Pending-rename reconciliation failed (non-fatal):', e);
+      keepJournal = true;
+    }
+    if (!keepJournal && typeof window.NativeAPI.setPendingRename === 'function') {
+      window.NativeAPI.setPendingRename(null).catch((e) =>
+        console.warn('[Sidebar Boot] Could not clear rename journal:', e));
+    }
+    return result;
+  }
+
   async function recoverScratchpadBackups() {
     if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
     if (typeof window.NativeAPI.listVolatileBackups !== 'function') {
@@ -207,9 +253,9 @@ window.NativeAPI.onWindowClose(sidebarHandleClose);
         /* Content is durably on disk — only NOW may the backup go. */
         await window.NativeAPI.deleteVolatileContent(info.originalPath).catch(() => {});
 
-        /* Defensive: our own write must not register as an external change
-           with the watcher openFile() is about to install. */
-        S._suppressWatchUntil = Date.now() + SUPPRESS_MS;
+        /* Our own write cannot register as an external change: openFile()
+           records what it reads as the file's on-disk content, and the
+           watcher ignores events whose content matches that record. */
 
         expandedDirs.add(dir);
         await renderTree();
@@ -252,59 +298,15 @@ try {
       /* 1. Try to restore last session */
       let lastFile = await window.NativeAPI.getLastOpenedFile();
 
-
+      /* Read the rename journal now; it is reconciled right after
+         setRootPath below (see reconcilePendingRename). */
+      let journal = null;
       try {
-        const journal = (typeof window.NativeAPI.getPendingRename === 'function')
+        journal = (typeof window.NativeAPI.getPendingRename === 'function')
           ? await window.NativeAPI.getPendingRename()
           : null;
-
-        if (journal
-            && typeof journal.from === 'string'
-            && typeof journal.to   === 'string'
-            && lastFile === journal.from) {
-
-          let fromExists = false;
-          try {
-            await window.NativeAPI.readFile(journal.from);
-            fromExists = true;
-          } catch { /* ENOENT or unreadable */ }
-
-          if (!fromExists) {
-            let toExists = false;
-            try {
-              await window.NativeAPI.readFile(journal.to);
-              toExists = true;
-            } catch { /* ENOENT or unreadable */ }
-
-            if (toExists) {
-              // Bug case detected — the rename completed but
-              // setLastOpenedFile didn't. Repair the pointer.
-              console.info(
-                '[Sidebar Boot] Reconciling pending rename: %s → %s',
-                journal.from, journal.to
-              );
-              lastFile = journal.to;
-              try {
-                await window.NativeAPI.setLastOpenedFile(journal.to);
-              } catch (e) {
-                console.warn('[Sidebar Boot] Could not persist reconciled lastOpenedFile:', e);
-                // Fall through with the corrected in-memory value anyway —
-                // worst case the next boot re-reconciles.
-              }
-            }
-            // else: neither path exists → leave lastFile alone, normal
-            // error path will handle it (injectStarterText + clear).
-          }
-        }
-
-        // Always clear the journal after consultation. Non-fatal on failure.
-        if (journal && typeof window.NativeAPI.setPendingRename === 'function') {
-          window.NativeAPI.setPendingRename(null).catch(e =>
-            console.warn('[Sidebar Boot] Could not clear rename journal:', e)
-          );
-        }
       } catch (e) {
-        console.warn('[Sidebar Boot] Pending-rename reconciliation failed (non-fatal):', e);
+        console.warn('[Sidebar Boot] Could not read rename journal (non-fatal):', e);
       }
 
       /* 1a. Load the last root path */
@@ -346,6 +348,7 @@ try {
         if (folder) {
           S.rootPath        = folder;
           await window.NativeAPI.setRootPath(folder);
+          lastFile = await reconcilePendingRename(journal, lastFile);
           S.selectedDirPath = folder;
           const parts = folder.replace(/\\/g, '/').split('/');
           folderNameEl.textContent = parts[parts.length - 1] || folder;
@@ -391,6 +394,7 @@ try {
               
               S.activeFilePath = lastFile;
               markClean();
+              rememberDiskContent(diskContent);
               highlightActiveFile(lastFile);
               startWatchingFile(lastFile);
               
@@ -402,7 +406,11 @@ try {
               /* ── Crash recovery check ── */
               try {
                 const backup = await window.NativeAPI.getVolatileContent(lastFile);
-                if (backup && backup.content !== diskContent) {
+                /* Backups hold editor text, whose line breaks are always '\n';
+                   compare against the disk text normalised the same way, or a
+                   CRLF file would look "changed" after every crash. */
+                const diskAsEditor = normalizeEol(diskContent);
+                if (backup && backup.content !== diskAsEditor) {
                   const ts = new Date(backup.ts).toLocaleString();
 
                   /* ── Suspicious-backup guard ────────────────────────────

@@ -353,7 +353,20 @@ function runFind() {
 
 
 /* ── Navigation ───────────────────────────────────────────────────────── */
+/* Re-read match positions from the editor's highlight layer: mapped through
+   every edit since the search ran, and emptied by a file switch. Keeps
+   findMatches / findCurrentIdx pointing at the text actually on screen. */
+function syncMatchesFromEditor() {
+  if (typeof window.getFindHighlightRanges !== 'function') return;
+  const ranges = window.getFindHighlightRanges();
+  findMatches = ranges.map((r) => ({ index: r.from, length: r.to - r.from }));
+  if (!findMatches.length) { findCurrentIdx = -1; return; }
+  const cur = ranges.findIndex((r) => r.current);
+  findCurrentIdx = cur >= 0 ? cur : Math.min(Math.max(findCurrentIdx, 0), findMatches.length - 1);
+}
+
 function findNext() {
+  syncMatchesFromEditor();
   if (!findMatches.length) { runFind(); return; }
   findCurrentIdx = (findCurrentIdx + 1) % findMatches.length;
   highlightMatch(findCurrentIdx);
@@ -362,6 +375,7 @@ function findNext() {
 }
 
 function findPrev() {
+  syncMatchesFromEditor();
   if (!findMatches.length) { runFind(); return; }
   findCurrentIdx = (findCurrentIdx - 1 + findMatches.length) % findMatches.length;
   highlightMatch(findCurrentIdx);
@@ -418,27 +432,73 @@ function updateFindCount() {
 
 
 /* ── Replace ──────────────────────────────────────────────────────────── */
+
+/* The text to insert for the match at [start, end) — or null when the
+   document no longer has a match of the CURRENT query exactly there.
+   Verification runs the same pattern (sticky, at `start`) against the
+   FULL document, so lookarounds, ^ and \b see the real neighbours — the
+   old code re-ran the pattern on the isolated match, where those silently
+   failed. In regex mode $1 / $& / $<name> are expanded the way
+   String.replace does, in that same full-text context; in literal mode the
+   replacement is inserted exactly as typed.
+   Regex execution here is one sticky attempt at one position the worker
+   already matched within its time budget, so it stays synchronous; the
+   heuristic guard still applies on the no-worker fallback path. */
+function verifiedReplacementAt(start, end) {
+  const query = findInput.value;
+  if (!query) return null;
+  const text = editor.value;
+  if (!(start >= 0 && end > start && end <= text.length)) return null;
+
+  let source;
+  if (findUseRegex) {
+    if (_workerBroken && !isSafeRegex(query)) return null;
+    source = query;
+  } else {
+    source = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  const flags = (findCaseSensitive ? '' : 'i') + 'y';
+
+  let probe, expander;
+  try {
+    probe    = new RegExp(source, flags);
+    expander = new RegExp(source, flags);
+  } catch (e) {
+    return null;
+  }
+  probe.lastIndex = start;
+  const m = probe.exec(text);
+  if (!m || m.index !== start || m[0].length !== end - start) return null;
+
+  if (!findUseRegex) return replaceInput.value;
+
+  expander.lastIndex = start; // sticky + non-global: replaces only the match at `start`
+  const whole = text.replace(expander, replaceInput.value);
+  return whole.slice(start, whole.length - (text.length - end));
+}
+
 function replaceCurrent() {
-  if (!findMatches.length) return;
+  /* Use the positions the editor shows NOW (edits since the search, or a
+     file switch, made the stored offsets stale — replacing at them used to
+     overwrite unrelated text, even in another file). */
+  syncMatchesFromEditor();
+  if (!findMatches.length || findCurrentIdx < 0) { runFind(); return; }
   const matchObj = findMatches[findCurrentIdx];
   const start = matchObj.index;
   const end = start + matchObj.length;
-  let replacement = replaceInput.value;
 
-  if (findUseRegex) {
-    /* Re-executing the pattern on a string it already matched (within the
-       worker's time budget) is bounded work, so this stays synchronous.
-       The heuristic guard only applies on the no-worker fallback path,
-       where nothing else protects the UI thread.                        */
-    if (_workerBroken && !isSafeRegex(findInput.value)) return;
-
-    const matchedStr = editor.value.substring(start, end);
-    let flags = '';
-    if (!findCaseSensitive) flags += 'i';
-    try {
-      const localRegex = new RegExp(findInput.value, flags);
-      replacement = matchedStr.replace(localRegex, replacement);
-    } catch (e) {}
+  const replacement = verifiedReplacementAt(start, end);
+  if (replacement === null) {
+    /* The highlighted text is no longer a match (edited since the search
+       ran). Never replace text that isn't a current match: refresh the
+       results and let the user press Replace again. */
+    if (typeof window.showStatusWarning === 'function') {
+      window.showStatusWarning('find-stale',
+        'The text changed since the search – results refreshed.',
+        { priority: 20, ttl: 2500 });
+    }
+    runFind();
+    return;
   }
 
   insertWithUndo(start, end, replacement);
@@ -574,6 +634,21 @@ document.addEventListener('keydown', e => {
     }
   }
 });
+
+/* ── A different document was loaded (file switch, reload, media preview) ──
+   Matches of the previous document mean nothing here: drop them, discard
+   any in-flight worker result for the old text, and — if the bar is open —
+   search the new document so the counter and highlights are truthful. */
+if (typeof window.onEditorDocReplaced === 'function') {
+  window.onEditorDocReplaced(() => {
+    _findGeneration++;
+    findMatches    = [];
+    findCurrentIdx = -1;
+    const open = findBar.style.display !== 'none' && findBar.style.display !== '';
+    if (open && findInput.value) runFind();
+    else updateFindCount();
+  });
+}
 
 /* ── Close when Escape is pressed anywhere (even in the editor) ── */
 editor.addEventListener('keydown', e => {

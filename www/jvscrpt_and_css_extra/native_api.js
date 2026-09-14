@@ -44,6 +44,44 @@
     return [];
   }
 
+  /* ── Well-formed text at the persistence boundary ─────────────────────
+     A JS string can hold a lone UTF-16 surrogate (e.g. a regex replace
+     without the `u` flag that split an emoji). UTF-8 cannot represent it:
+     Node already writes U+FFFD in its place, while Tauri's JSON IPC
+     rejects the whole call — every save, backup and export of such a
+     document would fail. Replacing lone surrogates with U+FFFD here gives
+     BOTH backends the byte-identical result Electron always produced.
+     Only the bytes handed to the backend change; the editor buffer and the
+     save engine's comparisons are untouched (so this can never make a save
+     look incomplete and loop). Plain code, no lookbehind regex: older
+     WebKitGTK builds cannot parse it, and a syntax error in this file
+     would take down the whole API. */
+  const _SURROGATE_RE = /[\uD800-\uDFFF]/;
+  function toWellFormedText(s) {
+    if (typeof s !== 'string' || !_SURROGATE_RE.test(s)) return s; // fast path
+    if (typeof s.isWellFormed === 'function' && s.isWellFormed()) return s;
+    if (typeof s.toWellFormed === 'function') return s.toWellFormed();
+    let out = '';
+    let last = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0xD800 && c <= 0xDBFF) {
+        const d = (i + 1 < s.length) ? s.charCodeAt(i + 1) : 0;
+        if (d >= 0xDC00 && d <= 0xDFFF) { i++; continue; } // valid pair
+        out += s.slice(last, i) + '�'; last = i + 1;
+      } else if (c >= 0xDC00 && c <= 0xDFFF) {
+        out += s.slice(last, i) + '�'; last = i + 1;
+      }
+    }
+    return last === 0 ? s : out + s.slice(last);
+  }
+  function wellFormedSections(sections) {
+    if (!Array.isArray(sections)) return sections;
+    return sections.map((sec) => (sec && typeof sec.content === 'string')
+      ? Object.assign({}, sec, { content: toWellFormedText(sec.content) })
+      : sec);
+  }
+
   /* ── Volatile content: crash-safe temp backup ────────────────────────
      setVolatileContent(path, content) persists the editor state to a
      temp/backup location in case of crash. … */
@@ -147,6 +185,14 @@ function flushVolatile() {
     clearTimeout(_volatileTimer);        _volatileTimer = null;
     clearTimeout(_volatileMaxWaitTimer); _volatileMaxWaitTimer = null;
     _volatilePending = null;
+  }
+
+  /* Deleting one file's backup cancels the pending debounced backup only
+     when it belongs to that SAME path. Cancelling unconditionally used to
+     swallow another file's queued backup (e.g. the old scratchpad key being
+     deleted right after the new note's first backup was queued). */
+  function cancelVolatileFor(path) {
+    if (_volatilePending && _volatilePending.path === path) cancelVolatile();
   }
 
 function debounceVolatile(path, content) {
@@ -263,7 +309,7 @@ function debounceVolatile(path, content) {
     },
 
     writeFile(path, content) {
-      return window.electronAPI.writeFile(path, content);
+      return window.electronAPI.writeFile(path, toWellFormedText(content));
     },
 
     createFile(path) {
@@ -303,17 +349,17 @@ function debounceVolatile(path, content) {
 
 /* Internal: the actual write, called after debounce */
 _writeVolatileNow(path, content) {
-  return window.electronAPI.setVolatileContent(path, content);
+  return window.electronAPI.setVolatileContent(path, toWellFormedText(content));
 },
 /* Immediate volatile write (bypass debounce, but NOT the ordering chain) */
 writeVolatileNow(path, content) {
-  return _enqueueVolatileOp(() => window.electronAPI.setVolatileContent(path, content));
+  return _enqueueVolatileOp(() => window.electronAPI.setVolatileContent(path, toWellFormedText(content)));
 },
 /* Durable (reboot-safe) snapshot under userData — written by the save
    engine only for the autosave-suspended states. Recovery reads it
    through the same getVolatileContent (backend merges locations). */
 setDurableBackup(path, content) {
-  return _enqueueVolatileOp(() => window.electronAPI.setDurableBackup(path, content));
+  return _enqueueVolatileOp(() => window.electronAPI.setDurableBackup(path, toWellFormedText(content)));
 },
 
     getVolatileContent(path) {
@@ -321,7 +367,7 @@ setDurableBackup(path, content) {
     },
 
     deleteVolatileContent(path) {
-      cancelVolatile();
+      cancelVolatileFor(path);
       return _enqueueVolatileOp(() => window.electronAPI.deleteVolatileContent(path));
     },
 
@@ -339,7 +385,7 @@ setDurableBackup(path, content) {
       return window.electronAPI.showMessageBox(options);
     },
     saveFile(filename, content, options) {
-      return window.electronAPI.saveFile(filename, content, options);
+      return window.electronAPI.saveFile(filename, toWellFormedText(content), options);
     },
     /* Register a callback to run when the OS window close button is pressed.
        The callback receives no arguments. Call NativeAPI.confirmClose() when
@@ -374,7 +420,7 @@ setDurableBackup(path, content) {
 
     /** LaTeX project zip: main.tex + images/ + fonts + section files (dialog in main). */
     exportLatexZip(tex, images, baseName, bundleFonts, sections) {
-      return window.electronAPI.exportLatexZip(tex, images, baseName, bundleFonts, sections);
+      return window.electronAPI.exportLatexZip(toWellFormedText(tex), images, baseName, bundleFonts, wellFormedSections(sections));
     },
 /* Triggers the existing close-request flow → quit modal appears. */
     closeWindow() {
@@ -500,7 +546,7 @@ const tauriImpl = {
     },
 
     writeFile(path, content) {
-      return this._invoke('write_file', { path, content });
+      return this._invoke('write_file', { path, content: toWellFormedText(content) });
     },
 
     createFile(path) {
@@ -561,17 +607,17 @@ const tauriImpl = {
     },
 
 _writeVolatileNow(path, content) {
-  return this._invoke('set_volatile_content', { path, content });
+  return this._invoke('set_volatile_content', { path, content: toWellFormedText(content) });
 },
 /* Immediate volatile write (bypass debounce, but NOT the ordering chain) */
 writeVolatileNow(path, content) {
-  return _enqueueVolatileOp(() => this._invoke('set_volatile_content', { path, content }));
+  return _enqueueVolatileOp(() => this._invoke('set_volatile_content', { path, content: toWellFormedText(content) }));
 },
 /* Durable (reboot-safe) snapshot under the app data dir — written by the
    save engine only for the autosave-suspended states. Recovery reads it
    through the same getVolatileContent (backend merges locations). */
 setDurableBackup(path, content) {
-  return _enqueueVolatileOp(() => this._invoke('set_durable_backup', { path, content }));
+  return _enqueueVolatileOp(() => this._invoke('set_durable_backup', { path, content: toWellFormedText(content) }));
 },
 
 getVolatileContent(path) {
@@ -579,7 +625,7 @@ getVolatileContent(path) {
     },
 
     deleteVolatileContent(path) {
-      cancelVolatile();
+      cancelVolatileFor(path);
       return _enqueueVolatileOp(() => this._invoke('delete_volatile_content', { path }));
     },
 
@@ -612,14 +658,31 @@ getVolatileContent(path) {
        { saved: true, filePath } on success or { saved: false } on cancel. */
     saveFile(filename, content, options) {
     const updateRoot = !!(options && options.updateRoot);
-    return this._invoke('save_file', { filename, content, updateRoot });
+    return this._invoke('save_file', { filename, content: toWellFormedText(content), updateRoot });
     },
     onWindowClose(callback) {
   /* Tauri v2: listen to the 'window-close-request' event emitted by Rust.
      listen() returns a Promise — we must let it settle so the listener is
-     actually registered before any close event can arrive.               */
-  window.__TAURI__.event.listen('window-close-request', () => callback())
-    .catch(err => console.error('[NativeAPI] Failed to register close listener:', err));
+     actually registered before any close event can arrive.
+     Acknowledge at once (the backend's close watchdog only steps in when
+     nothing answers: a hung page, or a web process that died), then run the
+     close flow; if it throws, report it so the backend can offer to close
+     anyway instead of leaving a frameless window that cannot be closed. */
+  window.__TAURI__.event.listen('window-close-request', () => {
+    this._invoke('close_request_ack').catch(() => {});
+    const report = (err) => {
+      console.error('[NativeAPI] close flow failed:', err);
+      this._invoke('close_flow_failed', { message: String((err && err.message) || err) }).catch(() => {});
+    };
+    let result;
+    try {
+      result = callback();
+    } catch (err) {
+      report(err);
+      return;
+    }
+    if (result && typeof result.then === 'function') result.then(null, report);
+  }).catch(err => console.error('[NativeAPI] Failed to register close listener:', err));
 },
 
     confirmClose() {
@@ -703,7 +766,7 @@ getVolatileContent(path) {
 
     /** LaTeX project zip: main.tex + images/ + fonts + section files (dialog in Rust). */
     exportLatexZip(tex, images, baseName, bundleFonts, sections) {
-      return this._invoke('export_latex_zip', { tex, images, baseName, bundleFonts: bundleFonts || [], sections: sections || [] });
+      return this._invoke('export_latex_zip', { tex: toWellFormedText(tex), images, baseName, bundleFonts: bundleFonts || [], sections: wellFormedSections(sections || []) });
     },
 
 /* Triggers the existing CloseRequested flow → quit modal appears. */
@@ -1145,6 +1208,9 @@ getVolatileContent(path) {
       env: ENV,
       /** True when running inside a native desktop wrapper. */
       isDesktop: isTauri || isElectron,
+      /** The exact text form the backends persist (lone surrogates → U+FFFD).
+          The save engine records on-disk content in this form. */
+      wellFormedText: toWellFormedText,
     },
     impl
   );

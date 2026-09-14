@@ -545,12 +545,17 @@
     /* Serialize async FS operations — prevents simultaneous move/rename/delete
        from corrupting state if the user clicks very quickly. */
     _operationLock: false,
-    /* Watcher suppression: after we write ourselves we ignore the next
-       watcher event for this many ms to avoid a false "external change" dialog */
-    _suppressWatchUntil: 0,
     _externalChangeInProgress: false,
     _replaceGeneration: 0,
-    _conflictHoldPath: null
+    /* Auto-save hold (save.js setAutosaveHold): the held file's path, and why
+       — 'conflict' | 'missing' | 'unreadable'. */
+    _conflictHoldPath: null,
+    _holdReason: null,
+    /* What is on disk for the active file (save.js rememberDiskContent): the
+       exact text last read from or written to it, and its line-ending style.
+       The watcher compares against this to recognise our own writes. */
+    _diskBaseline: null,
+    _diskEol: "\n"
   };
   try {
     const vm = localStorage.getItem("revery_sidebar_view");
@@ -560,7 +565,6 @@
   var expandedDirs = /* @__PURE__ */ new Set();
   var selectedItems = /* @__PURE__ */ new Set();
   var _previewCache = /* @__PURE__ */ new Map();
-  var SUPPRESS_MS = 2e3;
   var SCRATCHPAD_PREFIX = "__revery_scratchpad__/";
   function ensureScratchpadVolatileKey() {
     if (S._scratchpadVolatileKey) return S._scratchpadVolatileKey;
@@ -593,7 +597,8 @@
     mediaLinkMarkdown: () => mediaLinkMarkdown,
     normalizePath: () => normalizePath,
     relativePath: () => relativePath,
-    resolvePath: () => resolvePath
+    resolvePath: () => resolvePath,
+    uniqueName: () => uniqueName
   });
   var DRIVE_RE = /^[a-zA-Z]:(\/|$)/;
   var UNC_RE = /^\/\/[^/]/;
@@ -666,6 +671,17 @@
     const R = ci ? r.toLowerCase() : r;
     if (A === R) return true;
     return A.startsWith(R === "/" ? "/" : R + "/");
+  }
+  function uniqueName(existingNames, stem, suffix = "", ignoreName = null) {
+    const taken = /* @__PURE__ */ new Set();
+    for (const n of existingNames || []) {
+      if (typeof n === "string" && n !== ignoreName) taken.add(n.toLowerCase());
+    }
+    let candidate = stem + suffix;
+    for (let i = 2; taken.has(candidate.toLowerCase()); i++) {
+      candidate = `${stem}_${i}${suffix}`;
+    }
+    return candidate;
   }
   function mediaLinkMarkdown(mediaPath, baseDir) {
     const name = baseNameOf(mediaPath);
@@ -762,33 +778,39 @@
     let existingNames;
     try {
       const entries = await window.NativeAPI.readDirectory(targetDir);
-      existingNames = new Set(entries.map((e) => e.name));
+      existingNames = entries.map((e) => e.name);
     } catch {
       return `${targetDir}${sep}${name}`;
     }
-    if (!existingNames.has(name)) return `${targetDir}${sep}${name}`;
     const lastDot = name.lastIndexOf(".");
     const hasExt = type === "file" && lastDot > 0;
     const base = hasExt ? name.substring(0, lastDot) : name;
     const ext = hasExt ? name.substring(lastDot) : "";
-    let counter = 2;
-    while (existingNames.has(`${base}_${counter}${ext}`)) counter++;
-    return `${targetDir}${sep}${base}_${counter}${ext}`;
+    return `${targetDir}${sep}${uniqueName(existingNames, base, ext)}`;
   }
-  async function uniquePath(dir, baseName, ext) {
+  async function uniquePath(dir, baseName, ext, ignoreName = null) {
     const sep = dir.endsWith("/") || dir.endsWith("\\") ? "" : "/";
-    const base = baseName.replace(/_\d+$/, "");
     let names;
     try {
       const entries = await window.NativeAPI.readDirectory(dir);
-      names = new Set(entries.map((e) => e.name));
+      names = entries.map((e) => e.name);
     } catch {
-      return `${dir}${sep}${base}.${ext}`;
+      return `${dir}${sep}${baseName}.${ext}`;
     }
-    if (!names.has(`${base}.${ext}`)) return `${dir}${sep}${base}.${ext}`;
-    let counter = 2;
-    while (names.has(`${base}_${counter}.${ext}`)) counter++;
-    return `${dir}${sep}${base}_${counter}.${ext}`;
+    return `${dir}${sep}${uniqueName(names, baseName, "." + ext, ignoreName)}`;
+  }
+  async function fileExistsViaListing(p) {
+    if (typeof p !== "string") return null;
+    const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+    if (i <= 0) return null;
+    const dir = p.slice(0, i);
+    const name = p.slice(i + 1);
+    try {
+      const entries = await window.NativeAPI.readDirectory(dir);
+      return (entries || []).some((e) => e && e.name === name && e.type === "file");
+    } catch (_) {
+      return null;
+    }
   }
   async function scanBakOrphansIn(dir) {
     if (!dir) return [];
@@ -903,41 +925,73 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return svg;
   }
 
+  // src/sidebar/eol.js
+  function detectEol(raw) {
+    if (typeof raw !== "string" || raw.indexOf("\r\n") < 0) return "\n";
+    return /(^|[^\r])\n/.test(raw) || /\r(?!\n)/.test(raw) ? "\n" : "\r\n";
+  }
+  function normalizeEol(raw) {
+    return typeof raw === "string" ? raw.replace(/\r\n?/g, "\n") : raw;
+  }
+  function toDiskText(editorText, eol) {
+    return eol === "\r\n" ? editorText.replace(/\n/g, "\r\n") : editorText;
+  }
+
   // src/sidebar/watcher.js
   var _watchedPath = null;
   function startWatchingFile(filePath) {
     if (_watchedPath) {
-      window.NativeAPI.unwatchFile(_watchedPath);
+      Promise.resolve(window.NativeAPI.unwatchFile(_watchedPath)).catch(() => {
+      });
       _watchedPath = null;
     }
     if (!filePath) return;
-    window.NativeAPI.watchFile(filePath, async (eventType) => {
+    Promise.resolve(window.NativeAPI.watchFile(filePath, async (eventType) => {
       if (eventType !== "modify") return;
       if (filePath !== S.activeFilePath) return;
-      if (Date.now() < S._suppressWatchUntil) return;
       if (S._externalChangeInProgress) return;
-      cancelPendingAutoSave();
-      let diskContent;
+      let verdict;
       try {
-        diskContent = await _enqueueDiskOp(async () => {
-          if (Date.now() < S._suppressWatchUntil) return null;
+        verdict = await _enqueueDiskOp(async () => {
           if (filePath !== S.activeFilePath) return null;
           let content;
           try {
             content = await window.NativeAPI.readFile(filePath);
           } catch (readErr) {
+            const exists = await fileExistsViaListing(filePath);
+            if (exists === false) return { kind: "missing" };
+            if (exists === true && /not valid UTF-8/.test(String(readErr))) return { kind: "unreadable" };
             console.warn("[Sidebar] Could not verify external change content:", readErr);
             return null;
           }
-          if (content === editor.value) return null;
+          if (S._diskBaseline !== null && content === S._diskBaseline) return { kind: "same" };
+          if (normalizeEol(content) === editor.value) {
+            rememberDiskContent(content);
+            return { kind: "same" };
+          }
           S._externalChangeInProgress = true;
-          return content;
+          return { kind: "changed" };
         });
       } catch (err) {
         console.warn("[Sidebar] verify lock op rejected:", err);
         return;
       }
-      if (diskContent === null) return;
+      if (!verdict) return;
+      if (verdict.kind === "same") {
+        if (S._conflictHoldPath === filePath && (S._holdReason === "missing" || S._holdReason === "unreadable")) {
+          clearAutosaveHold();
+          if (S.isDirty) scheduleAutoSave();
+        }
+        return;
+      }
+      if (verdict.kind === "missing" || verdict.kind === "unreadable") {
+        cancelPendingAutoSave();
+        setAutosaveHold(filePath, verdict.kind);
+        writeDurableSnapshot(filePath, editor.value);
+        return;
+      }
+      cancelPendingAutoSave();
+      let resolved = false;
       try {
         const dialogButtons = S.isDirty ? ["Reload from disk", "Save my version & reload", "Keep my version"] : ["Reload from disk", "Keep my version"];
         const dialogCancelId = dialogButtons.length - 1;
@@ -948,7 +1002,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           cancelId: dialogCancelId,
           title: "File Changed Externally",
           message: `"${filePath.replace(/\\/g, "/").split("/").pop()}" was modified by another program.`,
-          detail: S.isDirty ? 'You have unsaved changes. "Reload from disk" discards them. "Save my version & reload" writes your unsaved edits to a new file alongside the original, then loads the latest disk version. "Keep my version" leaves the editor untouched and pauses auto-save for this file \u2014 the disk keeps the external version until you save manually (Ctrl+S), switch files, or close (which writes your version).' : "Do you want to reload the latest version?"
+          detail: S.isDirty ? 'You have unsaved changes. "Reload from disk" discards them. "Save my version & reload" writes your unsaved edits to a new file alongside the original, then loads the latest disk version. "Keep my version" leaves the editor untouched and pauses auto-save for this file \u2014 the disk keeps the external version until you save manually (Ctrl+S), switch files, or close (which writes your version).' : 'Do you want to reload the latest version? "Keep my version" leaves the editor as it is and pauses auto-save for this file until you save it (Ctrl+S).'
         });
         const choice = dialogButtons[result.response];
         if (choice === "Reload from disk") {
@@ -964,7 +1018,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
               }
               S._replaceGeneration++;
               markClean();
+              rememberDiskContent(fresh);
             });
+            resolved = true;
           } catch (err) {
             console.error("[Sidebar] reload after external change failed:", err);
           }
@@ -1003,6 +1059,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
                 }
                 S._replaceGeneration++;
                 markClean();
+                rememberDiskContent(fresh);
               } catch (err) {
                 reloadErr = err;
                 throw err;
@@ -1037,6 +1094,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
             });
             return;
           }
+          resolved = true;
           window.NativeAPI.deleteVolatileContent(filePath).catch(() => {
           });
           if (typeof renderTree === "function") {
@@ -1054,10 +1112,19 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         }
       } finally {
         S._externalChangeInProgress = false;
-        if (S.isDirty) {
-          S._conflictHoldPath = filePath;
+        if (!resolved && S.activeFilePath === filePath) {
+          setAutosaveHold(filePath, "conflict");
           writeDurableSnapshot(filePath, editor.value);
         }
+      }
+    })).catch((err) => {
+      console.warn("[Sidebar] Could not watch file for external changes:", err);
+      if (typeof window.showStatusWarning === "function") {
+        window.showStatusWarning(
+          "watch-failed",
+          window.t("Changes made to this file by other programs cannot be detected right now."),
+          { priority: 15, ttl: 8e3 }
+        );
       }
     });
     _watchedPath = filePath;
@@ -1307,7 +1374,123 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   var _firstDirtyTime = 0;
   var _autoSaveCooldownUntil = 0;
   var _scratchpadFailureWarned = false;
-  var _autoCreatingFile = false;
+  var _scratch = null;
+  var SCRATCHPAD_RETRY_MS = 5e3;
+  function currentDocGeneration() {
+    return typeof window.getEditorDocGeneration === "function" ? window.getEditorDocGeneration() : 0;
+  }
+  function scratchpadSession() {
+    const gen = currentDocGeneration();
+    if (_scratch && _scratch.gen === gen) return _scratch;
+    if (S._scratchpadVolatileKey && _scratch && _scratch.key === S._scratchpadVolatileKey) {
+      S._scratchpadVolatileKey = null;
+    }
+    _scratch = { gen, key: ensureScratchpadVolatileKey(), latest: "", creating: false, retryAfter: 0 };
+    return _scratch;
+  }
+  function scratchpadCreateFailed(session, err, emptyFileToRemove) {
+    console.error("[Sidebar] scratchpad auto-create failed:", err);
+    session.creating = false;
+    session.retryAfter = Date.now() + SCRATCHPAD_RETRY_MS;
+    if (emptyFileToRemove) window.NativeAPI.deleteNode(emptyFileToRemove).catch(() => {
+    });
+    if (!_scratchpadFailureWarned) {
+      _scratchpadFailureWarned = true;
+      window.NativeAPI.showMessageBox({
+        type: "warning",
+        title: window.t("Could Not Create File"),
+        message: window.t("A file could not be created to save your work."),
+        detail: String(err) + "\n\nYour typed content is still visible but has not been saved to disk. The app will retry automatically when you keep typing.",
+        buttons: ["OK"],
+        defaultId: 0
+      }).catch(() => {
+      });
+    }
+  }
+  function createNoteFromScratchpad(session, targetDir, baseName) {
+    session.creating = true;
+    const attached = () => currentDocGeneration() === session.gen && !S.activeFilePath && !window._showingUnsupportedFile;
+    (async () => {
+      let newPath = null;
+      try {
+        newPath = await uniquePath(targetDir, baseName, "md");
+        await window.NativeAPI.createFile(newPath);
+      } catch (err) {
+        scratchpadCreateFailed(session, err, null);
+        return;
+      }
+      let written;
+      let wroteOnce = false;
+      try {
+        written = attached() ? editor.value : session.latest;
+        await window.NativeAPI.writeFile(newPath, written);
+        wroteOnce = true;
+        if (!attached() && session.latest !== written) {
+          written = session.latest;
+          await window.NativeAPI.writeFile(newPath, written);
+        }
+      } catch (err) {
+        scratchpadCreateFailed(session, err, wroteOnce ? null : newPath);
+        return;
+      }
+      session.creating = false;
+      _scratchpadFailureWarned = false;
+      const releaseSession = () => {
+        if (_scratch === session) _scratch = null;
+        if (S._scratchpadVolatileKey === session.key) S._scratchpadVolatileKey = null;
+      };
+      if (!attached()) {
+        releaseSession();
+        window.NativeAPI.deleteVolatileContent(session.key).catch(() => {
+        });
+        expandedDirs.add(targetDir);
+        await renderTree();
+        if (S.activeFilePath) highlightActiveFile(S.activeFilePath);
+        if (typeof window.showStatusWarning === "function") {
+          window.showStatusWarning(
+            "scratchpad-detached",
+            window.t('Your text was saved as "{name}".').replace("{name}", baseNameOf(newPath)),
+            { priority: 30, ttl: 6e3 }
+          );
+        }
+        return;
+      }
+      S.activeFilePath = newPath;
+      S.previewMediaPath = null;
+      rememberDiskContent(written);
+      releaseSession();
+      let placeholderStillNeeded = false;
+      if (editor.value !== written) {
+        markDirty();
+        scheduleAutoSave();
+        try {
+          await window.NativeAPI.writeVolatileNow(newPath, editor.value);
+        } catch (e) {
+          console.warn("[Sidebar] note backup after scratchpad create failed (placeholder kept):", e);
+          placeholderStillNeeded = true;
+        }
+      }
+      if (!placeholderStillNeeded) {
+        window.NativeAPI.deleteVolatileContent(session.key).catch(() => {
+        });
+      }
+      try {
+        await window.NativeAPI.setLastOpenedFile(newPath);
+      } catch (e) {
+        console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e);
+      }
+      if (docTitleEl && S.activeFilePath === newPath) {
+        docTitleEl.value = newPath.replace(/\\/g, "/").split("/").pop().replace(/\.(md|txt)$/, "");
+      }
+      if (S.activeFilePath === newPath) startWatchingFile(newPath);
+      expandedDirs.add(targetDir);
+      await renderTree();
+      if (S.activeFilePath) highlightActiveFile(S.activeFilePath);
+    })().catch((err) => {
+      console.error("[Sidebar] scratchpad create flow failed unexpectedly:", err);
+      session.creating = false;
+    });
+  }
   var DURABLE_MIRROR_MS = 5e3;
   var _durableMirrorLast = 0;
   var _durableMirrorTimer = null;
@@ -1333,6 +1516,29 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       _durableMirrorTimer = setTimeout(_fireDurableMirror, DURABLE_MIRROR_MS - since);
     }
   }
+  function rememberDiskContent(raw) {
+    if (typeof raw !== "string") {
+      S._diskBaseline = null;
+      S._diskEol = "\n";
+      return;
+    }
+    const api = window.NativeAPI;
+    S._diskBaseline = api && typeof api.wellFormedText === "function" ? api.wellFormedText(raw) : raw;
+    S._diskEol = detectEol(raw);
+  }
+  var HOLD_STATUS = "autosave-hold";
+  function setAutosaveHold(path, reason) {
+    S._conflictHoldPath = path;
+    S._holdReason = reason || "conflict";
+    if (typeof window.showStatusWarning !== "function") return;
+    const msg = S._holdReason === "missing" ? window.t('"{name}" was deleted or moved by another program. Auto-save is paused so it is not recreated. Press Ctrl+S to save it again, or use Save As.') : S._holdReason === "unreadable" ? window.t('"{name}" was changed by another program to a format Revery cannot read. Auto-save is paused. Ctrl+S overwrites it with your version.') : window.t('Auto-save is paused for "{name}" (you kept your version). Press Ctrl+S to save it.');
+    window.showStatusWarning(HOLD_STATUS, msg.replace("{name}", baseNameOf(path)), { priority: 70 });
+  }
+  function clearAutosaveHold() {
+    S._conflictHoldPath = null;
+    S._holdReason = null;
+    if (typeof window.clearStatusWarning === "function") window.clearStatusWarning(HOLD_STATUS);
+  }
   function markDirty() {
     if (S.isDirty) return;
     S.isDirty = true;
@@ -1345,7 +1551,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     document.title = "Revery Notebook";
     if (docTitleEl) docTitleEl.classList.remove("doc-title-dirty");
     window._sidebarUnsaved = false;
-    S._conflictHoldPath = null;
+    clearAutosaveHold();
   }
   var _renamePromise = null;
   async function renameActiveFileFromTitle() {
@@ -1372,7 +1578,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       S._operationLock = true;
       try {
         const oldPath = S.activeFilePath;
-        const finalNewPath = await uniquePath(oldDir, safeName, ext);
+        const finalNewPath = await uniquePath(oldDir, safeName, ext, oldFullName);
         await window.NativeAPI.writeVolatileNow(finalNewPath, editor.value).catch(
           (e) => console.warn("[Sidebar] Pre-rename volatile migration failed (non-fatal):", e)
         );
@@ -1384,11 +1590,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         }
         await window.NativeAPI.renameNode(oldPath, finalNewPath);
         pushUndo({ type: "rename", records: [{ oldPath, newPath: finalNewPath }] });
-        S.activeFilePath = finalNewPath;
-        await window.NativeAPI.setLastOpenedFile(finalNewPath);
+        await retargetActiveFile(oldPath, finalNewPath);
         const finalBaseName = finalNewPath.replace(/\\/g, "/").split("/").pop().replace(new RegExp(`\\.${ext}$`), "");
         docTitleEl.value = finalBaseName;
-        startWatchingFile(finalNewPath);
         if (typeof window.NativeAPI.setPendingRename === "function") {
           window.NativeAPI.setPendingRename(null).catch(
             (e) => console.warn("[Sidebar] Rename journal clear failed (non-fatal):", e)
@@ -1415,7 +1619,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return _renamePromise;
   }
   var _saveChain = Promise.resolve();
-  async function saveActiveFile() {
+  async function saveActiveFile(opts) {
+    const auto = !!(opts && opts.auto);
     if (!S.activeFilePath) return false;
     clearTimeout(_autoSaveTimer);
     const contentToSave = editor.value;
@@ -1439,8 +1644,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         writeResult = await _enqueueDiskOp(async () => {
           if (S._externalChangeInProgress) return "deferred-external";
           if (enqueueGen !== S._replaceGeneration) return "deferred-replaced";
-          await window.NativeAPI.writeFile(pathToSave, contentToSave);
-          S._suppressWatchUntil = Date.now() + SUPPRESS_MS;
+          if (auto && S._conflictHoldPath && S._conflictHoldPath === pathToSave) return "deferred-hold";
+          const isActive = S.activeFilePath === pathToSave;
+          const diskText = toDiskText(contentToSave, isActive ? S._diskEol : "\n");
+          await window.NativeAPI.writeFile(pathToSave, diskText);
+          if (isActive) rememberDiskContent(diskText);
           return "ok";
         });
       } catch (err) {
@@ -1460,7 +1668,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         return false;
       }
       _autoSaveCooldownUntil = 0;
-      if (S._conflictHoldPath === pathToSave) S._conflictHoldPath = null;
+      if (S._conflictHoldPath === pathToSave) clearAutosaveHold();
       if (editor.value === contentToSave) {
         markClean();
         if (typeof showSavedIndicator === "function") showSavedIndicator();
@@ -1489,6 +1697,32 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
     return savePromise;
   }
+  function waitForSaveChainIdle() {
+    return _saveChain.then(() => {
+    }, () => {
+    });
+  }
+  async function retargetActiveFile(oldPath, newPath) {
+    if (!oldPath || !newPath) return;
+    S.activeFilePath = newPath;
+    if (S._conflictHoldPath === oldPath) setAutosaveHold(newPath, S._holdReason);
+    if (docTitleEl) docTitleEl.value = baseNameOf(newPath).replace(/\.(md|txt)$/, "");
+    startWatchingFile(newPath);
+    if (S.isDirty) {
+      try {
+        await window.NativeAPI.writeVolatileNow(newPath, editor.value);
+        if (_durableExposed()) writeDurableSnapshot(newPath, editor.value);
+        await window.NativeAPI.deleteVolatileContent(oldPath);
+      } catch (e) {
+        console.warn("[Sidebar] could not move the crash backup to the new path (old one kept):", e);
+      }
+    }
+    try {
+      await window.NativeAPI.setLastOpenedFile(newPath);
+    } catch (e) {
+      console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e);
+    }
+  }
   function scheduleAutoSave() {
     if (!S.activeFilePath) return;
     clearTimeout(_autoSaveTimer);
@@ -1501,10 +1735,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (_firstDirtyTime === 0) _firstDirtyTime = Date.now();
     if (Date.now() - _firstDirtyTime >= autosaveMaxWaitMs()) {
       _firstDirtyTime = Date.now();
-      saveActiveFile();
+      saveActiveFile({ auto: true });
       return;
     }
-    _autoSaveTimer = setTimeout(saveActiveFile, autosaveDelayMs());
+    _autoSaveTimer = setTimeout(() => saveActiveFile({ auto: true }), autosaveDelayMs());
   }
   function initSaveEngine() {
     if (docTitleEl) {
@@ -1521,9 +1755,15 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     window.sidebarGetActiveFilePath = () => S.activeFilePath;
     window.sidebarGetRootPath = () => S.rootPath;
     window.sidebarIsDirty = () => S.isDirty;
-    window.sidebarPivotToNewFile = async function(newPath, newRoot) {
+    window.sidebarPivotToNewFile = async function(newPath, newRoot, savedContent) {
       S.activeFilePath = newPath;
-      markClean();
+      if (typeof savedContent === "string" && editor.value !== savedContent) {
+        markDirty();
+        scheduleAutoSave();
+      } else {
+        markClean();
+      }
+      rememberDiskContent(typeof savedContent === "string" ? savedContent : null);
       await window.NativeAPI.setLastOpenedFile(newPath);
       if (newRoot && newRoot !== S.rootPath) {
         S.rootPath = newRoot;
@@ -1556,62 +1796,20 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       highlightActiveFile(newPath);
     };
     editor.addEventListener("input", () => {
-      if (!S.activeFilePath && !_autoCreatingFile && !window._showingUnsupportedFile) {
+      if (!S.activeFilePath && !window._showingUnsupportedFile) {
         const targetDir = pendingNoteDir();
         if (targetDir) {
-          const placeholderKey = ensureScratchpadVolatileKey();
+          const session = scratchpadSession();
+          session.latest = editor.value;
           try {
-            window.NativeAPI.setVolatileContent(placeholderKey, editor.value);
+            window.NativeAPI.setVolatileContent(session.key, editor.value);
           } catch (e) {
             console.warn("[Sidebar] scratchpad placeholder volatile failed (non-fatal):", e);
           }
-          _autoCreatingFile = true;
-          const baseName = S.previewMediaPath ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, "") : "untitled";
-          (async () => {
-            const newPath = await uniquePath(targetDir, baseName, "md");
-            try {
-              await window.NativeAPI.createFile(newPath);
-              await window.NativeAPI.writeFile(newPath, editor.value);
-              S._suppressWatchUntil = Date.now() + SUPPRESS_MS;
-            } catch (err) {
-              console.error("[Sidebar] scratchpad auto-create failed:", err);
-              _autoCreatingFile = false;
-              if (!_scratchpadFailureWarned) {
-                _scratchpadFailureWarned = true;
-                window.NativeAPI.showMessageBox({
-                  type: "warning",
-                  title: window.t("Could Not Create File"),
-                  message: window.t("A file could not be created to save your work."),
-                  detail: String(err) + "\n\nYour typed content is still visible but has not been saved to disk. The app will retry automatically on your next keystroke.",
-                  buttons: ["OK"],
-                  defaultId: 0
-                }).catch(() => {
-                });
-              }
-              return;
-            }
-            S.activeFilePath = newPath;
-            S.previewMediaPath = null;
-            _autoCreatingFile = false;
-            _scratchpadFailureWarned = false;
-            await window.NativeAPI.setLastOpenedFile(newPath);
-            if (docTitleEl) {
-              docTitleEl.value = newPath.replace(/\\/g, "/").split("/").pop().replace(/\.(md|txt)$/, "");
-            }
-            startWatchingFile(newPath);
-            expandedDirs.add(targetDir);
-            await renderTree();
-            highlightActiveFile(newPath);
-            markDirty();
-            scheduleAutoSave();
-            window.NativeAPI.setVolatileContent(S.activeFilePath, editor.value);
-            if (S._scratchpadVolatileKey) {
-              const oldKey = S._scratchpadVolatileKey;
-              S._scratchpadVolatileKey = null;
-              window.NativeAPI.deleteVolatileContent(oldKey).catch(() => {
-              });
-            }
-          })();
+          if (!session.creating && Date.now() >= session.retryAfter) {
+            const baseName = S.previewMediaPath ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, "") : "untitled";
+            createNoteFromScratchpad(session, targetDir, baseName);
+          }
           return;
         }
       }
@@ -1634,7 +1832,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "z") {
         const editorHasFocus = window.cmView ? window.cmView.hasFocus : false;
         if (editorHasFocus) return;
-        if (undoStack.length === 0) return;
+        if (!hasUndoOperations()) return;
         e.preventDefault();
         await undoLastOperation();
       }
@@ -1820,8 +2018,30 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
 
   // src/sidebar/fileops.js
   var MAX_UNDO = 30;
-  var undoStack2 = [];
+  var undoStack = [];
   var _dirOf = (p) => p.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+  var _n = (p) => String(p).replace(/\\/g, "/");
+  function applyTextToEditor(oldText, newText) {
+    const a = oldText.split("\n");
+    const b = newText.split("\n");
+    const changes = [];
+    if (a.length === b.length) {
+      let pos = 0;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) changes.push({ from: pos, to: pos + a[i].length, insert: b[i] });
+        pos += a[i].length + 1;
+      }
+    } else {
+      let s = 0;
+      while (s < oldText.length && s < newText.length && oldText[s] === newText[s]) s++;
+      let e = 0;
+      while (e < oldText.length - s && e < newText.length - s && oldText[oldText.length - 1 - e] === newText[newText.length - 1 - e]) e++;
+      changes.push({ from: s, to: oldText.length - e, insert: newText.slice(s, newText.length - e) });
+    }
+    if (!changes.length) return;
+    if (typeof window.applyEditorChanges === "function") window.applyEditorChanges(changes);
+    else window.insertWithUndo(0, oldText.length, newText);
+  }
   async function updateLinksAfterPathChange(records, { confirm = true } = {}) {
     try {
       if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return;
@@ -1832,16 +2052,15 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (!files.length) return;
       const mapAbs = buildAbsMapper(records);
       const mapBack = buildAbsMapper(invertRecords(records));
-      const editorEl = document.getElementById("editor");
-      const activeNorm = S.activeFilePath ? S.activeFilePath.replace(/\\/g, "/") : null;
+      const isActivePath = (p) => !!S.activeFilePath && _n(S.activeFilePath) === _n(p);
       const plans = [];
       for (const f of files) {
-        const postPath = f.path.replace(/\\/g, "/");
+        const postPath = _n(f.path);
         const prePath = mapBack(postPath) || postPath;
-        const isActive = activeNorm === postPath;
+        const opts = { fileDirBefore: _dirOf(prePath), fileDirAfter: _dirOf(postPath), mapAbs };
         let content;
-        if (isActive && editorEl) {
-          content = editorEl.value;
+        if (isActivePath(f.path)) {
+          content = editor.value;
         } else {
           try {
             content = await window.NativeAPI.readFile(f.path);
@@ -1850,13 +2069,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           }
         }
         if (typeof content !== "string") continue;
-        const res = rewriteLinksInText(content, {
-          fileDirBefore: _dirOf(prePath),
-          fileDirAfter: _dirOf(postPath),
-          mapAbs
-        });
+        const res = rewriteLinksInText(content, opts);
         if (res.changes > 0 && res.text !== content) {
-          plans.push({ path: f.path, isActive, text: res.text, changes: res.changes });
+          plans.push({ path: f.path, opts, changes: res.changes });
         }
       }
       if (!plans.length) return;
@@ -1875,12 +2090,19 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       const errors = [];
       for (const p of plans) {
         try {
-          if (p.isActive && editorEl) {
-            window.insertWithUndo(0, editorEl.value.length, p.text);
-            if (typeof render === "function") render();
+          if (isActivePath(p.path)) {
+            const cur = editor.value;
+            const res = rewriteLinksInText(cur, p.opts);
+            if (res.changes > 0 && res.text !== cur) {
+              applyTextToEditor(cur, res.text);
+              if (typeof render === "function") render();
+            }
           } else {
-            S._suppressWatchUntil = Date.now() + 3e3;
-            await window.NativeAPI.writeFile(p.path, p.text);
+            const cur = await window.NativeAPI.readFile(p.path);
+            const res = rewriteLinksInText(cur, p.opts);
+            if (res.changes > 0 && res.text !== cur) {
+              await window.NativeAPI.writeFile(p.path, res.text);
+            }
           }
         } catch (err) {
           errors.push(`${p.path.replace(/\\/g, "/").split("/").pop()}: ${err.message || err}`);
@@ -1899,36 +2121,48 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
   }
   function pushUndo(op) {
-    undoStack2.push(op);
-    if (undoStack2.length > MAX_UNDO) undoStack2.shift();
+    undoStack.push(op);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
+  }
+  function hasUndoOperations() {
+    return undoStack.length > 0;
+  }
+  function activeAffectedBy(paths) {
+    if (!S.activeFilePath) return false;
+    const a = _n(S.activeFilePath);
+    return paths.some((p) => {
+      const n = _n(p);
+      return a === n || a.startsWith(n + "/");
+    });
+  }
+  async function settleActiveFileBefore(paths) {
+    if (!activeAffectedBy(paths)) return true;
+    const held = !!S._conflictHoldPath && S._conflictHoldPath === S.activeFilePath;
+    if (S.isDirty && !held) return await saveActiveFile();
+    await waitForSaveChainIdle();
+    return true;
+  }
+  async function followActiveFile(from, to) {
+    if (!S.activeFilePath) return;
+    const a = _n(S.activeFilePath);
+    const f = _n(from);
+    if (a === f) await retargetActiveFile(S.activeFilePath, to);
+    else if (a.startsWith(f + "/")) await retargetActiveFile(S.activeFilePath, _n(to) + a.substring(f.length));
   }
   async function undoLastOperation() {
-    if (S._operationLock || undoStack2.length === 0) return;
+    if (S._operationLock || undoStack.length === 0) return;
     S._operationLock = true;
     try {
-      const op = undoStack2.pop();
+      const op = undoStack.pop();
       const errors = [];
+      if (!await settleActiveFileBefore(op.records.map((r) => r.newPath))) {
+        undoStack.push(op);
+        return;
+      }
       for (const { oldPath, newPath } of [...op.records].reverse()) {
         try {
           await window.NativeAPI.renameNode(newPath, oldPath);
-          if (S.activeFilePath) {
-            const normalNew = newPath.replace(/\\/g, "/");
-            const normalOld = oldPath.replace(/\\/g, "/");
-            const normalActive = S.activeFilePath.replace(/\\/g, "/");
-            if (normalActive === normalNew) {
-              S.activeFilePath = oldPath;
-              await window.NativeAPI.setLastOpenedFile(oldPath);
-              startWatchingFile(oldPath);
-              if (docTitleEl) {
-                docTitleEl.value = oldPath.replace(/\\/g, "/").split("/").pop().replace(/\.(md|txt)$/, "");
-              }
-            } else if (normalActive.startsWith(normalNew + "/")) {
-              const rel = normalActive.substring(normalNew.length);
-              S.activeFilePath = normalOld + rel;
-              await window.NativeAPI.setLastOpenedFile(S.activeFilePath);
-              startWatchingFile(S.activeFilePath);
-            }
-          }
+          await followActiveFile(newPath, oldPath);
           if (S.selectedDirPath && S.selectedDirPath.replace(/\\/g, "/") === newPath.replace(/\\/g, "/")) {
             S.selectedDirPath = oldPath;
           }
@@ -1956,9 +2190,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (S._operationLock || !items.length || !targetDir) return;
     S._operationLock = true;
     try {
-      if (S.isDirty && S.activeFilePath) {
-        const saved = await saveActiveFile();
-        if (!saved) return;
+      if (!await settleActiveFileBefore(items.map((it) => it.path))) {
+        return;
       }
       const normalTarget = targetDir.replace(/\\/g, "/");
       const normalRoot = (S.rootPath || "").replace(/\\/g, "/");
@@ -1979,23 +2212,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           errors.push(`${name}: ${err.message}`);
           continue;
         }
-        if (S.activeFilePath) {
-          const normalActive = S.activeFilePath.replace(/\\/g, "/");
-          if (normalActive === normalSrc) {
-            S.activeFilePath = destPath;
-            await window.NativeAPI.setLastOpenedFile(destPath);
-            startWatchingFile(destPath);
-            if (docTitleEl) {
-              const base = destPath.replace(/\\/g, "/").split("/").pop();
-              docTitleEl.value = base.replace(/\.(md|txt)$/, "");
-            }
-          } else if (normalActive.startsWith(normalSrc + "/")) {
-            const rel = normalActive.substring(normalSrc.length);
-            S.activeFilePath = destPath.replace(/\\/g, "/") + rel;
-            await window.NativeAPI.setLastOpenedFile(S.activeFilePath);
-            startWatchingFile(S.activeFilePath);
-          }
-        }
+        await followActiveFile(srcPath, destPath);
         if (S.selectedDirPath) {
           const normalSel = S.selectedDirPath.replace(/\\/g, "/");
           if (normalSel === normalSrc || normalSel.startsWith(normalSrc + "/")) {
@@ -2050,6 +2267,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (!baseName) return;
       const safeBase = baseName.trim().replace(/[/\\?%*:|"<>]/g, "_");
       if (!safeBase) return;
+      if (!await settleActiveFileBefore(paths)) return;
       const renamedRecords = [];
       for (let i = 0; i < paths.length; i++) {
         const srcPath = paths[i];
@@ -2067,23 +2285,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         try {
           await window.NativeAPI.renameNode(srcPath, newPath);
           renamedRecords.push({ oldPath: srcPath, newPath });
-          if (S.activeFilePath) {
-            const normalActive = S.activeFilePath.replace(/\\/g, "/");
-            const normalSrc = srcPath.replace(/\\/g, "/");
-            const normalNew = newPath.replace(/\\/g, "/");
-            if (normalActive === normalSrc) {
-              S.activeFilePath = newPath;
-              markClean();
-              await window.NativeAPI.setLastOpenedFile(newPath);
-              if (docTitleEl) docTitleEl.value = newName.replace(/\.(md|txt)$/, "");
-              startWatchingFile(newPath);
-            } else if (normalActive.startsWith(normalSrc + "/")) {
-              const rel = normalActive.substring(normalSrc.length);
-              S.activeFilePath = normalNew + rel;
-              await window.NativeAPI.setLastOpenedFile(S.activeFilePath);
-              startWatchingFile(S.activeFilePath);
-            }
-          }
+          await followActiveFile(srcPath, newPath);
           if (S.selectedDirPath) {
             const normalSel = S.selectedDirPath.replace(/\\/g, "/");
             const normalSrc = srcPath.replace(/\\/g, "/");
@@ -2236,6 +2438,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
     S.activeFilePath = filePath;
     markClean();
+    rememberDiskContent(content);
     await window.NativeAPI.setLastOpenedFile(filePath);
     if (docTitleEl) {
       const base = filePath.replace(/\\/g, "/").split("/").pop();
@@ -2325,28 +2528,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       const finalName = type === "file" && !safeName.includes(".") ? safeName + oldName.substring(oldName.lastIndexOf(".")) : safeName;
       parts[parts.length - 1] = finalName;
       const newPath = parts.join("/");
+      if (!await settleActiveFileBefore([nodePath])) return;
       try {
         await window.NativeAPI.renameNode(nodePath, newPath);
         pushUndo({ type: "rename", records: [{ oldPath: nodePath, newPath }] });
-        if (S.activeFilePath) {
-          const normalActive = S.activeFilePath.replace(/\\/g, "/");
-          const normalOld = nodePath.replace(/\\/g, "/");
-          const normalNew = newPath.replace(/\\/g, "/");
-          if (normalActive === normalOld) {
-            S.activeFilePath = newPath;
-            markClean();
-            await window.NativeAPI.setLastOpenedFile(newPath);
-            if (docTitleEl) {
-              docTitleEl.value = finalName.replace(/\.(md|txt)$/, "");
-            }
-            startWatchingFile(newPath);
-          } else if (normalActive.startsWith(normalOld + "/")) {
-            const rel = normalActive.substring(normalOld.length);
-            S.activeFilePath = normalNew + rel;
-            await window.NativeAPI.setLastOpenedFile(S.activeFilePath);
-            startWatchingFile(S.activeFilePath);
-          }
-        }
+        await followActiveFile(nodePath, newPath);
         if (S.selectedDirPath) {
           const normalSel = S.selectedDirPath.replace(/\\/g, "/");
           const normalOld = nodePath.replace(/\\/g, "/");
@@ -2362,6 +2548,13 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         await updateLinksAfterPathChange([{ oldPath: nodePath, newPath }]);
       } catch (err) {
         console.error("[Sidebar] renameNode failed:", err);
+        await window.NativeAPI.showMessageBox({
+          type: "error",
+          title: window.t("Rename Failed"),
+          message: window.t('Could not rename file to "{name}".').replace("{name}", finalName),
+          detail: String(err)
+        }).catch(() => {
+        });
       }
     } finally {
       S._operationLock = false;
@@ -3711,6 +3904,36 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     window.sidebarHandleClose = sidebarHandleClose;
     window.NativeAPI.onWindowClose(sidebarHandleClose);
   }
+  async function reconcilePendingRename(journal, lastFile) {
+    if (!journal) return lastFile;
+    let result = lastFile;
+    let keepJournal = false;
+    try {
+      if (typeof journal.from === "string" && typeof journal.to === "string" && lastFile === journal.from) {
+        const fromExists = await fileExistsViaListing(journal.from);
+        const toExists = fromExists === false ? await fileExistsViaListing(journal.to) : null;
+        if (fromExists === null || fromExists === false && toExists === null) {
+          keepJournal = true;
+        } else if (fromExists === false && toExists === true) {
+          console.info("[Sidebar Boot] Reconciling pending rename: %s \u2192 %s", journal.from, journal.to);
+          result = journal.to;
+          try {
+            await window.NativeAPI.setLastOpenedFile(journal.to);
+          } catch (e) {
+            console.warn("[Sidebar Boot] Could not persist reconciled lastOpenedFile:", e);
+            keepJournal = true;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[Sidebar Boot] Pending-rename reconciliation failed (non-fatal):", e);
+      keepJournal = true;
+    }
+    if (!keepJournal && typeof window.NativeAPI.setPendingRename === "function") {
+      window.NativeAPI.setPendingRename(null).catch((e) => console.warn("[Sidebar Boot] Could not clear rename journal:", e));
+    }
+    return result;
+  }
   async function recoverScratchpadBackups() {
     if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
     if (typeof window.NativeAPI.listVolatileBackups !== "function") {
@@ -3794,7 +4017,6 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         await window.NativeAPI.writeFile(newPath, backup.content);
         await window.NativeAPI.deleteVolatileContent(info.originalPath).catch(() => {
         });
-        S._suppressWatchUntil = Date.now() + SUPPRESS_MS;
         expandedDirs.add(dir);
         await renderTree();
         await openFile(newPath);
@@ -3846,44 +4068,11 @@ More information, click the \xBD logo in the center top of the screen.
       }
       try {
         let lastFile = await window.NativeAPI.getLastOpenedFile();
+        let journal = null;
         try {
-          const journal = typeof window.NativeAPI.getPendingRename === "function" ? await window.NativeAPI.getPendingRename() : null;
-          if (journal && typeof journal.from === "string" && typeof journal.to === "string" && lastFile === journal.from) {
-            let fromExists = false;
-            try {
-              await window.NativeAPI.readFile(journal.from);
-              fromExists = true;
-            } catch {
-            }
-            if (!fromExists) {
-              let toExists = false;
-              try {
-                await window.NativeAPI.readFile(journal.to);
-                toExists = true;
-              } catch {
-              }
-              if (toExists) {
-                console.info(
-                  "[Sidebar Boot] Reconciling pending rename: %s \u2192 %s",
-                  journal.from,
-                  journal.to
-                );
-                lastFile = journal.to;
-                try {
-                  await window.NativeAPI.setLastOpenedFile(journal.to);
-                } catch (e) {
-                  console.warn("[Sidebar Boot] Could not persist reconciled lastOpenedFile:", e);
-                }
-              }
-            }
-          }
-          if (journal && typeof window.NativeAPI.setPendingRename === "function") {
-            window.NativeAPI.setPendingRename(null).catch(
-              (e) => console.warn("[Sidebar Boot] Could not clear rename journal:", e)
-            );
-          }
+          journal = typeof window.NativeAPI.getPendingRename === "function" ? await window.NativeAPI.getPendingRename() : null;
         } catch (e) {
-          console.warn("[Sidebar Boot] Pending-rename reconciliation failed (non-fatal):", e);
+          console.warn("[Sidebar Boot] Could not read rename journal (non-fatal):", e);
         }
         let savedRoot = null;
         if (typeof window.NativeAPI.getLastRootPath === "function") {
@@ -3933,6 +4122,7 @@ More information, click the \xBD logo in the center top of the screen.
           if (folder) {
             S.rootPath = folder;
             await window.NativeAPI.setRootPath(folder);
+            lastFile = await reconcilePendingRename(journal, lastFile);
             S.selectedDirPath = folder;
             const parts = folder.replace(/\\/g, "/").split("/");
             folderNameEl.textContent = parts[parts.length - 1] || folder;
@@ -3972,6 +4162,7 @@ More information, click the \xBD logo in the center top of the screen.
                 hasLoadedText = true;
                 S.activeFilePath = lastFile;
                 markClean();
+                rememberDiskContent(diskContent);
                 highlightActiveFile(lastFile);
                 startWatchingFile(lastFile);
                 if (docTitleEl) {
@@ -3980,7 +4171,8 @@ More information, click the \xBD logo in the center top of the screen.
                 }
                 try {
                   const backup = await window.NativeAPI.getVolatileContent(lastFile);
-                  if (backup && backup.content !== diskContent) {
+                  const diskAsEditor = normalizeEol(diskContent);
+                  if (backup && backup.content !== diskAsEditor) {
                     const ts = new Date(backup.ts).toLocaleString();
                     const backupLen = backup.content.length;
                     const diskLen = diskContent.length;

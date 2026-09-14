@@ -38,9 +38,11 @@ const os    = require('os');
    This file owns only the wiring: windows, IPC, dialogs, policy state. */
 const {
   atomicWriteFile,
+  readUtf8TextStrict,
   syncParentDir,
   validatePath,
   validatePathInside,
+  isCaseOnlyAliasOfSameFile,
   sanitizeDropFilename,
   ensureVolatileDir,
   setVolatileContent,
@@ -175,7 +177,64 @@ function stopWatcher(filePath) {
 let mainWindow   = null;
 let allowClose   = false;  // Flipped by frontend calling 'window:confirm-close'
 
+/* ── Close watchdog ─────────────────────────────────────────────────────
+   Every close is handed to the page, which saves and then confirms. A page
+   that is hung, or whose renderer process died, can never answer — and the
+   frameless window offers no other way out. The page acknowledges a close
+   request at once (preload.js). If no acknowledgement arrives, if the page
+   reports that its close flow failed, or if the renderer dies, the user is
+   asked HERE, in the main process, which does not depend on the page.
+   Every question's default answer discards nothing. */
+const CLOSE_ACK_TIMEOUT_MS = 5000;
+let closeAckTimer   = null;
+let closeDialogOpen = false;
+
+function forceCloseWindow(win) {
+  allowClose = true;
+  if (win && !win.isDestroyed()) win.destroy();
+}
+
+function askInMain(win, opts, onAnswer) {
+  if (!win || win.isDestroyed() || closeDialogOpen) return;
+  closeDialogOpen = true;
+  dialog.showMessageBox(win, opts)
+    .then(({ response }) => { closeDialogOpen = false; onAnswer(response); })
+    .catch((err) => { closeDialogOpen = false; console.error('[revery] close dialog failed:', err); });
+}
+
+function offerForceClose(win) {
+  askInMain(win, {
+    type: 'warning',
+    title: 'Revery Notebook is not responding',
+    message: 'The editor did not answer the close request.',
+    detail: 'Your text was last saved by autosave and a crash backup is kept, but typing from the last few seconds may be lost if you force close.',
+    buttons: ['Keep waiting', 'Force close'],
+    defaultId: 0,
+    cancelId: 0,
+  }, (response) => { if (response === 1) forceCloseWindow(win); });
+}
+
+function offerRendererGone(win, reason) {
+  askInMain(win, {
+    type: 'error',
+    title: 'Revery Notebook stopped',
+    message: 'The editor stopped unexpectedly.',
+    detail: `Reason: ${reason}.\n\nYour text was last saved by autosave. A crash backup of recent typing is kept and will be offered when the editor reloads.`,
+    buttons: ['Reload editor', 'Close'],
+    defaultId: 0,
+    cancelId: 0,
+  }, (response) => {
+    if (response === 1) forceCloseWindow(win);
+    else if (win && !win.isDestroyed()) win.webContents.reload();
+  });
+}
+
 function createWindow() {
+  /* Every window starts with the close guard armed. On macOS the app
+     outlives its window: 'activate' (Dock click) builds a new one after a
+     confirmed close had already set allowClose = true, and that stale
+     value would let the new window close without the save flow. */
+  allowClose = false;
   mainWindow = new BrowserWindow({
     width:  1280,
     height: 800,
@@ -236,16 +295,59 @@ mainWindow.webContents.setWindowOpenHandler(({ url }) => {
 });
 
   /* ── Intercept the OS close button ── */
-  mainWindow.on('close', (event) => {
-    if (!allowClose) {
-      event.preventDefault();
-      /* Signal the renderer that a close is requested */
-      mainWindow.webContents.send('window:close-request');
+  const win = mainWindow;
+  win.on('close', (event) => {
+    if (allowClose) return;
+    event.preventDefault();
+    /* Signal the renderer that a close is requested, and start the watchdog
+       (cleared by the page's immediate acknowledgement). */
+    win.webContents.send('window:close-request');
+    if (!closeAckTimer) {
+      closeAckTimer = setTimeout(() => {
+        closeAckTimer = null;
+        offerForceClose(win);
+      }, CLOSE_ACK_TIMEOUT_MS);
     }
   });
 
-  mainWindow.on('closed', () => { mainWindow = null; });
+  /* The page's process died (crash, out of memory, GPU failure): what is on
+     screen is dead and cannot save or close. Offer a reload — the boot
+     recovery then offers the crash backup — or closing. */
+  win.webContents.on('render-process-gone', (_event, details) => {
+    const reason = (details && details.reason) || 'unknown';
+    if (reason === 'clean-exit' || allowClose) return;
+    clearTimeout(closeAckTimer);
+    closeAckTimer = null;
+    offerRendererGone(win, reason);
+  });
+
+  win.on('closed', () => {
+    clearTimeout(closeAckTimer);
+    closeAckTimer = null;
+    if (mainWindow === win) mainWindow = null;
+  });
 }
+
+/* The page received a close request and is handling it. */
+ipcMain.on('window:close-ack', () => {
+  clearTimeout(closeAckTimer);
+  closeAckTimer = null;
+});
+
+/* The page's close flow threw: the window would stay open with no way to
+   close it normally. Ask the user (default: keep the window open). */
+ipcMain.on('window:close-failed', (event, message) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  askInMain(win, {
+    type: 'warning',
+    title: 'Revery Notebook could not close normally',
+    message: 'An error stopped the normal close.',
+    detail: `${String(message || 'Unknown error').slice(0, 500)}\n\nClose anyway? Changes since the last autosave may be lost.`,
+    buttons: ['Keep open', 'Close anyway'],
+    defaultId: 0,
+    cancelId: 0,
+  }, (response) => { if (response === 1) forceCloseWindow(win); });
+});
 
 app.whenReady().then(() => {
   /* A second instance is already quitting — never create its window. */
@@ -309,8 +411,15 @@ function purgeOldVolatileFiles() {
   // never enumerate or delete inside a dir we don't own (a planted symlink
   // would otherwise let this purge walk into an attacker-chosen directory).
   // Mirrors the guard in Rust's purge_old_volatile_files().
+  // The last opened file's backup is exempt: the renderer's boot recovery
+  // offers exactly that one, and this purge runs on a timer, not after it.
+  let keep = [];
+  try {
+    const last = readSettings().lastOpenedFile;
+    if (typeof last === 'string' && last) keep = [last];
+  } catch (_) { /* unreadable settings — purge by age only */ }
   for (const dir of backupDirs()) {
-    purgeVolatileDir(dir, VOLATILE_MAX_AGE_MS);
+    purgeVolatileDir(dir, VOLATILE_MAX_AGE_MS, Date.now(), keep);
   }
 }
 
@@ -432,7 +541,9 @@ ipcMain.handle('fs:read-file', (_event, filePath) => {
   if (stat.size > 20 * 1024 * 1024) {
     throw new Error(`File too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max is 20 MB.`);
   }
-  return fs.readFileSync(safe, 'utf8');
+  /* Strict: a file that is not valid UTF-8 is refused, never decoded
+     lossily — see fs_core.readUtf8TextStrict. */
+  return readUtf8TextStrict(safe);
 });
 
 
@@ -529,8 +640,8 @@ ipcMain.handle('fs:create-directory', (_event, dirPath) => {
 ipcMain.handle('fs:rename-node', async (_event, oldPath, newPath) => {
   const root = requireRoot();
   const safeOld = validatePathInside(oldPath, root);
-  const safeNew = validatePathInside(newPath, root);
-  
+  let   safeNew = validatePathInside(newPath, root);
+
   // SECURITY FIX: Prevent renaming or moving the project root
   if (safeOld === path.resolve(root)) {
     throw new Error('Security Error: Cannot move or rename the project root folder.');
@@ -538,7 +649,17 @@ ipcMain.handle('fs:rename-node', async (_event, oldPath, newPath) => {
 
   // Fast synchronous checks for existence before heavy lifting
   if (!fs.existsSync(safeOld)) throw new Error(`Source not found: ${safeOld}`);
-  if (fs.existsSync(safeNew))  throw new Error(`Destination already exists: ${safeNew}`);
+  if (fs.existsSync(safeNew)) {
+    /* The target "exists" when it is the SAME file under a spelling that
+       differs only in case (case-insensitive filesystem): rename it to the
+       REQUESTED spelling. Any other existing target is a different file
+       and is never overwritten. See fs_core.isCaseOnlyAliasOfSameFile. */
+    if (!isCaseOnlyAliasOfSameFile(safeOld, safeNew)) {
+      throw new Error(`Destination already exists: ${safeNew}`);
+    }
+    safeNew = path.join(path.dirname(safeOld), path.basename(path.resolve(newPath)));
+    if (safeNew === safeOld) return; // nothing to change
+  }
 
   try {
     await fs.promises.rename(safeOld, safeNew);

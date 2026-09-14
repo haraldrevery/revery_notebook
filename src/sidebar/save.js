@@ -3,13 +3,14 @@
    This is the single source of truth for all disk writes of the active
    file. Treat every ordering comment in here as load-bearing. */
 import { S, docTitleEl, folderNameEl, treeEl, expandedDirs, _previewCache,
-         SUPPRESS_MS, SCRATCHPAD_PREFIX, ensureScratchpadVolatileKey,
+         SCRATCHPAD_PREFIX, ensureScratchpadVolatileKey,
          pendingNoteDir } from './state.js';
 import { uniquePath, stripMarkdownForPreview } from './helpers.js';
 import { baseNameOf } from './paths.js';
+import { detectEol, toDiskText } from './eol.js';
 import { renderTree, highlightActiveFile } from './tree.js';
 import { startWatchingFile } from './watcher.js';
-import { pushUndo, undoLastOperation } from './fileops.js';
+import { pushUndo, hasUndoOperations, undoLastOperation } from './fileops.js';
 import { recordProjectOpen } from './projects.js';
 
 /* ── Save-engine local state ─────────────────────────────────────── */
@@ -39,7 +40,158 @@ export function _enqueueDiskOp(op) {
 let _firstDirtyTime          = 0;
 let _autoSaveCooldownUntil   = 0;
 let _scratchpadFailureWarned = false;
-let _autoCreatingFile        = false;  // Guard to prevent duplicate file creation during rapid typing
+
+/* ── Scratchpad → file sessions ──────────────────────────────────────
+   Typing with no note open creates one (see the input listener). One
+   SESSION per scratchpad document — identified by the editor's document
+   generation, which changes whenever a different document is loaded
+   (cm_setup.js "Document identity"). A session owns its crash-backup key
+   and the latest text typed into it. Creating the file takes several
+   awaits; if the user loads another document meanwhile (opens a file,
+   previews an image), the session DETACHES: its own text goes into the
+   new file and the editor is left alone. It never binds the new file to a
+   document that is no longer on screen, and never writes another
+   document's text into it. */
+let _scratch = null; // { gen, key, latest, creating, retryAfter }
+const SCRATCHPAD_RETRY_MS = 5000; // after a failed create, wait before retrying
+
+function currentDocGeneration() {
+  return (typeof window.getEditorDocGeneration === 'function') ? window.getEditorDocGeneration() : 0;
+}
+
+function scratchpadSession() {
+  const gen = currentDocGeneration();
+  if (_scratch && _scratch.gen === gen) return _scratch;
+  /* A new scratchpad document. Reuse the live placeholder key only when no
+     earlier session owns it (boot recovery adopts an old backup's key as
+     the live one); otherwise take a fresh key, so an earlier session's
+     backup — possibly the only copy of its text — is never overwritten. */
+  if (S._scratchpadVolatileKey && _scratch && _scratch.key === S._scratchpadVolatileKey) {
+    S._scratchpadVolatileKey = null;
+  }
+  _scratch = { gen, key: ensureScratchpadVolatileKey(), latest: '', creating: false, retryAfter: 0 };
+  return _scratch;
+}
+
+function scratchpadCreateFailed(session, err, emptyFileToRemove) {
+  console.error('[Sidebar] scratchpad auto-create failed:', err);
+  session.creating   = false;
+  session.retryAfter = Date.now() + SCRATCHPAD_RETRY_MS;
+  /* createFile succeeded but nothing could be written: that file is ours,
+     brand new and empty — move it to the trash so repeated retries (disk
+     full, no permission) cannot litter the folder with empty untitled
+     files. The placeholder backup is kept in every failure case. */
+  if (emptyFileToRemove) window.NativeAPI.deleteNode(emptyFileToRemove).catch(() => {});
+  if (!_scratchpadFailureWarned) {
+    _scratchpadFailureWarned = true;
+    window.NativeAPI.showMessageBox({
+      type: 'warning',
+      title: window.t('Could Not Create File'),
+      message: window.t('A file could not be created to save your work.'),
+      detail: String(err) + '\n\nYour typed content is still visible but has not been saved to disk. The app will retry automatically when you keep typing.',
+      buttons: ['OK'],
+      defaultId: 0,
+    }).catch(() => {}); // ignore if the dialog itself fails
+  }
+}
+
+function createNoteFromScratchpad(session, targetDir, baseName) {
+  session.creating = true;
+  /* Is this session's document still on screen, still without a file? */
+  const attached = () => currentDocGeneration() === session.gen
+    && !S.activeFilePath && !window._showingUnsupportedFile;
+
+  (async () => {
+    let newPath = null;
+    try {
+      newPath = await uniquePath(targetDir, baseName, 'md');
+      await window.NativeAPI.createFile(newPath);
+    } catch (err) {
+      scratchpadCreateFailed(session, err, null);
+      return;
+    }
+
+    let written;
+    let wroteOnce = false;
+    try {
+      written = attached() ? editor.value : session.latest;
+      await window.NativeAPI.writeFile(newPath, written);
+      wroteOnce = true;
+      /* The document was swapped while that write ran: keystrokes typed
+         before the swap can be newer than `written` — write them too. */
+      if (!attached() && session.latest !== written) {
+        written = session.latest;
+        await window.NativeAPI.writeFile(newPath, written);
+      }
+    } catch (err) {
+      scratchpadCreateFailed(session, err, wroteOnce ? null : newPath);
+      return;
+    }
+
+    session.creating = false;
+    _scratchpadFailureWarned = false;
+    const releaseSession = () => {
+      if (_scratch === session) _scratch = null;
+      if (S._scratchpadVolatileKey === session.key) S._scratchpadVolatileKey = null;
+    };
+
+    if (!attached()) {
+      /* DETACHED — the text is safely in newPath and the editor shows
+         another document, so nothing is bound. Only now may the backup go. */
+      releaseSession();
+      window.NativeAPI.deleteVolatileContent(session.key).catch(() => {});
+      expandedDirs.add(targetDir);
+      await renderTree();
+      if (S.activeFilePath) highlightActiveFile(S.activeFilePath);
+      if (typeof window.showStatusWarning === 'function') {
+        window.showStatusWarning('scratchpad-detached',
+          window.t('Your text was saved as "{name}".').replace('{name}', baseNameOf(newPath)),
+          { priority: 30, ttl: 6000 });
+      }
+      return;
+    }
+
+    /* ATTACHED — bind now: no await between the check above and here. */
+    S.activeFilePath   = newPath;
+    S.previewMediaPath = null; // the preview became this note
+    rememberDiskContent(written); // what the new file holds (LF, a new note)
+    releaseSession();
+
+    let placeholderStillNeeded = false;
+    if (editor.value !== written) {
+      /* Keystrokes arrived during creation: the normal autosave takes them.
+         Back them up under the note's own key BEFORE the placeholder goes,
+         so there is never a moment without a backup. */
+      markDirty();
+      scheduleAutoSave();
+      try {
+        await window.NativeAPI.writeVolatileNow(newPath, editor.value);
+      } catch (e) {
+        console.warn('[Sidebar] note backup after scratchpad create failed (placeholder kept):', e);
+        placeholderStillNeeded = true;
+      }
+    }
+    if (!placeholderStillNeeded) {
+      window.NativeAPI.deleteVolatileContent(session.key).catch(() => {});
+    }
+
+    try {
+      await window.NativeAPI.setLastOpenedFile(newPath);
+    } catch (e) {
+      console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e);
+    }
+    if (docTitleEl && S.activeFilePath === newPath) {
+      docTitleEl.value = newPath.replace(/\\/g, '/').split('/').pop().replace(/\.(md|txt)$/, '');
+    }
+    if (S.activeFilePath === newPath) startWatchingFile(newPath);
+    expandedDirs.add(targetDir);
+    await renderTree();
+    if (S.activeFilePath) highlightActiveFile(S.activeFilePath);
+  })().catch((err) => {
+    console.error('[Sidebar] scratchpad create flow failed unexpectedly:', err);
+    session.creating = false;
+  });
+}
 
 /* ── Durable (reboot-safe) backup mirror ─────────────────────────────
    The regular crash backup lives in the OS temp dir — RAM-backed tmpfs
@@ -85,6 +237,59 @@ function mirrorDurableWhileExposed() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+     WHAT IS ON DISK FOR THE ACTIVE FILE
+   S._diskBaseline — the exact text last read from, or written to, the
+   active file (raw: line endings and BOM as on disk). The watcher
+   compares the disk with it to tell our own writes (and touches that
+   changed nothing) from real external changes, exactly — instead of
+   ignoring every event for a while after each save, which let another
+   program's change slip through and be overwritten by the next autosave.
+   S._diskEol — the file's line-ending style, written back on save. Only
+   files that are purely CRLF keep CRLF; mixed files keep the previous
+   normalise-to-LF behaviour. The editor always holds '\n' (CodeMirror
+   normalises every line break).
+  ══════════════════════════════════════════════════════════════════ */
+/** Record `raw` as what the active file now holds on disk. */
+export function rememberDiskContent(raw) {
+  if (typeof raw !== 'string') { S._diskBaseline = null; S._diskEol = '\n'; return; }
+  /* The backend stores lone UTF-16 surrogates as U+FFFD (native_api.js);
+     record the same form, or reading our own write back would not match. */
+  const api = window.NativeAPI;
+  S._diskBaseline = (api && typeof api.wellFormedText === 'function') ? api.wellFormedText(raw) : raw;
+  S._diskEol = detectEol(raw);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+     AUTO-SAVE HOLD
+   While a file is held, BACKGROUND autosave never writes it; an explicit
+   save (Ctrl+S, switching files, closing) still does and lifts the hold.
+   Reasons: 'conflict' — after an external change the user kept their
+   version (the disk keeps the other program's); 'missing' — the file was
+   deleted or moved by another program (autosave would recreate it);
+   'unreadable' — another program rewrote it in an encoding the editor
+   cannot read. A sticky status message says so while it lasts.
+  ══════════════════════════════════════════════════════════════════ */
+const HOLD_STATUS = 'autosave-hold';
+
+export function setAutosaveHold(path, reason) {
+  S._conflictHoldPath = path;
+  S._holdReason = reason || 'conflict';
+  if (typeof window.showStatusWarning !== 'function') return;
+  const msg = S._holdReason === 'missing'
+    ? window.t('"{name}" was deleted or moved by another program. Auto-save is paused so it is not recreated. Press Ctrl+S to save it again, or use Save As.')
+    : S._holdReason === 'unreadable'
+    ? window.t('"{name}" was changed by another program to a format Revery cannot read. Auto-save is paused. Ctrl+S overwrites it with your version.')
+    : window.t('Auto-save is paused for "{name}" (you kept your version). Press Ctrl+S to save it.');
+  window.showStatusWarning(HOLD_STATUS, msg.replace('{name}', baseNameOf(path)), { priority: 70 });
+}
+
+export function clearAutosaveHold() {
+  S._conflictHoldPath = null;
+  S._holdReason = null;
+  if (typeof window.clearStatusWarning === 'function') window.clearStatusWarning(HOLD_STATUS);
+}
+
+/* ══════════════════════════════════════════════════════════════════
      DIRTY INDICATOR
   ══════════════════════════════════════════════════════════════════ */
 
@@ -102,8 +307,8 @@ function mirrorDurableWhileExposed() {
     if (docTitleEl) docTitleEl.classList.remove('doc-title-dirty');
     window._sidebarUnsaved = false;
     // Buffer now matches disk (file opened / reloaded / saved / cleared) —
-    // any conflict hold is moot and must not block future autosaves.
-    S._conflictHoldPath = null;
+    // any hold is moot and must not block future autosaves.
+    clearAutosaveHold();
   }
 
   /* ══════════════════════════════════════════════════════════════════
@@ -150,7 +355,8 @@ const execRename = async () => {
       // volatile backup key regardless of what happens to S.activeFilePath below.
       const oldPath = S.activeFilePath;
 
-      const finalNewPath = await uniquePath(oldDir, safeName, ext);
+      // The file itself does not block its own name (case-only renames).
+      const finalNewPath = await uniquePath(oldDir, safeName, ext, oldFullName);
 
 
       await window.NativeAPI.writeVolatileNow(finalNewPath, editor.value).catch(e =>
@@ -167,11 +373,9 @@ const execRename = async () => {
 
       await window.NativeAPI.renameNode(oldPath, finalNewPath);
       pushUndo({ type: 'rename', records: [{ oldPath, newPath: finalNewPath }] });
-      S.activeFilePath = finalNewPath;
-      await window.NativeAPI.setLastOpenedFile(finalNewPath);
+      await retargetActiveFile(oldPath, finalNewPath);
       const finalBaseName = finalNewPath.replace(/\\/g, '/').split('/').pop().replace(new RegExp(`\\.${ext}$`), '');
       docTitleEl.value = finalBaseName;
-      startWatchingFile(finalNewPath);
 
       // Clear the rename journal — everything succeeded. Failure here is
       // non-fatal: a stale journal is idempotent on next boot (lastFile ===
@@ -211,7 +415,13 @@ const execRename = async () => {
 
 let _saveChain = Promise.resolve();
 
-async function saveActiveFile() {
+/* opts.auto: this is a BACKGROUND autosave (timer / max-wait). Background
+   saves never write a held file (see AUTO-SAVE HOLD) — checked inside the
+   disk lock, so a timer that fired just before a hold was set cannot slip
+   through. Every other caller (Ctrl+S, switching files, close, export) is
+   an explicit save. */
+async function saveActiveFile(opts) {
+  const auto = !!(opts && opts.auto);
   if (!S.activeFilePath) return false;
   clearTimeout(_autoSaveTimer);
 
@@ -249,12 +459,15 @@ try {
   writeResult = await _enqueueDiskOp(async () => {
     if (S._externalChangeInProgress) return 'deferred-external';
     if (enqueueGen !== S._replaceGeneration) return 'deferred-replaced';
+    if (auto && S._conflictHoldPath && S._conflictHoldPath === pathToSave) return 'deferred-hold';
 
-    await window.NativeAPI.writeFile(pathToSave, contentToSave);
-    // Set the suppress window INSIDE the lock so a watcher event that
-    // races our write sees the suppression even if it enters the lock
-    // immediately after us.
-    S._suppressWatchUntil = Date.now() + SUPPRESS_MS;
+    /* Write in the file's own line-ending style (see WHAT IS ON DISK). */
+    const isActive = S.activeFilePath === pathToSave;
+    const diskText = toDiskText(contentToSave, isActive ? S._diskEol : '\n');
+    await window.NativeAPI.writeFile(pathToSave, diskText);
+    /* Record what is on disk now INSIDE the lock, so a watcher check queued
+       behind this write recognises it as ours. */
+    if (isActive) rememberDiskContent(diskText);
     return 'ok';
   });
 } catch (err) {
@@ -277,16 +490,17 @@ try {
 }
 
 if (writeResult !== 'ok') {
-  // 'deferred-external' or 'deferred-replaced'. No dialog — the watcher's
-  // own dialog is the user's resolution path. Treat as a save failure
-  // (return false) so callers see the same signal as a real failure.
+  // 'deferred-external', 'deferred-replaced' or 'deferred-hold'. No dialog —
+  // the watcher's dialog / the hold's status message is the user's
+  // resolution path. Treat as a save failure (return false) so callers see
+  // the same signal as a real failure.
   return false;
 }
 
 // ── Successful write past this point — post-write bookkeeping ────────
 _autoSaveCooldownUntil = 0;
-// An explicit save of this file discharges the "Keep my version" promise.
-if (S._conflictHoldPath === pathToSave) S._conflictHoldPath = null;
+// An explicit save of this file discharges any hold on it.
+if (S._conflictHoldPath === pathToSave) clearAutosaveHold();
 
 if (editor.value === contentToSave) {
   markClean();
@@ -330,6 +544,51 @@ return savePromise;
 
 
 
+/** Resolves once every save queued so far has settled (never rejects).
+    Never await this from inside a save-chain step — it would wait for
+    itself. */
+export function waitForSaveChainIdle() {
+  return _saveChain.then(() => {}, () => {});
+}
+
+/* ══════════════════════════════════════════════════════════════════
+     RETARGET — the active file moved on disk (rename / move / undo)
+   The ONE place that updates every piece of state tied to the active
+   file's path. A path change does not change the content, so the dirty
+   flag is left exactly as it is (the sidebar rename used to call
+   markClean() here, which marked unsaved edits as saved — lost on close
+   whenever autosave was suspended). Call it right after the rename
+   succeeded, before any other await, so watcher events for the old name
+   already see the new active path.
+  ══════════════════════════════════════════════════════════════════ */
+export async function retargetActiveFile(oldPath, newPath) {
+  if (!oldPath || !newPath) return;
+  S.activeFilePath = newPath;
+  // A hold belongs to the file, not to its old name (message shows the new one).
+  if (S._conflictHoldPath === oldPath) setAutosaveHold(newPath, S._holdReason);
+  if (docTitleEl) docTitleEl.value = baseNameOf(newPath).replace(/\.(md|txt)$/, '');
+  startWatchingFile(newPath);
+
+  /* Crash backups are keyed by path. While the buffer holds unsaved text,
+     move them: write the new-path backup FIRST, and delete the old one only
+     once that succeeded. */
+  if (S.isDirty) {
+    try {
+      await window.NativeAPI.writeVolatileNow(newPath, editor.value);
+      if (_durableExposed()) writeDurableSnapshot(newPath, editor.value);
+      await window.NativeAPI.deleteVolatileContent(oldPath);
+    } catch (e) {
+      console.warn('[Sidebar] could not move the crash backup to the new path (old one kept):', e);
+    }
+  }
+
+  try {
+    await window.NativeAPI.setLastOpenedFile(newPath);
+  } catch (e) {
+    console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e);
+  }
+}
+
   /** Schedules an auto-save after autosaveDelayMs() of inactivity, but
       forces a save once autosaveMaxWaitMs() has elapsed since the
       document first became dirty. Prevents indefinite postponement
@@ -362,11 +621,11 @@ return savePromise;
       // dialog loop.
       _firstDirtyTime = Date.now();
 
-      saveActiveFile();
+      saveActiveFile({ auto: true });
       return;
     }
 
-    _autoSaveTimer = setTimeout(saveActiveFile, autosaveDelayMs());
+    _autoSaveTimer = setTimeout(() => saveActiveFile({ auto: true }), autosaveDelayMs());
   }
 
 export { markDirty, markClean, saveActiveFile, scheduleAutoSave };
@@ -392,9 +651,21 @@ export function initSaveEngine() {
   window.sidebarIsDirty           = () => S.isDirty;
 
   // Pivot the sidebar state to a newly saved file (used by Save As)
-  window.sidebarPivotToNewFile = async function(newPath, newRoot) {
+  window.sidebarPivotToNewFile = async function(newPath, newRoot, savedContent) {
     S.activeFilePath = newPath;
-    markClean();
+    /* Only what Save As actually wrote is on disk. If the buffer changed
+       while its dialog was open (possible where the dialog is not modal),
+       those edits are NOT saved — keep them dirty so autosave writes them
+       to the new file, instead of marking them saved and losing them.
+       Callers that pass no content keep the previous behaviour. */
+    if (typeof savedContent === 'string' && editor.value !== savedContent) {
+      markDirty();
+      scheduleAutoSave();
+    } else {
+      markClean();
+    }
+    // Save As wrote `savedContent` (editor text, LF) to the new file.
+    rememberDiskContent(typeof savedContent === 'string' ? savedContent : null);
     await window.NativeAPI.setLastOpenedFile(newPath);
 
     // If the file was saved to a directory outside the current project root,
@@ -449,76 +720,28 @@ export function initSaveEngine() {
    both are "no active file". The folder is pendingNoteDir() — the same
    folder media ingest copies into and links resolve against — and while an
    image is previewed the note takes the image's name and lands beside it.
-   The volatile placeholder key protects the text until the file exists. */
-    if (!S.activeFilePath && !_autoCreatingFile && !window._showingUnsupportedFile) {
+   The session's placeholder backup protects the text until the file exists
+   (see createNoteFromScratchpad for what happens if the user moves on
+   before that). */
+    if (!S.activeFilePath && !window._showingUnsupportedFile) {
       const targetDir = pendingNoteDir();
       if (targetDir) {
-
-        const placeholderKey = ensureScratchpadVolatileKey();
+        const session = scratchpadSession();
+        session.latest = editor.value;
+        /* Crash backup on EVERY scratchpad keystroke — including those typed
+           while the file is being created, which used to have none. */
         try {
-          window.NativeAPI.setVolatileContent(placeholderKey, editor.value);
+          window.NativeAPI.setVolatileContent(session.key, editor.value);
         } catch (e) {
-
           console.warn('[Sidebar] scratchpad placeholder volatile failed (non-fatal):', e);
         }
-
-        _autoCreatingFile = true; // Lock to prevent duplicate files if user types fast
-        const baseName = S.previewMediaPath
-          ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, '') // note named after the image
-          : 'untitled';
-        (async () => {
-          const newPath = await uniquePath(targetDir, baseName, 'md');
-          try {
-            await window.NativeAPI.createFile(newPath);
-            // Instantly write the first keystrokes to the new file
-            await window.NativeAPI.writeFile(newPath, editor.value);
-            // Suppress AFTER write — same reasoning as saveActiveFile().
-            S._suppressWatchUntil = Date.now() + SUPPRESS_MS;
-          } catch (err) {
-            console.error('[Sidebar] scratchpad auto-create failed:', err);
-            _autoCreatingFile = false;
-
-            if (!_scratchpadFailureWarned) {
-              _scratchpadFailureWarned = true;
-              window.NativeAPI.showMessageBox({
-                type: 'warning',
-                title: window.t('Could Not Create File'),
-                message: window.t('A file could not be created to save your work.'),
-                detail: String(err) + '\n\nYour typed content is still visible but has not been saved to disk. The app will retry automatically on your next keystroke.',
-                buttons: ['OK'],
-                defaultId: 0,
-              }).catch(() => {}); // ignore if the dialog itself fails
-            }
-            return;
-          }
-          S.activeFilePath = newPath;
-          S.previewMediaPath = null; // the preview became this note
-          _autoCreatingFile = false;
-
-          _scratchpadFailureWarned = false;
-
-          await window.NativeAPI.setLastOpenedFile(newPath);
-          if (docTitleEl) {
-            docTitleEl.value = newPath.replace(/\\/g, '/').split('/').pop().replace(/\.(md|txt)$/, '');
-          }
-          startWatchingFile(newPath);
-          expandedDirs.add(targetDir);
-          await renderTree();
-          highlightActiveFile(newPath);
-
-          // Mark dirty so normal autosave picks up any subsequent keystrokes
-          markDirty();
-          scheduleAutoSave();
-          window.NativeAPI.setVolatileContent(S.activeFilePath, editor.value);
-
-
-          if (S._scratchpadVolatileKey) {
-            const oldKey = S._scratchpadVolatileKey;
-            S._scratchpadVolatileKey = null;
-            window.NativeAPI.deleteVolatileContent(oldKey).catch(() => {});
-          }
-        })();
-        return; // skip normal flow until file is fully established
+        if (!session.creating && Date.now() >= session.retryAfter) {
+          const baseName = S.previewMediaPath
+            ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, '') // note named after the image
+            : 'untitled';
+          createNoteFromScratchpad(session, targetDir, baseName);
+        }
+        return; // skip normal flow until the file is established
       }
     }
 
@@ -562,7 +785,7 @@ export function initSaveEngine() {
     if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
       const editorHasFocus = window.cmView ? window.cmView.hasFocus : false;
       if (editorHasFocus) return; // CM's historyKeymap handles it
-      if (undoStack.length === 0) return;
+      if (!hasUndoOperations()) return;
       e.preventDefault();
       await undoLastOperation();
     }

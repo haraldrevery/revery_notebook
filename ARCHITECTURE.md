@@ -38,8 +38,8 @@ revery_notebook/
 ├── src/sidebar/                      ← Sidebar source modules (state, save, tree, cards,
 │                                        fileops, dnd, media_ingest, search, yaml_index,
 │                                        project_scan, link_complete, …). Pure + unit-tested:
-│                                        paths [the ONLY path rules], link_rewrite, drop_transport,
-│                                        block_insert
+│                                        paths [the ONLY path rules, incl. uniqueName], link_rewrite,
+│                                        drop_transport, block_insert, eol [line-ending rules]
 ├── electron/
 │   ├── main.js                       ← Main process wiring: window, IPC, policy
 │   ├── fs_core.js                    ← Pure FS logic (atomic writes, settings store) — unit tested
@@ -320,18 +320,21 @@ One ingest, one path module, one drop transport per platform:
   realpath. `test/media_e2e.test.js` drives the whole flow in the real
   Electron main (preload + IPC) on a temporary project.
 
-### Unsaved Changes Guard
+### Switching files, renaming and moving the open note
 
-`window._sidebarUnsaved` is set `true` on every `editor` input event when a
-file is open. Before opening a different file, the guard shows a native dialog:
+There is no "save first?" dialog: opening another file, previewing an
+image, switching project or closing SAVES the open note first (through the
+save queue) and aborts the switch if that save fails. A rename, move or
+undo that affects the open note also lets pending saves finish first (so
+no save can land on the old name), then hands over to the ONE retarget
+function (`retargetActiveFile`, save.js): the path, watcher, crash backups
+and any auto-save hold follow the file, and the dirty flag is left as it is
+— a path change never marks unsaved edits as saved.
 
-```
-┌─────────────────────────────────┐
-│  Unsaved Changes                │
-│  Do you want to save first?     │
-│ [Save & Open] [Discard] [Cancel]│
-└─────────────────────────────────┘
-```
+Typing with no note open creates one ("scratchpad", save.js). If the user
+loads another document before that file exists, the typed text still goes
+into the new note and the editor is left alone (the editor's document
+generation, `window.getEditorDocGeneration()`, tells the two apart).
 
 ### Ctrl+S Behaviour (Desktop Override)
 
@@ -343,10 +346,27 @@ Both handlers are wired; this is a description, not a to-do.
 
 ### External File Watch
 
-When a file is opened, `NativeAPI.watchFile()` is called. If the file is
-modified by another program, a dialog asks the user to reload or keep their
-edits. Only one watcher is active at a time (the previously watched file is
-unwatched automatically when a new file opens).
+When a file is opened, `NativeAPI.watchFile()` is called (one watcher at a
+time). Every change event is verified under the disk lock against
+`S._diskBaseline` — the exact text last read from or written to the file,
+recorded by every save inside the same lock. Equal → our own write (or a
+touch that changed nothing): ignored. Different from both the record and
+the buffer → a real external change: the user chooses Reload / Save my
+version & reload / Keep my version. There is no time window after a save in
+which events are ignored (that used to let another program's change be
+overwritten by the next autosave).
+
+**Auto-save hold** (`setAutosaveHold`, save.js): background autosave never
+writes a held file; an explicit save (Ctrl+S, switching files, closing)
+does and lifts the hold. A sticky status message says so. Reasons:
+- `conflict` — "Keep my version" (also Escape, also on a buffer without
+  unsaved edits): the disk keeps the other program's version;
+- `missing` — the file was deleted or moved by another program (autosave
+  would recreate it); lifted automatically if it comes back unchanged;
+- `unreadable` — another program rewrote it in an encoding the editor
+  cannot read.
+While held, the buffer is also mirrored to the durable backup slot. If the
+watcher cannot start, a status message says so.
 
 ---
 
@@ -376,7 +396,7 @@ unwatched automatically when a new file opens).
 | Watch | `fs:watch-file`, `fs:unwatch-file` |
 | Dialogs | `dialog:open-folder`, `dialog:save-file`, `dialog:show-message-box` |
 | Export | `project:export-zip` (no renderer args), `export:pdf` (temp file → hidden sandboxed window → `printToPDF` → atomic write), `export:latex-zip` (image paths root-validated; `bundleFonts` allowlisted) |
-| Window | `window:confirm-close`, `window:close`, `window:minimize`, `window:toggle-maximize`, `window:set-fullscreen` |
+| Window | `window:confirm-close`, `window:close`, `window:minimize`, `window:toggle-maximize`, `window:set-fullscreen`; renderer → main (fire-and-forget): `window:close-ack`, `window:close-failed` |
 | Settings | `settings:get/set-last-opened-file`, `settings:get/set-last-root-path`, `settings:get/set-pending-rename`, `settings:get/set-project-history`, `settings:clear-all` |
 | Misc | `app:get-data-path`, `app:get-default-notes-folder`, `shell:show-in-folder` |
 
@@ -411,6 +431,25 @@ main.js 'close' event fires
                                                                mainWindow.close()  →  app exits
 ```
 
+### Close watchdog (both wrappers)
+
+The window is frameless, and every close is handed to the page. A page
+that is hung, or whose renderer died, could never answer — the window
+could then only be killed. So the page acknowledges a close request at
+once (preload.js / native_api.js), and the MAIN process (Electron) or Rust
+(Tauri) steps in when:
+- no acknowledgement arrives within 5 s → "not responding: Keep waiting /
+  Force close";
+- the page reports its close flow threw → "could not close normally: Keep
+  open / Close anyway";
+- (Electron) `render-process-gone` → "stopped: Reload editor / Close"; the
+  reload's boot recovery offers the crash backup.
+Every question defaults to the answer that discards nothing (in Tauri only
+an explicit click on the force button closes; Enter and Escape keep the
+window). Pinned by `test/close_watchdog_e2e.test.js`. macOS: every new
+window starts with the close guard armed (a Dock reopen used to inherit a
+stale "close allowed").
+
 ### Settings Storage
 
 Electron stores the `lastOpenedFile` pointer in:
@@ -440,9 +479,20 @@ collision.
 | Crash backup | `set_volatile_content`, `get_volatile_content`, `delete_volatile_content`, `get_volatile_status`, `list_volatile_backups` |
 | Watch | `watch_file` / `unwatch_file` (`notify` crate → `file-changed` events) |
 | Export | `export_project_zip` (no renderer args; `zip` crate, atomic write), `export_latex_zip` (per-image root validation + allowlisted `bundle_fonts` via `include_bytes!`) |
-| Dialog / window | `show_message_box`, `confirm_close`, `minimize_window`, `toggle_maximize_window`, `close_window`, `set_fullscreen`, `show_in_folder` |
+| Dialog / window | `show_message_box`, `confirm_close`, `close_request_ack`, `close_flow_failed`, `minimize_window`, `toggle_maximize_window`, `close_window`, `set_fullscreen`, `show_in_folder` |
 | Settings | `get/set_last_opened_file`, `get/set_last_root_path`, `get/set_pending_rename`, `get/set_project_history`, `get_app_data_path`, `get_default_notes_folder`, `clear_all_settings` |
 | Fonts | `list_system_fonts` (fontdb enumeration — family names only, no paths) |
+
+**Threads.** Non-async Tauri commands run on the main thread, which also
+drives the webview — slow disk work there freezes the window. Every command
+that reads or writes file content, lists folders, copies, trashes or backs
+up (`read_file`, `read_directory`, `write_file`, `rename_node`,
+`delete_node`, `copy_*`, all crash-backup commands, the exports) is
+`async` and runs its I/O on the blocking pool. The settings commands stay
+synchronous ON PURPOSE: they then run in the order the renderer sends them
+(several of those calls are fire-and-forget). Native dialogs are parented
+to the main window (`file_dialog_for` / `message_dialog_for`), so they are
+modal like Electron's.
 
 Every path a command RETURNS (directory entries, copied-file paths,
 `save_file`'s new root, the stored last root / last file) passes through
@@ -521,15 +571,43 @@ Every 2 seconds after the last keystroke, `NativeAPI.setVolatileContent(path, co
 **Electron temp path**: `os.tmpdir()/revery-volatile/<hash>.revery_volatile`  
 **Tauri temp path**: `env::temp_dir()/revery-volatile/<hash>.revery_volatile`
 
-A `.meta.json` sibling file records the original path and timestamp. On a future startup a recovery assistant could scan this directory and offer to restore unsaved work.
+A `.meta.json` sibling file records the original path and timestamp. At
+startup the boot recovery offers the last opened file's backup (and any
+scratchpad backup); the 7-day purge never deletes the last opened file's
+backup, since it runs on a timer, not after that offer.
 
 ### Atomic Writes
 
 `writeFile()` never writes directly to the target path. It always:
-1. Writes to `<path>.revery_tmp`
-2. Calls `rename()` (atomic on POSIX; best-effort on Windows NTFS)
+1. Writes to a unique sibling `<name>.<unique>.revery_tmp` (both wrappers)
+   and fsyncs it
+2. Calls `rename()` over the target, then fsyncs the folder (POSIX)
 
-This means a crash mid-write leaves the original file intact.
+A crash mid-write leaves the original file intact; a leftover
+`.revery_tmp` is harmless.
+
+### Text encoding, line endings, lone surrogates
+
+- **Strict UTF-8 reads.** A file that is not valid UTF-8 (Windows-1252,
+  UTF-16, …) is REFUSED with the same message on both wrappers
+  (`readUtf8TextStrict` / `read_text_strict`) — never decoded lossily,
+  which let the next autosave replace every non-UTF-8 byte with U+FFFD. A
+  leading BOM is kept.
+- **Line endings** (`src/sidebar/eol.js`). The editor always holds `\n`. A
+  file that was purely CRLF is written back as CRLF; LF and mixed files are
+  written as LF.
+- **Lone surrogates** (e.g. a non-`u` regex replace that split an emoji)
+  become U+FFFD at the NativeAPI write boundary for both wrappers (Tauri's
+  IPC would otherwise reject every save of that document).
+
+### Find & replace
+
+Replace uses the match positions the editor shows NOW (the highlight layer
+is mapped through every edit and emptied by a file switch) and verifies the
+current query still matches exactly there, in full-text context, before
+changing anything — a stale offset used to overwrite unrelated text, even
+in another file. Replace All only applies if the text did not change while
+the worker ran.
 
 ### Multi-Tab Collision (Web Mode)
 
@@ -562,7 +640,7 @@ for production).
 |---|---|
 | Arbitrary Rust command execution | Only listed commands are registered; no dynamic dispatch |
 | Path traversal | `safe_path()` in every Rust command |
-| FS scope bypass | Custom commands + plugin scope both validate independently |
+| FS scope bypass | There is no fs plugin: every file-system call is a custom command that validates its paths (`safe_path_inside`) |
 | Oversized file reads | `meta.len() > 20 MB` guard in `read_file` |
 | Unregistered IPC | Tauri rejects invocations for commands not in `generate_handler![]` |
 | Acting as a browser | `navigation-guard` plugin (`on_navigation` + `is_allowed_navigation`) — only the app's own origins may load in the webview; everything else is cancelled and logged |
@@ -729,7 +807,13 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails |
 | `test/fs_core.paths.test.js` | Path traversal / symlink-escape rejection, dropped-filename sanitisation |
 | `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
-| `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata |
+| `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup |
+| `test/fs_core.read.test.js` | Strict UTF-8 reads: valid UTF-8 / BOM / CRLF round-trip byte for byte; Windows-1252 and UTF-16 are refused and left untouched |
+| `test/fs_core.rename.test.js` | The only rename-over-existing exception (case-only alias of the SAME file); two different files differing only in case are never treated as one |
+| `test/eol.test.js` | Line-ending rules: which files keep CRLF, normalisation, byte-exact round-trip |
+| `test/unique_name.test.js` | New/renamed/imported/moved names: case-insensitive collisions, trailing `_2024` kept, the renamed file does not block its own spelling |
+| `test/data_safety_e2e.test.js` | Boots the REAL desktop app on a temp project: Replace after edits / file switch / regex context; scratchpad race; sidebar Ctrl+Z; rename during a "Keep my version" hold; open-note links follow a rename; CRLF kept; external write right after an autosave detected; a note moved away by another program not recreated |
+| `test/close_watchdog_e2e.test.js` | The app can always be closed, never silently: normal close, a failing close flow, a renderer reported gone (reload offered), a hung page (force close offered after 5 s) |
 | `test/crash_consistency.test.js` | A child process is SIGKILLed mid-write 12 times; the target file must always contain exactly one complete payload |
 | `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output; `buildZipFromEntries` (LaTeX-project assembler) auto parent-dirs + unsafe-name rejection |
 | `test/link_rewrite.test.js` | The pure link rewriter behind rename/move link-updating: encoding round-trips (%20/%25/parens/unicode), `../` traversal, folder-prefix moves, self-moved files, fenced/inline code opacity, scheme/anchor immunity, undo (inverse-mapping) round-trip |
@@ -992,3 +1076,20 @@ hit that.
    `\\?\`-prefixed paths, so a dropped image's link became a chain of `../`
    plus the absolute path and never rendered. All returned paths now go
    through `frontend_path()`.
+
+8. **Both wrappers on one machine.** Electron and Tauri each prevent a
+   second copy of themselves, not of each other. Running both on the same
+   project gives two autosavers (the watcher then reports each other's
+   writes as external changes). They share `%TEMP%/revery-volatile` with
+   different backup-key hashes, so each only sees its own backups.
+
+9. **Renderer crash reporting (Electron).** The "stopped — Reload editor"
+   question relies on `render-process-gone`. On some Linux setups a crashed
+   renderer is held by the system crash handler and the event is late or
+   missing; the close watchdog still catches that case (a dead page cannot
+   acknowledge a close). The E2E delivers the event rather than crashing.
+
+10. **Case-only renames** (Windows/macOS) are allowed only when the backend
+   proves both spellings are the same file; not exercisable on the Linux
+   test machine (case-sensitive), where the guard's refusal is tested
+   instead.

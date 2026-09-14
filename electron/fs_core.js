@@ -138,6 +138,31 @@ function atomicWriteFile(safe, content) {
   }
 }
 
+/* ── Strict UTF-8 text read ─────────────────────────────────────────────
+   The editor only understands UTF-8. Node's 'utf8' decoding silently
+   replaces every invalid byte with U+FFFD, so opening a legacy-encoded
+   file (Windows-1252, UTF-16) and letting autosave run once would write
+   the replacement characters back and destroy the original bytes. Decode
+   with fatal:true and refuse such files instead — the same outcome as the
+   Tauri backend, whose read_file returns the same message.
+   ignoreBOM:true keeps a leading BOM as U+FEFF in the string (TextDecoder
+   strips it by default). That matches Node's previous behaviour and Rust's
+   read_to_string, so BOM files are still written back byte-identical. */
+const NOT_UTF8_MESSAGE =
+  'Read failed: this file is not valid UTF-8 text (it may use another encoding). ' +
+  'It was not opened, so it has not been changed.';
+
+function readUtf8TextStrict(filePath) {
+  const buf = fs.readFileSync(filePath);
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf);
+  } catch (_) {
+    const err = new Error(NOT_UTF8_MESSAGE);
+    err.code = 'EREVERY_NOT_UTF8';
+    throw err;
+  }
+}
+
 /* ── Path security: prevent directory traversal ─────────────────────────
    All file-system IPC handlers validate paths through these before
    touching the OS. */
@@ -188,6 +213,29 @@ function validatePathInside(raw, rootPath) {
     throw new Error(`Security Error: Path escapes project root: ${resolved}`);
   }
   return realResolved;
+}
+
+/* Is `b` the very same existing file as `a`, under a spelling that differs
+   ONLY in letter case? That is the one situation in which a rename target
+   "already exists" yet renaming is safe: a case-only rename on a
+   case-insensitive filesystem (Windows, macOS), where both spellings name
+   one directory entry. Three guards, all required, so a DIFFERENT file is
+   never treated as the same (it would be overwritten):
+     1. same folder, names equal ignoring case;
+     2. both exist and have the same device and file ID (bigint, exact);
+     3. that file ID is non-zero (some network filesystems report 0 for
+        every file, which would make any two files look identical). */
+function isCaseOnlyAliasOfSameFile(a, b) {
+  try {
+    if (path.dirname(a) !== path.dirname(b)) return false;
+    if (path.basename(a).toLowerCase() !== path.basename(b).toLowerCase()) return false;
+    const sa = fs.statSync(a, { bigint: true });
+    const sb = fs.statSync(b, { bigint: true });
+    if (sa.ino === 0n || sb.ino === 0n) return false;
+    return sa.dev === sb.dev && sa.ino === sb.ino;
+  } catch {
+    return false;
+  }
 }
 
 /* Reduce a dropped file's name to a safe basename inside the target dir. */
@@ -369,8 +417,14 @@ function listVolatileBackupsMerged(dirs, prefix) {
 }
 
 /* Delete backup pairs older than maxAgeMs. Unreadable or malformed meta
-   files are skipped, never deleted — when in doubt, keep the user's data. */
-function purgeOldVolatileFiles(dir, maxAgeMs, now = Date.now()) {
+   files are skipped, never deleted — when in doubt, keep the user's data.
+   `keepPaths`: original paths whose backup must survive regardless of age.
+   The purge runs on a startup timer, independently of the renderer's
+   crash-recovery check, so the backup of the file that check is about to
+   offer (the last opened file) must never be deleted underneath it. */
+function purgeOldVolatileFiles(dir, maxAgeMs, now = Date.now(), keepPaths = []) {
+  const keep = new Set((Array.isArray(keepPaths) ? keepPaths : [])
+    .filter((p) => typeof p === 'string' && p.length > 0));
   let entries;
   try {
     entries = fs.readdirSync(dir);
@@ -390,6 +444,9 @@ function purgeOldVolatileFiles(dir, maxAgeMs, now = Date.now()) {
       // 'ts' is Date.now() ms stored by setVolatileContent.
       if (typeof meta.ts !== 'number' || (now - meta.ts) < maxAgeMs) {
         continue; // Young enough — leave it alone.
+      }
+      if (typeof meta.originalPath === 'string' && keep.has(meta.originalPath)) {
+        continue; // Pending recovery offer — leave it alone.
       }
       // Old backup: delete the data file first, then the meta file.
       try { fs.unlinkSync(dataFile); } catch { /* already gone */ }
@@ -546,8 +603,11 @@ module.exports = {
   writeFileWithFsync,
   syncParentDir,
   atomicWriteFile,
+  readUtf8TextStrict,
+  NOT_UTF8_MESSAGE,
   validatePath,
   validatePathInside,
+  isCaseOnlyAliasOfSameFile,
   sanitizeDropFilename,
   ensureVolatileDir,
   volatilePaths,

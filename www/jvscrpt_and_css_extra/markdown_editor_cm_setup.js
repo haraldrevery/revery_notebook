@@ -104,6 +104,44 @@ const lineNumbersCompartment = new Compartment();
     }
   };
 
+  /** Current find matches exactly as the editor shows them: the highlight
+      decorations are mapped through every edit, so these positions stay
+      right while the user types, and a file switch (fresh state) empties
+      them. find.js reads THIS rather than trusting offsets it stored when
+      the search ran. [{ from, to, current }] in document order. */
+  window.getFindHighlightRanges = function () {
+    if (!window.cmView) return [];
+    const set = window.cmView.state.field(findHighlightField, false);
+    if (!set) return [];
+    const out = [];
+    for (const iter = set.iter(); iter.value; iter.next()) {
+      if (iter.to > iter.from) {
+        out.push({
+          from: iter.from,
+          to: iter.to,
+          current: !!(iter.value.spec && iter.value.spec.class === 'cm-find-highlight-current'),
+        });
+      }
+    }
+    return out;
+  };
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // 1b. DOCUMENT IDENTITY
+  //     replaceEditorContent() swaps in a brand-new document (file open,
+  //     reload, media preview, clear). Code that awaits across a user action
+  //     (scratchpad auto-create, find/replace) must be able to tell whether
+  //     the document it started with is still the one on screen. The counter
+  //     changes on every swap and never on ordinary edits; listeners run
+  //     after the new document is fully in place.
+  // ═════════════════════════════════════════════════════════════════════════
+  let _docGeneration = 0;
+  const _docReplacedListeners = [];
+  window.getEditorDocGeneration = () => _docGeneration;
+  window.onEditorDocReplaced = function (fn) {
+    if (typeof fn === 'function') _docReplacedListeners.push(fn);
+  };
+
   // ═════════════════════════════════════════════════════════════════════════
   // 2.  PLACEHOLDER COMPARTMENT (so menus.js can update the placeholder text)
   // ═════════════════════════════════════════════════════════════════════════
@@ -756,6 +794,15 @@ const lineNumbersCompartment = new Compartment();
     });
   };
 
+  /** Apply several non-overlapping edits as ONE undoable user edit.
+      Positions are in the current document (CodeMirror maps them together),
+      so untouched text — and the cursor, when outside the edits — stays put.
+      Fires the input listeners like typing does (dirty flag, autosave). */
+  window.applyEditorChanges = function (changes) {
+    if (!Array.isArray(changes) || !changes.length) return;
+    window.cmView.dispatch({ changes, userEvent: 'input' });
+  };
+
   // Convenience alias used in a few places (e.g. buildMenu template inserts)
   // Signature: insertWithUndo(0, 0, content) prepends at position 0
   // That already works correctly with the above.
@@ -809,6 +856,7 @@ window.replaceEditorContent = function (text) {
       extensions: _editorExtensions,
     });
     window.cmView.setState(freshState);
+    _docGeneration++; // a different document is on screen now (see 1b)
     
     // Re-apply the line numbers visibility state to the fresh editor
     window.setLineNumbersVisible(_currentLineNumbersVisible);
@@ -819,6 +867,9 @@ window.replaceEditorContent = function (text) {
     if (typeof countWords === 'function') countWords();
     if (!(window.NativeAPI && window.NativeAPI.isDesktop)) {
       try { localStorage.setItem('revery_md_autosave', text); } catch (_) {}
+    }
+    for (const fn of _docReplacedListeners) {
+      try { fn(); } catch (e) { console.error('[cm_setup] document-replaced listener failed:', e); }
     }
   };
 })();

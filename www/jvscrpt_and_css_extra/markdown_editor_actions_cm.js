@@ -1223,15 +1223,19 @@ async function executeSaveAs() {
 if (window.NativeAPI && (window.NativeAPI.env === 'electron' || window.NativeAPI.env === 'tauri')) {
     try {
 
-      const result = await window.NativeAPI.saveFile(filename, editor.value, { updateRoot: true });
+      /* Snapshot what is written: the pivot compares it with the buffer, so
+         edits made while the dialog was open are kept as unsaved (and
+         autosaved to the new file) instead of being marked as saved. */
+      const savedContent = editor.value;
+      const result = await window.NativeAPI.saveFile(filename, savedContent, { updateRoot: true });
       if (result && result.saved) {
         showSavedIndicator();
         document.getElementById('save-as-modal').classList.remove('show');
         editor.focus();
-        
+
         // Pivot the app state if the backend returned the new file path
         if (result.filePath && typeof window.sidebarPivotToNewFile === 'function') {
-          await window.sidebarPivotToNewFile(result.filePath, result.newRootPath);
+          await window.sidebarPivotToNewFile(result.filePath, result.newRootPath, savedContent);
         }
       }
       /* If cancelled, leave the modal open so the user can try again */

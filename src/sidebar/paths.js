@@ -113,6 +113,27 @@ export function isInsideRoot(absPath, rootPath) {
   return A.startsWith(R === '/' ? '/' : R + '/');
 }
 
+/** A file or folder name not yet taken in a folder listing: `stem+suffix`,
+    else `stem_2+suffix`, `stem_3+suffix`, … Comparison IGNORES CASE: on
+    Windows and macOS "Notes.md" and "notes.md" are one file, so a
+    case-sensitive check handed out names that could never be created (the
+    new-note flow then failed on every keystroke). On a case-sensitive
+    filesystem this only ever picks a more distinct name, never a colliding
+    one. `ignoreName` (exact spelling) does not count as taken — the file
+    being renamed must not block its own new spelling. `stem` is used
+    exactly as given (a trailing "_2024" is part of the name). */
+export function uniqueName(existingNames, stem, suffix = '', ignoreName = null) {
+  const taken = new Set();
+  for (const n of existingNames || []) {
+    if (typeof n === 'string' && n !== ignoreName) taken.add(n.toLowerCase());
+  }
+  let candidate = stem + suffix;
+  for (let i = 2; taken.has(candidate.toLowerCase()); i++) {
+    candidate = `${stem}_${i}${suffix}`;
+  }
+  return candidate;
+}
+
 /** The `![name](relative)` markdown for a media file as seen from baseDir
     (the folder of the note that will contain the link). */
 export function mediaLinkMarkdown(mediaPath, baseDir) {

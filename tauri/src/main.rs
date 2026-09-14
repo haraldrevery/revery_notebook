@@ -327,6 +327,16 @@ impl Default for WatcherState {
 
 /// Signals the main close handler that the frontend has approved the close.
 struct CloseAllowed(Mutex<bool>);
+
+/// Close watchdog state (see arm_close_watchdog): the generation of the
+/// latest close request, the latest generation the page acknowledged, and
+/// whether a watchdog question is on screen (one at a time).
+#[derive(Default)]
+struct CloseWatch {
+    requested:   std::sync::atomic::AtomicU64,
+    acked:       std::sync::atomic::AtomicU64,
+    dialog_open: std::sync::atomic::AtomicBool,
+}
 /// The active project root. Set by open_folder_dialog or set_root_path.
 /// All FS commands enforce that paths stay inside this root.
 struct RootPath(Mutex<Option<String>>);
@@ -478,6 +488,34 @@ fn frontend_path(p: &Path) -> String {
     if cfg!(target_os = "windows") { strip_verbatim_prefix(&s) } else { s }
 }
 
+/* ── Native dialogs are attached to the main window ─────────────────────
+   Without a parent the pickers and message boxes were free-floating: the
+   user could keep typing in the editor underneath. Save As then wrote the
+   text as it was when the dialog opened (edits made meanwhile were marked
+   saved), and the folder picker dropped them. With the main window as
+   parent they are modal, like Electron's (which always passes the window).
+   Falls back to a parentless dialog if the main window is gone. */
+fn file_dialog_for(app: &AppHandle) -> tauri_plugin_dialog::FileDialogBuilder<tauri::Wry> {
+    use tauri_plugin_dialog::DialogExt;
+    let builder = app.dialog().file();
+    match app.get_webview_window("main") {
+        Some(w) => builder.set_parent(&w),
+        None => builder,
+    }
+}
+
+fn message_dialog_for(
+    app: &AppHandle,
+    message: impl Into<String>,
+) -> tauri_plugin_dialog::MessageDialogBuilder<tauri::Wry> {
+    use tauri_plugin_dialog::DialogExt;
+    let builder = app.dialog().message(message);
+    match app.get_webview_window("main") {
+        Some(w) => builder.parent(&w),
+        None => builder,
+    }
+}
+
 fn get_root(root_state: &State<'_, RootPath>) -> Result<std::path::PathBuf, String> {
     let guard = root_state.0.lock().unwrap_or_else(|p| p.into_inner());
     match guard.as_ref() {
@@ -527,10 +565,8 @@ async fn open_folder_dialog(
     root_state: State<'_, RootPath>,
     lock: State<'_, SettingsLock>,
 ) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
+    file_dialog_for(&app)
         .set_title("Open Project Folder")
         .pick_folder(move |p| { let _ = tx.send(p); });
     let result = rx.await.unwrap_or(None);
@@ -620,13 +656,29 @@ let is_trusted = settings["trustedRoots"]
 }
 
 
+/* ── Off the UI thread ───────────────────────────────────────────────────
+   Non-async Tauri commands run on the MAIN thread, which also drives the
+   webview: slow disk work there freezes the whole window (on a slow disk,
+   Windows may even offer to kill the "not responding" app). Every command
+   that reads or writes file content, lists folders, copies up to 20 MB or
+   fsyncs therefore runs on the blocking pool. The settings commands stay
+   synchronous ON PURPOSE: they run in the order the renderer sends them,
+   and several of those calls are fire-and-forget — as async tasks they
+   could complete out of order and leave a stale value behind. */
+
 /// List the direct children of a directory.
 #[tauri::command]
- fn read_directory(
+async fn read_directory(
     path: String,
     root_state: State<'_, RootPath>,
 ) -> Result<Vec<DirEntry>, String> {
     let root = get_root(&root_state)?;
+    tokio::task::spawn_blocking(move || read_directory_blocking(path, root))
+        .await
+        .map_err(|e| format!("Background listing task failed: {e}"))?
+}
+
+fn read_directory_blocking(path: String, root: PathBuf) -> Result<Vec<DirEntry>, String> {
     let dir = safe_path_inside(&path, &root)?;
     let read = fs::read_dir(&dir)
         .map_err(|e| format!("Cannot read directory: {e}"))?;
@@ -682,19 +734,44 @@ let is_trusted = settings["trustedRoots"]
 
 
 
-/// Read a text file (max 20 MB).
+/// Refusal message for files that are not valid UTF-8. Must stay identical
+/// to NOT_UTF8_MESSAGE in electron/fs_core.js — the renderer sees the same
+/// text from both backends.
+const NOT_UTF8_MESSAGE: &str = "Read failed: this file is not valid UTF-8 text \
+     (it may use another encoding). It was not opened, so it has not been changed.";
+
+/// Strict UTF-8 read. read_to_string already refuses invalid UTF-8 (never
+/// decodes lossily, so a legacy-encoded file can't be damaged by a later
+/// save); this only gives that refusal the shared, readable message. A
+/// leading BOM is kept as U+FEFF, so BOM files are written back unchanged.
+fn read_text_strict(p: &Path) -> Result<String, String> {
+    fs::read_to_string(p).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::InvalidData {
+            NOT_UTF8_MESSAGE.to_string()
+        } else {
+            format!("Read failed: {e}")
+        }
+    })
+}
+
+/// Read a text file (max 20 MB). Runs on the blocking pool (see "Off the
+/// UI thread").
 #[tauri::command]
- fn read_file(path: String, root_state: State<'_, RootPath>) -> Result<String, String> {
+async fn read_file(path: String, root_state: State<'_, RootPath>) -> Result<String, String> {
     let root = get_root(&root_state)?;
-    let p = safe_path_inside(&path, &root)?;
-    let meta = fs::metadata(&p).map_err(|e| format!("Cannot stat file: {e}"))?;
-    if meta.len() > 20 * 1024 * 1024 {
-        return Err(format!(
-            "File too large ({:.1} MB). Maximum is 20 MB.",
-            meta.len() as f64 / 1_048_576.0
-        ));
-    }
-    fs::read_to_string(&p).map_err(|e| format!("Read failed: {e}"))
+    tokio::task::spawn_blocking(move || {
+        let p = safe_path_inside(&path, &root)?;
+        let meta = fs::metadata(&p).map_err(|e| format!("Cannot stat file: {e}"))?;
+        if meta.len() > 20 * 1024 * 1024 {
+            return Err(format!(
+                "File too large ({:.1} MB). Maximum is 20 MB.",
+                meta.len() as f64 / 1_048_576.0
+            ));
+        }
+        read_text_strict(&p)
+    })
+    .await
+    .map_err(|e| format!("Background read task failed: {e}"))?
 }
 
 /// Atomic settings write: write to a sibling tmp file then rename.
@@ -1122,8 +1199,10 @@ let now = SystemTime::now()
     .duration_since(UNIX_EPOCH)
     .unwrap_or_default()
     .as_nanos();
+// Same ".revery_tmp" suffix as Electron and save_file, so a temp file
+// left behind by a crash is recognisable as ours on either wrapper.
 let unique_name = format!(
-    "{}.{}.tmp",
+    "{}.{}.revery_tmp",
     p.file_name()
         .ok_or("Cannot write file: path has no filename component")?
         .to_string_lossy(),
@@ -1213,6 +1292,35 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 
 
+/// Where a rename of `old` to `new` (both as returned by safe_path_inside,
+/// i.e. canonical when they exist) must go, given the renderer's requested
+/// `new_path` spelling.
+///
+/// An existing destination is refused — EXCEPT when it is the very same
+/// file under a spelling that differs only in letter case (a case-only
+/// rename on a case-insensitive filesystem: Windows, macOS). Then both
+/// canonical paths are identical (one directory entry), and the target is
+/// the requested spelling in the same folder. Equal canonical paths are
+/// the guard: two DIFFERENT files — e.g. "Note.md" and "note.md" on a
+/// case-sensitive share — canonicalize differently and are never
+/// overwritten. Returns Ok(None) when there is nothing to change.
+fn resolve_rename_target(old: &Path, new: &Path, new_path: &str) -> Result<Option<PathBuf>, String> {
+    if !new.exists() {
+        return Ok(Some(new.to_path_buf()));
+    }
+    let requested = Path::new(new_path)
+        .file_name()
+        .ok_or_else(|| "Invalid destination name".to_string())?;
+    let old_name = old.file_name().unwrap_or_default();
+    let case_only = requested.to_string_lossy().to_lowercase() == old_name.to_string_lossy().to_lowercase();
+    if new != old || !case_only {
+        return Err(format!("Destination already exists: {}", new.display()));
+    }
+    let parent = old.parent().ok_or_else(|| "Invalid source path".to_string())?;
+    let target = parent.join(requested);
+    Ok(if target == old { None } else { Some(target) })
+}
+
 #[tauri::command]
 async fn rename_node(old_path: String, new_path: String, root_state: State<'_, RootPath>) -> Result<(), String> {
     let root = get_root(&root_state)?;
@@ -1227,9 +1335,10 @@ async fn rename_node(old_path: String, new_path: String, root_state: State<'_, R
     if !old.exists() {
         return Err(format!("Source not found: {}", old.display()));
     }
-    if new.exists() {
-        return Err(format!("Destination already exists: {}", new.display()));
-    }
+    let new = match resolve_rename_target(&old, &new, &new_path)? {
+        Some(target) => target,
+        None => return Ok(()), // same file, same spelling: nothing to do
+    };
 
     // Wrap the heavy synchronous I/O in a blocking task so the event loop stays free
     tokio::task::spawn_blocking(move || {
@@ -1359,8 +1468,14 @@ async fn rename_node(old_path: String, new_path: String, root_state: State<'_, R
 /// Trash on macOS, XDG Trash on Linux). Recursive for directories.
 /// The user can restore the item from their system trash UI.
 #[tauri::command]
-fn delete_node(path: String, root_state: State<'_, RootPath>) -> Result<(), String> {
+async fn delete_node(path: String, root_state: State<'_, RootPath>) -> Result<(), String> {
     let root = get_root(&root_state)?;
+    tokio::task::spawn_blocking(move || delete_node_blocking(path, root))
+        .await
+        .map_err(|e| format!("Background trash task failed: {e}"))?
+}
+
+fn delete_node_blocking(path: String, root: PathBuf) -> Result<(), String> {
     let p = safe_path_inside(&path, &root)?;
 
     let canonical_root = root.canonicalize().map_err(|e| format!("Cannot resolve root: {e}"))?;
@@ -1377,11 +1492,19 @@ fn delete_node(path: String, root_state: State<'_, RootPath>) -> Result<(), Stri
 }
 
 
+/// Crash backup write (two atomic writes, four fsyncs — every couple of
+/// seconds while typing): on the blocking pool, never the UI thread.
+/// Ordering between backup calls is guaranteed JS-side (_enqueueVolatileOp
+/// awaits each one); VOLATILE_LOCK serializes against get/list/purge.
 #[tauri::command]
-fn set_volatile_content(path: String, content: String) -> Result<(), String> {
-    let volatile_dir = prepare_volatile_dir().map_err(|s| s.to_string())?;
-    let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    write_backup_to(volatile_dir, &path, &content)
+async fn set_volatile_content(path: String, content: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let volatile_dir = prepare_volatile_dir().map_err(|s| s.to_string())?;
+        let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        write_backup_to(volatile_dir, &path, &content)
+    })
+    .await
+    .map_err(|e| format!("Background backup task failed: {e}"))?
 }
 
 /// Durable (reboot-safe) snapshot under the app data dir. Written by the
@@ -1389,45 +1512,61 @@ fn set_volatile_content(path: String, content: String) -> Result<(), String> {
 /// failure cooldown) — see prepare_durable_dir(). Same on-disk format as
 /// the volatile slot; recovery reads both via get_volatile_content.
 #[tauri::command]
-fn set_durable_backup(app: AppHandle, path: String, content: String) -> Result<(), String> {
-    let durable_dir = prepare_durable_dir(&app).map_err(|s| s.to_string())?;
-    let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    write_backup_to(durable_dir, &path, &content)
+async fn set_durable_backup(app: AppHandle, path: String, content: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let durable_dir = prepare_durable_dir(&app).map_err(|s| s.to_string())?;
+        let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        write_backup_to(durable_dir, &path, &content)
+    })
+    .await
+    .map_err(|e| format!("Background backup task failed: {e}"))?
 }
 
+/// Async so a read never waits for VOLATILE_LOCK (held by a backup write
+/// doing fsyncs) on the UI thread.
 #[tauri::command]
-fn get_volatile_content(app: AppHandle, path: String) -> Option<serde_json::Value> {
-    // Consult every backup location that passed its safety check and return
-    // the NEWEST snapshot (the durable slot can outlive a reboot that wiped
-    // the tmpfs-backed volatile one). An unavailable dir is treated as "no
-    // backup there" — mirrors Electron's volatileDirReady=false path.
-    // Hold the same lock as writers so we never observe a "data file already
-    // renamed in, meta file still in temp" half-state.
-    let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+async fn get_volatile_content(app: AppHandle, path: String) -> Option<serde_json::Value> {
+    let joined = tokio::task::spawn_blocking(move || {
+        // Consult every backup location that passed its safety check and return
+        // the NEWEST snapshot (the durable slot can outlive a reboot that wiped
+        // the tmpfs-backed volatile one). An unavailable dir is treated as "no
+        // backup there" — mirrors Electron's volatileDirReady=false path.
+        // Hold the same lock as writers so we never observe a "data file already
+        // renamed in, meta file still in temp" half-state.
+        let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    let mut best: Option<(String, u64)> = None;
-    for dir in backup_dirs(&app) {
-        if let Some((content, ts)) = read_backup_from(dir, &path) {
-            if best.as_ref().map_or(true, |(_, best_ts)| ts > *best_ts) {
-                best = Some((content, ts));
+        let mut best: Option<(String, u64)> = None;
+        for dir in backup_dirs(&app) {
+            if let Some((content, ts)) = read_backup_from(dir, &path) {
+                if best.as_ref().map_or(true, |(_, best_ts)| ts > *best_ts) {
+                    best = Some((content, ts));
+                }
             }
         }
-    }
-    best.map(|(content, ts)| {
-        serde_json::json!({ "content": content, "ts": ts, "originalPath": path })
+        best.map(|(content, ts)| {
+            serde_json::json!({ "content": content, "ts": ts, "originalPath": path })
+        })
+    })
+    .await;
+    joined.unwrap_or_else(|e| {
+        eprintln!("[revery] backup read task failed: {e}");
+        None
     })
 }
 
 
 
 #[tauri::command]
-fn delete_volatile_content(app: AppHandle, path: String) -> Result<(), String> {
-    // Clear ALL backup locations; an unavailable dir has nothing of ours.
-    let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    for dir in backup_dirs(&app) {
-        delete_backup_from(dir, &path);
-    }
-    Ok(())
+async fn delete_volatile_content(app: AppHandle, path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        // Clear ALL backup locations; an unavailable dir has nothing of ours.
+        let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for dir in backup_dirs(&app) {
+            delete_backup_from(dir, &path);
+        }
+    })
+    .await
+    .map_err(|e| format!("Background backup task failed: {e}"))
 }
 
 
@@ -1445,11 +1584,10 @@ async fn save_file(
     root_state: State<'_, RootPath>,
     lock: State<'_, SettingsLock>,
 ) -> Result<SaveFileResult, String> {
-    use tauri_plugin_dialog::{DialogExt, FilePath};
+    use tauri_plugin_dialog::FilePath;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
+    file_dialog_for(&app)
         .set_title("Save As")
         .add_filter("Markdown", &["md", "txt"])
         .set_file_name(&filename)
@@ -1702,7 +1840,7 @@ async fn export_project_zip(
     app: AppHandle,
     root_state: State<'_, RootPath>,
 ) -> Result<ZipExportResult, String> {
-    use tauri_plugin_dialog::{DialogExt, FilePath};
+    use tauri_plugin_dialog::FilePath;
 
     let root = root_state
         .0
@@ -1717,8 +1855,7 @@ async fn export_project_zip(
         .unwrap_or_else(|| "project".into());
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
+    file_dialog_for(&app)
         .set_title("Zip Project Export")
         .add_filter("Zip Archive", &["zip"])
         .set_file_name(&format!("{}_{}.zip", folder_name, now_stamp_local()))
@@ -1854,7 +1991,7 @@ async fn export_latex_zip(
     sections: Option<Vec<LatexSection>>,
     root_state: State<'_, RootPath>,
 ) -> Result<ZipExportResult, String> {
-    use tauri_plugin_dialog::{DialogExt, FilePath};
+    use tauri_plugin_dialog::FilePath;
 
     let mut entries: Vec<(String, Vec<u8>)> = vec![("main.tex".into(), tex.into_bytes())];
     if !images.is_empty() {
@@ -1912,8 +2049,7 @@ async fn export_latex_zip(
         .unwrap_or_else(|| "latex-project".into());
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
+    file_dialog_for(&app)
         .set_title("Export LaTeX Project")
         .add_filter("Zip Archive", &["zip"])
         .set_file_name(&format!("{}_{}.zip", base, today_stamp_utc()))
@@ -1972,7 +2108,7 @@ async fn show_message_box(
     app: AppHandle,
     options: MessageBoxOptions,
 ) -> Result<MessageBoxResult, String> {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogKind, MessageDialogButtons};
+    use tauri_plugin_dialog::{MessageDialogKind, MessageDialogButtons};
 
     // FIX #4: Tauri v2's MessageDialogButtons has no variant for 3+ custom labels.
     // Reject early and loudly so a future caller discovers the problem immediately
@@ -2000,9 +2136,7 @@ async fn show_message_box(
 
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let mut builder = app
-        .dialog()
-        .message(message)
+    let mut builder = message_dialog_for(&app, message)
         .title(options.title)
         .kind(kind);
 
@@ -2051,6 +2185,93 @@ fn confirm_close(
     Ok(())
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CLOSE WATCHDOG
+   Every close is handed to the page, which saves and then calls
+   confirm_close. A page that is hung, or whose web process died, can never
+   answer — and the frameless window offers no other way out. The page
+   acknowledges a close request at once (close_request_ack, native_api.js);
+   if no acknowledgement arrives within CLOSE_ACK_TIMEOUT, or the page
+   reports that its close flow failed (close_flow_failed), the user is
+   asked here in Rust, which does not depend on the page. Only an explicit
+   click on the force button closes: Enter picks the first (safe) button,
+   and Escape / the dialog's own close button report plain Cancel (rfd),
+   which keeps the window. Mirrors electron/main.js.
+══════════════════════════════════════════════════════════════════════════ */
+const CLOSE_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn arm_close_watchdog(app: AppHandle, generation: u64) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(CLOSE_ACK_TIMEOUT).await;
+        let answered = app.state::<CloseWatch>()
+            .acked.load(std::sync::atomic::Ordering::SeqCst) >= generation;
+        let closing = *app.state::<CloseAllowed>().0.lock().unwrap_or_else(|p| p.into_inner());
+        if answered || closing {
+            return;
+        }
+        ask_force_close(
+            &app,
+            "Revery Notebook is not responding",
+            "The editor did not answer the close request. Your text was last saved by \
+             autosave and a crash backup is kept, but typing from the last few seconds \
+             may be lost if you force close."
+                .to_string(),
+            "Keep waiting",
+            "Force close",
+        );
+    });
+}
+
+fn ask_force_close(app: &AppHandle, title: &str, message: String, keep_label: &str, force_label: &str) {
+    use std::sync::atomic::Ordering::SeqCst;
+    use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogKind, MessageDialogResult};
+
+    if app.state::<CloseWatch>().dialog_open.swap(true, SeqCst) {
+        return; // a question is already on screen
+    }
+    let app2 = app.clone();
+    let force = force_label.to_string();
+    message_dialog_for(app, message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(keep_label.to_string(), force.clone()))
+        .show_with_result(move |result| {
+            app2.state::<CloseWatch>().dialog_open.store(false, SeqCst);
+            let forced = matches!(&result, MessageDialogResult::Custom(label) if *label == force);
+            if forced {
+                *app2.state::<CloseAllowed>().0.lock().unwrap_or_else(|p| p.into_inner()) = true;
+                if let Some(w) = app2.get_webview_window("main") {
+                    let _ = w.destroy();
+                }
+            }
+        });
+}
+
+/// The page received a close request and is handling it (sent by
+/// native_api.js before it runs the close flow). Disarms the watchdog.
+#[tauri::command]
+fn close_request_ack(watch: State<'_, CloseWatch>) {
+    let current = watch.requested.load(std::sync::atomic::Ordering::SeqCst);
+    watch.acked.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The page's close flow threw: the window would stay open with no normal
+/// way to close it. Ask whether to close anyway (default: keep it open).
+#[tauri::command]
+fn close_flow_failed(app: AppHandle, message: String) {
+    let detail: String = message.chars().take(500).collect();
+    ask_force_close(
+        &app,
+        "Revery Notebook could not close normally",
+        format!(
+            "An error stopped the normal close:\n{detail}\n\nClose anyway? Changes since the \
+             last autosave may be lost."
+        ),
+        "Keep open",
+        "Close anyway",
+    );
+}
 
 /// Start watching a file for external changes.
 /// Emits a 'file-changed' event to the frontend on modification.
@@ -2558,15 +2779,26 @@ fn split_name_ext(name: &str) -> (String, String) {
 /// Never overwrites: a colliding name auto-increments to "name (1).ext".
 /// Returns the file name actually written.
 #[tauri::command]
-fn copy_into_folder(
+async fn copy_into_folder(
     dest_dir: String,
     filename: String,
     content_b64: String,
     root_state: State<'_, RootPath>,
 ) -> Result<serde_json::Value, String> {
+    let root = get_root(&root_state)?;
+    tokio::task::spawn_blocking(move || copy_into_folder_blocking(dest_dir, filename, content_b64, root))
+        .await
+        .map_err(|e| format!("Background copy task failed: {e}"))?
+}
+
+fn copy_into_folder_blocking(
+    dest_dir: String,
+    filename: String,
+    content_b64: String,
+    root: PathBuf,
+) -> Result<serde_json::Value, String> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-    let root = get_root(&root_state)?;
     let dir = safe_path_inside(&dest_dir, &root)?;
     if !dir.is_dir() {
         return Err(format!("Destination is not a folder: {}", dir.display()));
@@ -2642,13 +2874,22 @@ fn copy_into_folder(
 /// may live anywhere; only the DESTINATION is jailed to the root. Never
 /// overwrites — collisions auto-increment to "name (1).ext".
 #[tauri::command]
-fn copy_path_into_folder(
+async fn copy_path_into_folder(
     src_path: String,
     dest_dir: String,
     root_state: State<'_, RootPath>,
 ) -> Result<serde_json::Value, String> {
     let root = get_root(&root_state)?;
+    tokio::task::spawn_blocking(move || copy_path_into_folder_blocking(src_path, dest_dir, root))
+        .await
+        .map_err(|e| format!("Background copy task failed: {e}"))?
+}
 
+fn copy_path_into_folder_blocking(
+    src_path: String,
+    dest_dir: String,
+    root: PathBuf,
+) -> Result<serde_json::Value, String> {
     let dir = safe_path_inside(&dest_dir, &root)?;
     if !dir.is_dir() {
         return Err(format!("Destination is not a folder: {}", dir.display()));
@@ -2746,14 +2987,22 @@ fn needs_webkit_sandbox_disable() -> bool {
 /// Called once at startup (deferred 5 s) so the renderer's crash-recovery
 /// check has time to consume recent backups before this runs.
 fn purge_old_volatile_files(app: &AppHandle) {
+    // The last opened file's backup is exempt: the renderer's boot recovery
+    // offers exactly that one, and this purge runs on a timer, not after it.
+    // Mirrors Electron's purgeOldVolatileFiles keep list.
+    let keep: Vec<String> = read_settings(app, &app.state::<SettingsLock>().0)
+        .ok()
+        .and_then(|v| v["lastOpenedFile"].as_str().map(|s| s.to_string()))
+        .into_iter()
+        .collect();
     // backup_dirs() only returns directories that passed their safety check —
     // never enumerate or delete inside a dir we don't own.
     for dir in backup_dirs(app) {
-        purge_backups_in(dir);
+        purge_backups_in(dir, &keep);
     }
 }
 
-fn purge_backups_in(volatile_dir: &Path) {
+fn purge_backups_in(volatile_dir: &Path, keep: &[String]) {
     let entries = match fs::read_dir(volatile_dir) {
         Ok(e)  => e,
         Err(_) => return,
@@ -2799,6 +3048,12 @@ fn purge_backups_in(volatile_dir: &Path) {
             continue; // Young enough — leave it alone.
         }
 
+        if let Some(op) = meta["originalPath"].as_str() {
+            if keep.iter().any(|k| k == op) {
+                continue; // Pending recovery offer — leave it alone.
+            }
+        }
+
         let _ = fs::remove_file(&meta_file);
         let _ = fs::remove_file(&data_file);
     }
@@ -2831,7 +3086,16 @@ struct VolatileBackupInfo {
 
 
 #[tauri::command]
-fn list_volatile_backups(app: AppHandle, prefix: String) -> Vec<VolatileBackupInfo> {
+async fn list_volatile_backups(app: AppHandle, prefix: String) -> Vec<VolatileBackupInfo> {
+    tokio::task::spawn_blocking(move || list_volatile_backups_blocking(&app, &prefix))
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("[revery] backup listing task failed: {e}");
+            Vec::new()
+        })
+}
+
+fn list_volatile_backups_blocking(app: &AppHandle, prefix: &str) -> Vec<VolatileBackupInfo> {
     if prefix.is_empty() {
         return Vec::new();
     }
@@ -2840,8 +3104,8 @@ fn list_volatile_backups(app: AppHandle, prefix: String) -> Vec<VolatileBackupIn
     // Merge every backup location, keeping only the newest entry per
     // originalPath (a file can have both a volatile and a durable snapshot).
     let mut by_path: HashMap<String, u64> = HashMap::new();
-    for dir in backup_dirs(&app) {
-        for info in list_backups_from(dir, &prefix) {
+    for dir in backup_dirs(app) {
+        for info in list_backups_from(dir, prefix) {
             let e = by_path.entry(info.original_path).or_insert(0);
             if info.ts > *e {
                 *e = info.ts;
@@ -2924,6 +3188,7 @@ tauri::Builder::default()
         /* ── Managed state ── */
         .manage(WatcherState::default())
         .manage(CloseAllowed(Mutex::new(false)))
+        .manage(CloseWatch::default())
         .manage(RootPath(Mutex::new(None)))
         .manage(SettingsLock(Mutex::new(())))
         /* ── Window close interception ── */
@@ -2939,8 +3204,12 @@ tauri::Builder::default()
                 let close_allowed = window.state::<CloseAllowed>();
                 if !*close_allowed.0.lock().unwrap_or_else(|p| p.into_inner()) {
                     api.prevent_close();
-                    // Signal the frontend
+                    // Signal the frontend, and arm the close watchdog: a page
+                    // that is hung or whose web process died never answers.
+                    let generation = window.state::<CloseWatch>()
+                        .requested.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                     let _ = window.emit("window-close-request", ());
+                    arm_close_watchdog(window.app_handle().clone(), generation);
                 }
             }
         })
@@ -2970,6 +3239,8 @@ tauri::Builder::default()
             list_system_fonts,
             show_message_box,
             confirm_close,
+            close_request_ack,
+            close_flow_failed,
             watch_file,
             unwatch_file,
             get_last_opened_file,
@@ -3395,6 +3666,102 @@ mod tests {
         assert_eq!(read_backup_from(&b, "/n.md").unwrap().0, "newer");
         delete_backup_from(&a, "/n.md");
         assert!(read_backup_from(&b, "/n.md").is_some(), "delete must be per-dir");
+    }
+
+    /* ── strict text read ──────────────────────────────────────────── */
+
+    #[test]
+    fn read_text_strict_refuses_non_utf8_and_leaves_file_alone() {
+        let dir = test_dir("read-strict");
+        let ansi = dir.join("ansi.txt");
+        let bytes = [0x48u8, 0xE5, 0x6C, 0x6C, 0xF6]; // "Hållö" in Windows-1252
+        fs::write(&ansi, bytes).unwrap();
+        assert_eq!(read_text_strict(&ansi).unwrap_err(), NOT_UTF8_MESSAGE);
+        assert_eq!(fs::read(&ansi).unwrap(), bytes, "refused file must be untouched");
+
+        let utf16 = dir.join("utf16.txt");
+        fs::write(&utf16, [0xFFu8, 0xFE, 0x48, 0x00, 0x69, 0x00]).unwrap();
+        assert_eq!(read_text_strict(&utf16).unwrap_err(), NOT_UTF8_MESSAGE);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_text_strict_keeps_bom_and_crlf() {
+        let dir = test_dir("read-bom");
+        let bom = dir.join("bom.md");
+        fs::write(&bom, b"\xEF\xBB\xBF# T\xC3\xA5\r\n").unwrap();
+        assert_eq!(read_text_strict(&bom).unwrap(), "\u{FEFF}# Tå\r\n");
+        assert!(read_text_strict(&dir.join("missing.md")).unwrap_err().starts_with("Read failed:"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /* ── rename target (case-only renames) ─────────────────────────── */
+
+    #[test]
+    fn rename_to_a_free_name_goes_where_asked() {
+        let dir = test_dir("rename-free");
+        fs::write(dir.join("a.md"), "A").unwrap();
+        let old = dir.join("a.md").canonicalize().unwrap();
+        let new = dir.canonicalize().unwrap().join("b.md");
+        let got = resolve_rename_target(&old, &new, &new.to_string_lossy()).unwrap();
+        assert_eq!(got, Some(new));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rename_never_targets_a_different_existing_file() {
+        // On this (case-sensitive) filesystem "Note.md" and "note.md" are
+        // two files: the second must never be overwritten.
+        let dir = test_dir("rename-clash");
+        fs::write(dir.join("Note.md"), "one").unwrap();
+        fs::write(dir.join("note.md"), "two").unwrap();
+        let old = dir.join("Note.md").canonicalize().unwrap();
+        let new = dir.join("note.md").canonicalize().unwrap();
+        assert!(resolve_rename_target(&old, &new, &new.to_string_lossy()).is_err());
+        // Nor any other existing file.
+        fs::write(dir.join("other.md"), "three").unwrap();
+        let other = dir.join("other.md").canonicalize().unwrap();
+        assert!(resolve_rename_target(&old, &other, &other.to_string_lossy()).is_err());
+        assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), "two");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn case_only_rename_of_the_same_file_targets_the_requested_spelling() {
+        // Simulates what a case-insensitive filesystem reports: the
+        // destination resolves to the SAME canonical path as the source.
+        let dir = test_dir("rename-case");
+        fs::write(dir.join("notes.md"), "x").unwrap();
+        let old = dir.join("notes.md").canonicalize().unwrap();
+        let requested = dir.canonicalize().unwrap().join("Notes.md");
+        let got = resolve_rename_target(&old, &old, &requested.to_string_lossy()).unwrap();
+        assert_eq!(got, Some(requested));
+        // Identical spelling: nothing to do.
+        assert_eq!(resolve_rename_target(&old, &old, &old.to_string_lossy()).unwrap(), None);
+        // Same file but a DIFFERENT name (not case-only): refused.
+        let elsewhere = dir.canonicalize().unwrap().join("renamed.md");
+        assert!(resolve_rename_target(&old, &old, &elsewhere.to_string_lossy()).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /* ── backup purge keep list ────────────────────────────────────── */
+
+    #[test]
+    fn purge_keeps_listed_paths_and_deletes_other_old_pairs() {
+        let dir = test_dir("purge-keep");
+        write_backup_to(&dir, "/n/keep.md", "k").unwrap();
+        write_backup_to(&dir, "/n/old.md", "o").unwrap();
+        write_backup_to(&dir, "/n/young.md", "y").unwrap();
+        // Age two pairs far past the 7-day limit (ts = 1 ms after epoch).
+        for p in ["/n/keep.md", "/n/old.md"] {
+            let meta = dir.join(format!("{}.meta.json", backup_key(p)));
+            fs::write(&meta, serde_json::json!({ "originalPath": p, "ts": 1u64 }).to_string()).unwrap();
+        }
+        purge_backups_in(&dir, &["/n/keep.md".to_string()]);
+        assert_eq!(read_backup_from(&dir, "/n/keep.md").unwrap().0, "k", "kept despite age");
+        assert!(read_backup_from(&dir, "/n/old.md").is_none(), "old pair purged");
+        assert_eq!(read_backup_from(&dir, "/n/young.md").unwrap().0, "y", "young pair kept");
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -3,7 +3,7 @@
    paths.js; this file adds the pieces that need sidebar state or the
    filesystem. */
 import { pendingNoteDir } from './state.js';
-import { mediaLinkMarkdown, baseNameOf } from './paths.js';
+import { mediaLinkMarkdown, baseNameOf, uniqueName } from './paths.js';
 import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
 
   /* File bytes → base64 in 32 KB chunks (fromCharCode arg-count limits).
@@ -101,48 +101,63 @@ import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
     let existingNames;
     try {
       const entries = await window.NativeAPI.readDirectory(targetDir);
-      existingNames = new Set(entries.map(e => e.name));
+      existingNames = entries.map(e => e.name);
     } catch {
       return `${targetDir}${sep}${name}`;
     }
-    if (!existingNames.has(name)) return `${targetDir}${sep}${name}`;
 
     const lastDot = name.lastIndexOf('.');
     const hasExt  = (type === 'file') && (lastDot > 0);
     const base    = hasExt ? name.substring(0, lastDot) : name;
     const ext     = hasExt ? name.substring(lastDot)    : '';
-    let counter   = 2;
-    while (existingNames.has(`${base}_${counter}${ext}`)) counter++;
-    return `${targetDir}${sep}${base}_${counter}${ext}`;
+    return `${targetDir}${sep}${uniqueName(existingNames, base, ext)}`;
   }
 
   /**
    * Build an auto-incremented path like "untitled.md", "untitled_2.md", …
-   * by peeking at the directory listing. Avoids overwriting existing files
-   * without asking.
+   * by peeking at the directory listing (collisions ignore case — see
+   * paths.uniqueName). `ignoreName`: the file being renamed, which does not
+   * count as taken (so a case-only rename keeps its requested spelling).
+   * The requested name is used exactly as given: it used to have a
+   * trailing "_<number>" stripped, which renamed a note titled
+   * "meeting_2024" to "meeting.md" and imported "notes_2023.md" as
+   * "notes.md".
    */
-  async function uniquePath(dir, baseName, ext) {
-    const sep  = (dir.endsWith('/') || dir.endsWith('\\')) ? '' : '/';
-    const base = baseName.replace(/_\d+$/, ''); // strip trailing _N before we start
+  async function uniquePath(dir, baseName, ext, ignoreName = null) {
+    const sep = (dir.endsWith('/') || dir.endsWith('\\')) ? '' : '/';
 
     let names;
     try {
       const entries = await window.NativeAPI.readDirectory(dir);
-      names = new Set(entries.map(e => e.name));
+      names = entries.map(e => e.name);
     } catch {
       /* Can't list the directory — return plain candidate and let
          createFile surface a useful OS error on collision. */
-      return `${dir}${sep}${base}.${ext}`;
+      return `${dir}${sep}${baseName}.${ext}`;
     }
-
-    /* Try plain name first, then base_2, base_3, … */
-    if (!names.has(`${base}.${ext}`)) return `${dir}${sep}${base}.${ext}`;
-    let counter = 2;
-    while (names.has(`${base}_${counter}.${ext}`)) counter++;
-    return `${dir}${sep}${base}_${counter}.${ext}`;
+    return `${dir}${sep}${uniqueName(names, baseName, '.' + ext, ignoreName)}`;
   }
 
 
+
+  /* Does `p` exist as a file? Answered from its parent directory listing,
+     NOT by reading the file: a read also fails for reasons that say
+     nothing about existence (not UTF-8, over the size cap, locked).
+     Returns true / false, or null when unknown (the listing failed, e.g.
+     the folder is outside the project root) — null must mean "do not act". */
+  async function fileExistsViaListing(p) {
+    if (typeof p !== 'string') return null;
+    const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+    if (i <= 0) return null;
+    const dir  = p.slice(0, i);
+    const name = p.slice(i + 1);
+    try {
+      const entries = await window.NativeAPI.readDirectory(dir);
+      return (entries || []).some((e) => e && e.name === name && e.type === 'file');
+    } catch (_) {
+      return null;
+    }
+  }
 
   async function scanBakOrphansIn(dir) {
     if (!dir) return [];
@@ -197,4 +212,5 @@ import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
   }
 
 export { stripMarkdownForPreview, getFileCategory, mediaMarkdown, setSidebarDragData, uniqueDestPath,
-         uniquePath, scanBakOrphansIn, reportBakOrphans, arrayBufferToBase64 };
+         uniquePath, scanBakOrphansIn, reportBakOrphans, arrayBufferToBase64,
+         fileExistsViaListing };

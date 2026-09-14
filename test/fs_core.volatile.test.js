@@ -153,6 +153,19 @@ describe('volatile backup lifecycle', () => {
     assert.equal(getVolatileContent(dir, noteB).content, 'young');
   });
 
+  test('purge never deletes a backup listed in keepPaths, however old', () => {
+    setVolatileContent(dir, noteA, 'pending recovery');
+    setVolatileContent(dir, noteB, 'old');
+    const now = Date.now();
+    setMetaTs(dir, noteA, now - WEEK_MS * 3);
+    setMetaTs(dir, noteB, now - WEEK_MS * 3);
+
+    purgeOldVolatileFiles(dir, WEEK_MS, now, [noteA]);
+
+    assert.equal(getVolatileContent(dir, noteA).content, 'pending recovery');
+    assert.equal(getVolatileContent(dir, noteB), null, 'unlisted old backup purged');
+  });
+
   test('purge keeps pairs with malformed meta (never delete when unsure)', () => {
     setVolatileContent(dir, noteA, 'text');
     const { metaFile, dataFile } = volatilePaths(dir, noteA);

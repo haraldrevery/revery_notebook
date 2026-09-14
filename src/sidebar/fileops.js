@@ -4,7 +4,8 @@ import { S, treeEl, docTitleEl, folderNameEl, btnOpenFolder, btnNewFile, btnNewF
          expandedDirs, selectedItems, _previewCache } from './state.js';
 import { showInputDialog, showConfirmDialog } from './dialogs.js';
 import { getFileCategory, mediaMarkdown, uniquePath, uniqueDestPath } from './helpers.js';
-import { saveActiveFile, markClean, scheduleAutoSave } from './save.js';
+import { saveActiveFile, markClean, scheduleAutoSave,
+         retargetActiveFile, waitForSaveChainIdle, rememberDiskContent } from './save.js';
 import { renderTree, updateMultiSelectHighlight, updateSelectedDirHighlight, highlightActiveFile } from './tree.js';
 import { openSidebar, switchFromMobileSidebar } from './panel.js';
 import { startWatchingFile } from './watcher.js';
@@ -35,6 +36,36 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
   ══════════════════════════════════════════════════════════════════ */
 
   const _dirOf = (p) => p.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+  const _n = (p) => String(p).replace(/\\/g, '/');
+
+  /* Apply `newText` to the editor buffer as small per-line changes instead
+     of one whole-document replacement, so the cursor, scroll position,
+     live-preview layout and find highlights outside the touched lines stay
+     put and the undo step is exactly the link edit. The rewriter never adds
+     or removes a line break; the fallback covers that anyway. Synchronous:
+     the caller passes the buffer's current text. */
+  function applyTextToEditor(oldText, newText) {
+    const a = oldText.split('\n');
+    const b = newText.split('\n');
+    const changes = [];
+    if (a.length === b.length) {
+      let pos = 0;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) changes.push({ from: pos, to: pos + a[i].length, insert: b[i] });
+        pos += a[i].length + 1;
+      }
+    } else {
+      let s = 0;
+      while (s < oldText.length && s < newText.length && oldText[s] === newText[s]) s++;
+      let e = 0;
+      while (e < oldText.length - s && e < newText.length - s
+             && oldText[oldText.length - 1 - e] === newText[newText.length - 1 - e]) e++;
+      changes.push({ from: s, to: oldText.length - e, insert: newText.slice(s, newText.length - e) });
+    }
+    if (!changes.length) return;
+    if (typeof window.applyEditorChanges === 'function') window.applyEditorChanges(changes);
+    else window.insertWithUndo(0, oldText.length, newText);
+  }
 
   async function updateLinksAfterPathChange(records, { confirm = true } = {}) {
     try {
@@ -49,28 +80,28 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
 
       const mapAbs = buildAbsMapper(records);
       const mapBack = buildAbsMapper(invertRecords(records));
-      const editorEl = document.getElementById('editor');
-      const activeNorm = S.activeFilePath ? S.activeFilePath.replace(/\\/g, '/') : null;
+      const isActivePath = (p) => !!S.activeFilePath && _n(S.activeFilePath) === _n(p);
 
+      /* PLAN — which files have links to update. The open note is read from
+         its BUFFER (the `editor` shim; the #editor element is CodeMirror's
+         <div> and has no value — reading that skipped the open note), other
+         files from disk. A file that cannot be read (e.g. not UTF-8) is
+         never touched. */
       const plans = [];
       for (const f of files) {
-        const postPath = f.path.replace(/\\/g, '/');
+        const postPath = _n(f.path);
         const prePath = mapBack(postPath) || postPath;
-        const isActive = activeNorm === postPath;
+        const opts = { fileDirBefore: _dirOf(prePath), fileDirAfter: _dirOf(postPath), mapAbs };
         let content;
-        if (isActive && editorEl) {
-          content = editorEl.value; // buffer may be dirtier than disk — use it
+        if (isActivePath(f.path)) {
+          content = editor.value;
         } else {
           try { content = await window.NativeAPI.readFile(f.path); } catch (_) { continue; }
         }
         if (typeof content !== 'string') continue;
-        const res = rewriteLinksInText(content, {
-          fileDirBefore: _dirOf(prePath),
-          fileDirAfter: _dirOf(postPath),
-          mapAbs,
-        });
+        const res = rewriteLinksInText(content, opts);
         if (res.changes > 0 && res.text !== content) {
-          plans.push({ path: f.path, isActive, text: res.text, changes: res.changes });
+          plans.push({ path: f.path, opts, changes: res.changes });
         }
       }
       if (!plans.length) return;
@@ -87,15 +118,27 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
         if (!ok) return;
       }
 
+      /* APPLY — recompute from each file's CURRENT content: the user may have
+         typed, or another program written, while the dialog was open.
+         Whatever is current receives exactly the link edits, nothing else.
+         (No watcher suppression: only files other than the open note are
+         written here, and the watcher only reacts to the open note.) */
       const errors = [];
       for (const p of plans) {
         try {
-          if (p.isActive && editorEl) {
-            window.insertWithUndo(0, editorEl.value.length, p.text);
-            if (typeof render === 'function') render();
+          if (isActivePath(p.path)) {
+            const cur = editor.value;
+            const res = rewriteLinksInText(cur, p.opts);
+            if (res.changes > 0 && res.text !== cur) {
+              applyTextToEditor(cur, res.text);
+              if (typeof render === 'function') render();
+            }
           } else {
-            S._suppressWatchUntil = Date.now() + 3000;
-            await window.NativeAPI.writeFile(p.path, p.text);
+            const cur = await window.NativeAPI.readFile(p.path);
+            const res = rewriteLinksInText(cur, p.opts);
+            if (res.changes > 0 && res.text !== cur) {
+              await window.NativeAPI.writeFile(p.path, res.text);
+            }
           }
         } catch (err) {
           errors.push(`${p.path.replace(/\\/g, '/').split('/').pop()}: ${err.message || err}`);
@@ -123,6 +166,47 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
     if (undoStack.length > MAX_UNDO) undoStack.shift();
   }
 
+  /* The stack stays private to this module; other modules ask through
+     this function. (save.js used to read `undoStack` directly — a name
+     that does not exist there, which the bundle turned into a global
+     lookup that threw on every sidebar Ctrl+Z.) */
+  function hasUndoOperations() {
+    return undoStack.length > 0;
+  }
+
+  /* ── The active file vs. rename/move operations ────────────────────── */
+
+  /** Is the active file one of `paths`, or inside one of them (folders)? */
+  function activeAffectedBy(paths) {
+    if (!S.activeFilePath) return false;
+    const a = _n(S.activeFilePath);
+    return paths.some((p) => { const n = _n(p); return a === n || a.startsWith(n + '/'); });
+  }
+
+  /** Before renaming/moving `paths`: when that includes the active file, let
+      its pending edits reach disk and any in-flight save finish first, so no
+      save can land on the OLD path after the rename (which recreated a file
+      under the old name). Under a "Keep my version" hold nothing is written
+      — the hold simply follows the file. Returns false when the flush
+      failed; the caller then aborts the operation. */
+  async function settleActiveFileBefore(paths) {
+    if (!activeAffectedBy(paths)) return true;
+    const held = !!S._conflictHoldPath && S._conflictHoldPath === S.activeFilePath;
+    if (S.isDirty && !held) return await saveActiveFile();
+    await waitForSaveChainIdle();
+    return true;
+  }
+
+  /** After `from` was renamed/moved to `to`: if the active file was `from`
+      or lived inside it, hand over to the save engine's single retarget. */
+  async function followActiveFile(from, to) {
+    if (!S.activeFilePath) return;
+    const a = _n(S.activeFilePath);
+    const f = _n(from);
+    if (a === f) await retargetActiveFile(S.activeFilePath, to);
+    else if (a.startsWith(f + '/')) await retargetActiveFile(S.activeFilePath, _n(to) + a.substring(f.length));
+  }
+
   /**
    * Reverse the most recent move or rename operation.
    * Works by calling renameNode in reverse order for each record.
@@ -136,31 +220,18 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       const op = undoStack.pop();
       const errors = [];
 
+      if (!(await settleActiveFileBefore(op.records.map((r) => r.newPath)))) {
+        undoStack.push(op); // the flush failed — keep the operation undoable
+        return;
+      }
+
       /* Reverse in reverse order so a multi-rename undoes cleanly */
       for (const { oldPath, newPath } of [...op.records].reverse()) {
         try {
           await window.NativeAPI.renameNode(newPath, oldPath);
 
           /* Keep internal state in sync */
-          if (S.activeFilePath) {
-            const normalNew    = newPath.replace(/\\/g, '/');
-            const normalOld    = oldPath.replace(/\\/g, '/');
-            const normalActive = S.activeFilePath.replace(/\\/g, '/');
-            if (normalActive === normalNew) {
-              S.activeFilePath = oldPath;
-              await window.NativeAPI.setLastOpenedFile(oldPath);
-              startWatchingFile(oldPath);
-              if (docTitleEl) {
-                docTitleEl.value = oldPath.replace(/\\/g, '/').split('/').pop()
-                                         .replace(/\.(md|txt)$/, '');
-              }
-            } else if (normalActive.startsWith(normalNew + '/')) {
-              const rel = normalActive.substring(normalNew.length);
-              S.activeFilePath = normalOld + rel;
-              await window.NativeAPI.setLastOpenedFile(S.activeFilePath);
-              startWatchingFile(S.activeFilePath);
-            }
-          }
+          await followActiveFile(newPath, oldPath);
           if (S.selectedDirPath && S.selectedDirPath.replace(/\\/g, '/') === newPath.replace(/\\/g, '/')) {
             S.selectedDirPath = oldPath;
           }
@@ -203,9 +274,8 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
     if (S._operationLock || !items.length || !targetDir) return;
     S._operationLock = true;
     try {
-      if (S.isDirty && S.activeFilePath) {
-        const saved = await saveActiveFile();
-        if (!saved) return; // Save failed — abort move to protect data
+      if (!(await settleActiveFileBefore(items.map((it) => it.path)))) {
+        return; // Save failed — abort move to protect data
       }
 
       const normalTarget = targetDir.replace(/\\/g, '/');
@@ -234,24 +304,7 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
         }
 
         /* ── Update internal state if the active file was moved ── */
-        if (S.activeFilePath) {
-          const normalActive = S.activeFilePath.replace(/\\/g, '/');
-          if (normalActive === normalSrc) {
-            S.activeFilePath = destPath;
-            await window.NativeAPI.setLastOpenedFile(destPath);
-            startWatchingFile(destPath);
-            if (docTitleEl) {
-              const base = destPath.replace(/\\/g, '/').split('/').pop();
-              docTitleEl.value = base.replace(/\.(md|txt)$/, '');
-            }
-          } else if (normalActive.startsWith(normalSrc + '/')) {
-            /* Active file is inside a moved folder */
-            const rel = normalActive.substring(normalSrc.length);
-            S.activeFilePath = destPath.replace(/\\/g, '/') + rel;
-            await window.NativeAPI.setLastOpenedFile(S.activeFilePath);
-            startWatchingFile(S.activeFilePath);
-          }
-        }
+        await followActiveFile(srcPath, destPath);
 
         /* ── Update S.selectedDirPath if it was inside the moved item ── */
         if (S.selectedDirPath) {
@@ -331,6 +384,8 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       const safeBase = baseName.trim().replace(/[/\\?%*:|"<>]/g, '_');
       if (!safeBase) return;
 
+      if (!(await settleActiveFileBefore(paths))) return;
+
       const renamedRecords = [];
       for (let i = 0; i < paths.length; i++) {
         const srcPath = paths[i];
@@ -354,24 +409,7 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
           renamedRecords.push({ oldPath: srcPath, newPath });
           
           /* ── Update active file if it was the renamed item OR inside it ── */
-          if (S.activeFilePath) {
-            const normalActive = S.activeFilePath.replace(/\\/g, '/');
-            const normalSrc    = srcPath.replace(/\\/g, '/');
-            const normalNew    = newPath.replace(/\\/g, '/');
-
-            if (normalActive === normalSrc) {
-              S.activeFilePath = newPath;
-              markClean();
-              await window.NativeAPI.setLastOpenedFile(newPath);
-              if (docTitleEl) docTitleEl.value = newName.replace(/\.(md|txt)$/, '');
-              startWatchingFile(newPath);
-            } else if (normalActive.startsWith(normalSrc + '/')) {
-              const rel = normalActive.substring(normalSrc.length);
-              S.activeFilePath = normalNew + rel;
-              await window.NativeAPI.setLastOpenedFile(S.activeFilePath);
-              startWatchingFile(S.activeFilePath);
-            }
-          }
+          await followActiveFile(srcPath, newPath);
 
           /* ── Update selected target dir if it was inside the renamed item ── */
           if (S.selectedDirPath) {
@@ -602,6 +640,7 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
 
     S.activeFilePath = filePath;
     markClean();
+    rememberDiskContent(content);
     await window.NativeAPI.setLastOpenedFile(filePath);
 
     /* Update doc-title */
@@ -731,30 +770,13 @@ async function renameNode(nodePath, type) {
       parts[parts.length - 1] = finalName;
       const newPath = parts.join('/');
 
+      if (!(await settleActiveFileBefore([nodePath]))) return;
+
       try {
         await window.NativeAPI.renameNode(nodePath, newPath);
         pushUndo({ type: 'rename', records: [{ oldPath: nodePath, newPath }] });
 
-        if (S.activeFilePath) {
-          const normalActive = S.activeFilePath.replace(/\\/g, '/');
-          const normalOld    = nodePath.replace(/\\/g, '/');
-          const normalNew    = newPath.replace(/\\/g, '/');
-
-          if (normalActive === normalOld) {
-            S.activeFilePath = newPath;
-            markClean();
-            await window.NativeAPI.setLastOpenedFile(newPath);
-            if (docTitleEl) {
-              docTitleEl.value = finalName.replace(/\.(md|txt)$/, '');
-            }
-            startWatchingFile(newPath);
-          } else if (normalActive.startsWith(normalOld + '/')) {
-            const rel = normalActive.substring(normalOld.length);
-            S.activeFilePath = normalNew + rel;
-            await window.NativeAPI.setLastOpenedFile(S.activeFilePath);
-            startWatchingFile(S.activeFilePath);
-          }
-        }
+        await followActiveFile(nodePath, newPath);
 
         if (S.selectedDirPath) {
           const normalSel = S.selectedDirPath.replace(/\\/g, '/');
@@ -773,6 +795,12 @@ async function renameNode(nodePath, type) {
         await updateLinksAfterPathChange([{ oldPath: nodePath, newPath }]);
       } catch (err) {
         console.error('[Sidebar] renameNode failed:', err);
+        /* Tell the user — a failed rename used to do nothing visible. */
+        await window.NativeAPI.showMessageBox({
+          type: 'error', title: window.t('Rename Failed'),
+          message: window.t('Could not rename file to "{name}".').replace('{name}', finalName),
+          detail: String(err),
+        }).catch(() => {});
       }
     } finally {
       S._operationLock = false;
@@ -914,7 +942,7 @@ async function promptOpenFolder() {
     }
   }
 
-export { pushUndo, undoLastOperation, moveNodes, renameSelectedNodes,
+export { pushUndo, hasUndoOperations, undoLastOperation, moveNodes, renameSelectedNodes,
          deleteSelectedNodes, openMediaFile, openUnsupportedFile, openFile,
          createNewFile, createNewFolder, renameNode, deleteNode,
          openFolder, promptOpenFolder };

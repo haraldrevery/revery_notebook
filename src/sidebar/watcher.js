@@ -1,48 +1,26 @@
 /* watcher.js — external-change watcher for the active file. */
-import { S, SUPPRESS_MS } from './state.js';
-import { _enqueueDiskOp, cancelPendingAutoSave, markClean, writeDurableSnapshot } from './save.js';
-import { uniquePath } from './helpers.js';
+import { S } from './state.js';
+import { _enqueueDiskOp, cancelPendingAutoSave, markClean, writeDurableSnapshot,
+         rememberDiskContent, setAutosaveHold, clearAutosaveHold,
+         scheduleAutoSave } from './save.js';
+import { normalizeEol } from './eol.js';
+import { uniquePath, fileExistsViaListing } from './helpers.js';
 import { renderTree } from './tree.js';
 
   let _watchedPath = null;
 
 function startWatchingFile(filePath) {
     if (_watchedPath) {
-      window.NativeAPI.unwatchFile(_watchedPath);
+      Promise.resolve(window.NativeAPI.unwatchFile(_watchedPath)).catch(() => {});
       _watchedPath = null;
     }
 
     if (!filePath) return;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    window.NativeAPI.watchFile(filePath, async (eventType) => {
-      /* ── Quick rejects (no lock) ──────────────────────────────────────
-         These checks run synchronously in the watcher's microtask. They
-         are pre-filters; the verify op below re-checks the time-sensitive
-         conditions inside the lock to handle races.                      */
+    Promise.resolve(window.NativeAPI.watchFile(filePath, async (eventType) => {
+      /* ── Quick rejects (no lock) ─────────────────────────────────────── */
       if (eventType !== 'modify') return;
       if (filePath !== S.activeFilePath) return;
-      if (Date.now() < S._suppressWatchUntil) return;
 
       /* If we are already inside the dialog flow for an earlier event,
          additional events from the external program are coalesced into
@@ -50,27 +28,16 @@ function startWatchingFile(filePath) {
          writes would stack multiple dialogs. */
       if (S._externalChangeInProgress) return;
 
-      /* Synchronously cancel any pending autosave so a save can't enqueue
-         on _diskOpsChain between this point and the verify op below. The
-         verify op also sets S._externalChangeInProgress inside the lock, so
-         any save that DOES enqueue concurrently will see that flag and
-         bail; this clearTimeout is just an optimization to avoid doing
-         that work in the common case. */
-      cancelPendingAutoSave();
-
-      /* ── Verify under lock ────────────────────────────────────────────
-         Reading disk and setting S._externalChangeInProgress happens in
-         the same lock op. Saves enqueued AFTER us in the chain see the
-         flag and bail. Saves IN-FLIGHT when we entered the lock-queue
-         finished their writeFile first; their S._suppressWatchUntil set
-         inside the same lock means we re-detect it and short-circuit
-         (so we don't fire a false-positive dialog after our own save).  */
-      let diskContent;
+      /* ── Verify under the disk lock ───────────────────────────────────
+         Saves write AND record the on-disk text (S._diskBaseline) inside
+         the same lock, so when this runs every earlier save is on disk and
+         recorded. Comparing the disk with that record tells our own writes
+         (and touches that changed nothing) from real external changes
+         exactly — there is no time window in which another program's
+         change could be ignored and then overwritten by the next autosave. */
+      let verdict;
       try {
-        diskContent = await _enqueueDiskOp(async () => {
-          // A save that ran just ahead of us in the chain may have set
-          // S._suppressWatchUntil — re-check inside the lock.
-          if (Date.now() < S._suppressWatchUntil) return null;
+        verdict = await _enqueueDiskOp(async () => {
           // The user may have switched files while we waited in the queue.
           if (filePath !== S.activeFilePath) return null;
 
@@ -78,33 +45,69 @@ function startWatchingFile(filePath) {
           try {
             content = await window.NativeAPI.readFile(filePath);
           } catch (readErr) {
+            const exists = await fileExistsViaListing(filePath);
+            if (exists === false) return { kind: 'missing' };
+            if (exists === true && /not valid UTF-8/.test(String(readErr))) return { kind: 'unreadable' };
+            // Locked or transient: the next change event checks again.
             console.warn('[Sidebar] Could not verify external change content:', readErr);
             return null;
           }
-          // Compare AGAINST editor.value snapshot taken inside the lock.
-          // No save can interleave between this read and this compare.
-          if (content === editor.value) return null;
+
+          // Exactly what we last read or wrote: our own write, or a no-op touch.
+          if (S._diskBaseline !== null && content === S._diskBaseline) return { kind: 'same' };
+          // Disk equals the buffer (e.g. Save As over this very file): in sync.
+          if (normalizeEol(content) === editor.value) {
+            rememberDiskContent(content);
+            return { kind: 'same' };
+          }
 
           // Real external change. Set the flag here, inside the lock,
           // so any save behind us in the chain bails on its own check.
           S._externalChangeInProgress = true;
-          return content;
+          return { kind: 'changed' };
         });
       } catch (err) {
-        // The lock op itself rejected (unexpected — readFile errors are
-        // caught above and return null). Be defensive.
+        // The lock op itself rejected (unexpected — read errors are handled
+        // above). Be defensive.
         console.warn('[Sidebar] verify lock op rejected:', err);
         return;
       }
 
-      if (diskContent === null) return; // false alarm; no flag was set
+      if (!verdict) return;
 
-      /* ── User dialog (OUTSIDE the lock) ───────────────────────────────
+      if (verdict.kind === 'same') {
+        /* The file is back exactly as we know it: a hold that existed only
+           because it had vanished or become unreadable is over. */
+        if (S._conflictHoldPath === filePath
+            && (S._holdReason === 'missing' || S._holdReason === 'unreadable')) {
+          clearAutosaveHold();
+          if (S.isDirty) scheduleAutoSave();
+        }
+        return;
+      }
+
+      if (verdict.kind === 'missing' || verdict.kind === 'unreadable') {
+        /* Deleted or moved by another program, or rewritten in an encoding
+           the editor cannot read. Autosave would recreate the file, or
+           overwrite what the other program left: pause it for this file
+           (Ctrl+S / Save As still save) and snapshot the buffer — which may
+           now be the only copy — to the reboot-safe slot. No modal dialog:
+           a sync tool that replaces the file a moment later is simply seen
+           by the next event. */
+        cancelPendingAutoSave();
+        setAutosaveHold(filePath, verdict.kind);
+        writeDurableSnapshot(filePath, editor.value);
+        return;
+      }
+
+      /* ── verdict 'changed': ask the user (OUTSIDE the lock) ────────────
          The dialog could take minutes to resolve. Holding the lock that
          long would block legitimate disk ops on other code paths. The
          S._externalChangeInProgress flag (set above, inside the lock) is
-         what keeps saves out — not lock holding. The finally block
-         below clears the flag once the dialog flow is done.            */
+         what keeps saves out — not lock holding. The finally block below
+         clears the flag once the dialog flow is done.                  */
+      cancelPendingAutoSave();
+      let resolved = false; // true once the editor holds the disk version again
       try {
         const dialogButtons = S.isDirty
           ? ['Reload from disk', 'Save my version & reload', 'Keep my version']
@@ -120,7 +123,7 @@ function startWatchingFile(filePath) {
           message: `"${filePath.replace(/\\/g, '/').split('/').pop()}" was modified by another program.`,
           detail: S.isDirty
             ? 'You have unsaved changes. "Reload from disk" discards them. "Save my version & reload" writes your unsaved edits to a new file alongside the original, then loads the latest disk version. "Keep my version" leaves the editor untouched and pauses auto-save for this file — the disk keeps the external version until you save manually (Ctrl+S), switch files, or close (which writes your version).'
-            : 'Do you want to reload the latest version?',
+            : 'Do you want to reload the latest version? "Keep my version" leaves the editor as it is and pauses auto-save for this file until you save it (Ctrl+S).',
         });
 
         const choice = dialogButtons[result.response];
@@ -142,7 +145,9 @@ function startWatchingFile(filePath) {
               }
               S._replaceGeneration++;
               markClean();
+              rememberDiskContent(fresh);
             });
+            resolved = true;
           } catch (err) {
             console.error('[Sidebar] reload after external change failed:', err);
           }
@@ -195,6 +200,7 @@ function startWatchingFile(filePath) {
                 }
                 S._replaceGeneration++;
                 markClean();
+                rememberDiskContent(fresh);
               } catch (err) {
                 reloadErr = err;
                 throw err; // exit the lock op; outer catch shows partial-success message
@@ -216,7 +222,7 @@ function startWatchingFile(filePath) {
                 detail: String(copyErr) + '\n\nYour unsaved content is still in the editor; the disk version was NOT loaded. You can copy your work elsewhere or try again.',
                 buttons: ['OK'],
               }).catch(() => {});
-              return; // finally still runs, clearing the flag
+              return; // finally still runs, pausing autosave for this file
             }
 
             // copyOk && reloadErr — partial success.
@@ -233,6 +239,7 @@ function startWatchingFile(filePath) {
           }
 
           /* Lock op succeeded: copy is on disk and editor was swapped. */
+          resolved = true;
           window.NativeAPI.deleteVolatileContent(filePath).catch(() => {});
 
           if (typeof renderTree === 'function') {
@@ -248,33 +255,33 @@ function startWatchingFile(filePath) {
             buttons: ['OK'],
           }).catch(() => {});
         }
-        
+
       } finally {
         S._externalChangeInProgress = false;
-        /* If we leave this flow still dirty, the user either chose "Keep my
-           version" or a copy/reload step failed — in every such case the
-           disk holds content the editor does not, and background autosave
-           would silently destroy it (the exact behavior the dialog promised
-           NOT to do). Hold autosave for this file; explicit saves lift it. */
-        if (S.isDirty) {
-          S._conflictHoldPath = filePath;
-          /* With autosave suspended, the temp-dir crash backup (RAM-backed
-             tmpfs on modern Linux) is the only copy of the user's version —
-             snapshot it to the durable, reboot-safe slot as well. The save
-             engine keeps mirroring there while the hold lasts. */
+        /* Unless the editor now shows the disk version, the disk holds
+           content the editor does not: "Keep my version" (also Escape), or
+           a copy/reload step that failed. Background autosave would
+           silently destroy the other program's version — so pause it for
+           this file, ALSO when the buffer had no unsaved edits (typing
+           afterwards used to overwrite the external version unasked), and
+           snapshot the buffer (the only copy of the user's version) to the
+           durable, reboot-safe slot. An explicit save lifts the hold. */
+        if (!resolved && S.activeFilePath === filePath) {
+          setAutosaveHold(filePath, 'conflict');
           writeDurableSnapshot(filePath, editor.value);
         }
-      } });
-           
-
-
-
-
-
-
-
-
-
+      }
+    })).catch((err) => {
+      /* No watcher (e.g. the OS limit on watched folders is reached, or a
+         network share without change notifications): say so instead of
+         failing silently — changes by other programs go unnoticed. */
+      console.warn('[Sidebar] Could not watch file for external changes:', err);
+      if (typeof window.showStatusWarning === 'function') {
+        window.showStatusWarning('watch-failed',
+          window.t('Changes made to this file by other programs cannot be detected right now.'),
+          { priority: 15, ttl: 8000 });
+      }
+    });
 
     _watchedPath = filePath;
   }

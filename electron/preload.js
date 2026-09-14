@@ -84,7 +84,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onWindowClose: (callback) => {
     /* Remove any previously registered listener to avoid stacking */
     ipcRenderer.removeAllListeners('window:close-request');
-    ipcRenderer.on('window:close-request', () => callback());
+    ipcRenderer.on('window:close-request', () => {
+      /* Acknowledge at once: tells the main process's close watchdog that
+         the page is alive and handling the request (a hung or dead page
+         cannot). Then run the close flow; if it throws, report it so the
+         main process can offer to close anyway instead of leaving a
+         frameless window that cannot be closed. */
+      ipcRenderer.send('window:close-ack');
+      const report = (err) =>
+        ipcRenderer.send('window:close-failed', String((err && err.message) || err));
+      let result;
+      try {
+        result = callback();
+      } catch (err) {
+        report(err);
+        return;
+      }
+      if (result && typeof result.then === 'function') result.then(null, report);
+    });
   },
 
   confirmClose: () =>
