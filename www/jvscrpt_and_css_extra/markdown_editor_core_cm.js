@@ -712,6 +712,7 @@ In the upper right corner, settings can be personalized. You can adjust the vari
 More information, click the ½ logo in the center top of the screen.
 
 ---
+
 ###### - Harald Revery
 `;
   }
