@@ -551,9 +551,12 @@ function applyUiSizeProseCompensation() {
   const inv    = (1 / (uiSize / 100)).toFixed(4);
   const tScale = (previewTextSize / 100).toFixed(4);
   /* .lp-render is the live preview's rendered-block scope: it must get
-     the exact same compensation or its blocks drift from the preview. */
+     the exact same compensation or its blocks drift from the preview.
+     --lp-prose-size exposes the same base to the live preview's raw
+     lines, whose quote/list spacing mirrors em-sized prose rules. */
   styleEl.textContent =
-    `:is(#preview, .lp-render) .prose.prose-lg { font-size: calc(1.125rem * ${inv} * ${tScale}); }`;
+    `:is(#preview, .lp-render) .prose.prose-lg { font-size: calc(1.125rem * ${inv} * ${tScale}); }\n` +
+    `:root { --lp-prose-size: calc(1.125rem * ${inv} * ${tScale}); }`;
 }
 
 /* Apply reader mode padding: constrains the prose content width so text

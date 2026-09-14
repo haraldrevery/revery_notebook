@@ -86,7 +86,9 @@
   };
   const press   = async (x, y, opts) => { mouse('mousedown', x, y, opts); await sleep(200); await settle(); };
   const moveTo  = async (x, y, opts) => { mouse('mousemove', x, y, opts); await sleep(120); };
-  const release = async (x, y, opts) => { mouse('mouseup', x, y, Object.assign({}, opts, { buttons: 0 })); await sleep(120); };
+  /* A click's block reveals on RELEASE (the layout is frozen while the
+     button is down), so settle the measure cycle that applies it. */
+  const release = async (x, y, opts) => { mouse('mouseup', x, y, Object.assign({}, opts, { buttons: 0 })); await sleep(120); await settle(); };
   /* Screen top of a document line (drawn raw lines; blank lines between
      blocks are raw in both states, so they measure a block's top edge). */
   const lineTop = (n) => { const c = view.coordsAtPos(view.state.doc.line(n).from); return c ? c.top : null; };
@@ -134,13 +136,13 @@
     if (p) {
       const aboveTop = lineTop(2);
       await press(p.x, p.y);
+      await release(p.x, p.y);
       const span = srcSpan('first paragraph', 'words');
       R.clickWord.revealed = !widgetWith('bold words') && cmText().includes('**bold words**');
       R.clickWord.onLine = lineOf(main().head).text.startsWith('first paragraph');
       R.clickWord.inWord = within(main().head, span);
       R.clickWord.collapsed = main().empty;
       R.clickWord.topKept = kept(aboveTop, lineTop(2));
-      await release(p.x, p.y);
     }
   }
 
@@ -199,9 +201,32 @@
       R.clickWrappedRow.lowerRow = p.y > wrapRect.top + 30;
       const aboveTop = lineTop(2);
       await press(p.x, p.y);
+      await release(p.x, p.y);
       R.clickWrappedRow.inWord = within(main().head, srcSpan('wrapped paragraph', 'w60'));
       R.clickWrappedRow.topKept = kept(aboveTop, lineTop(2));
-      await release(p.x, p.y);
+    }
+  }
+
+  /* E2. The layout never changes while the button is down: a click on a
+         paragraph whose raw form reflows (a link's URL, ** marks) keeps it
+         rendered until release, and a 2 px jitter meanwhile selects
+         nothing. On release it reveals with the cursor in the word. */
+  {
+    const JIT = 'lead line\n\nstart words [linked text](https://example.com/a/long/path/that/reflows/the/raw/form) then **strong words** and the target word here to click\n\nafter';
+    await setDoc(JIT);
+    const w = widgetWith('target word');
+    const p = w && wordPoint(w, 'target');
+    R.clickJitter = { found: !!p };
+    if (p) {
+      mouse('mousedown', p.x, p.y);
+      await sleep(120); await settle();
+      R.clickJitter.renderedWhilePressed = !!widgetWith('target word');
+      mouse('mousemove', p.x + 2, p.y + 1);
+      await sleep(80); await settle();
+      R.clickJitter.noSelection = main().empty;
+      await release(p.x + 2, p.y + 1);
+      R.clickJitter.revealedOnRelease = !widgetWith('target word') && cmText().includes('[linked text](');
+      R.clickJitter.inWord = main().empty && within(main().head, srcSpan('start words', 'target'));
     }
   }
 
@@ -209,11 +234,13 @@
   await setDoc(DOC);
   {
     const p = wordPoint(widgetWith('bold words'), 'first');
+    /* The target is measured on the RENDERED paragraph: the layout stays
+       as it is while the button is down. */
+    const q = wordPoint(widgetWith('bold words'), 'inside');
     R.dragFromWidget = { found: !!p };
     if (p) {
       await press(p.x, p.y);
       const target = srcSpan('first paragraph', 'inside');
-      const q = target ? posPoint(target.from + 3) : null;
       R.dragFromWidget.targetVisible = !!q;
       if (q) {
         await moveTo(q.x, q.y);
@@ -566,12 +593,17 @@
     }
   }
 
-  /* S. Revealing a block changes its height; the change goes BELOW it and
-        the line above keeps its place — for a block that is shorter raw
-        (a heading) and one that is taller raw (soft line breaks). */
-  const shiftCase = async (text, word) => {
+  /* S. A reveal that changes a block's height moves the side with LESS
+        visible text: the clicked block keeps its top edge when it sits low
+        on the screen (the change goes below) and its bottom edge when it
+        sits high (the change goes above). Soft-break lines are taller raw
+        than rendered by nature (three lines vs one joined row); a table
+        is shorter raw. */
+  const shiftCase = async (text, word, place) => {
     await setDoc(LONG, BLANK2);
     await scrollToText(text);
+    view.scrollDOM.scrollTop += place === 'low' ? -160 : 160;
+    await settle(); await settle();
     const w = widgetWith(text);
     const p = w && wordPoint(w, word);
     if (!p) return { found: false };
@@ -580,15 +612,209 @@
     const belowTop = lineTop(below);
     await press(p.x, p.y);
     await release(p.x, p.y);
+    await settle();
     return {
       found: true,
       revealed: !widgetWith(text),
-      belowMoved: Math.abs(lineTop(below) - belowTop) > 5,
       aboveKept: kept(aboveTop, lineTop(above)),
+      belowKept: kept(belowTop, lineTop(below)),
     };
   };
-  R.shiftHeading = await shiftCase('Section 2', 'Section');
-  R.shiftSoftLines = await shiftCase('soft2 line one', 'two');
+  R.shiftSoftLow = await shiftCase('soft2 line one', 'two', 'low');
+  R.shiftSoftHigh = await shiftCase('soft2 line one', 'two', 'high');
+  R.shiftTableLow = await shiftCase('c2', 'c2', 'low');
+
+  /* S2. A block taller than the screen (both edges off screen) keeps the
+         clicked ROW under the pointer instead of an edge. */
+  {
+    const tallLines = Array.from({ length: 90 }, (_, i) => `tall row ${i} soft text`);
+    const TALL = 'lead\n\n' + tallLines.join('\n') + '\n\nafter';
+    await setDoc(TALL);
+    await scrollToText('tall row 45');
+    const w = widgetWith('tall row 45');
+    if (w) { // centre the MIDDLE of the block, so both of its edges are off screen
+      const r0 = w.getBoundingClientRect();
+      const s0 = view.scrollDOM.getBoundingClientRect();
+      view.scrollDOM.scrollTop += (r0.top + r0.height / 2) - (s0.top + s0.height / 2);
+      await settle(); await settle();
+    }
+    const p = w && wordPoint(w, 'row 45 ');
+    R.tallRowPin = { found: !!p };
+    if (p) {
+      const r = w.getBoundingClientRect();
+      const sr = view.scrollDOM.getBoundingClientRect();
+      R.tallRowPin.bothEdgesOff = r.top < sr.top && r.bottom > sr.bottom;
+      await press(p.x, p.y);
+      await release(p.x, p.y);
+      await settle();
+      const c = view.coordsAtPos(main().head);
+      R.tallRowPin.onRow = lineOf(main().head).text.startsWith('tall row 45');
+      R.tallRowPin.underPointer = !!c && Math.abs((c.top + c.bottom) / 2 - p.y) <= 3;
+    }
+  }
+
+  /* S3. Typing a character the parser merges into the block above (lazy
+         continuation) reveals that block without any click — the caret's
+         line stays where it is. */
+  {
+    const at = LONG.indexOf('soft2 line three') + 'soft2 line three'.length + 1;
+    await setDoc(LONG, at);
+    await scrollToText('soft2 line one');
+    const c0 = view.coordsAtPos(at);
+    view.dispatch(Object.assign(view.state.replaceSelection('x'), { userEvent: 'input.type' }));
+    await settle(); await settle();
+    const c1 = view.coordsAtPos(main().head);
+    R.typingMerge = { revealed: rawLine('soft2 line one'), caretKept: !!c0 && !!c1 && Math.abs(c1.top - c0.top) <= 1 };
+  }
+
+  /* S4. Arrow keys keep the caret's line in place when blocks switch:
+         leaving the revealed soft lines (taller raw) downward, the blank
+         line the caret lands on stays put while the lines re-render above
+         it; ArrowUp from under a tall paragraph at the top of the screen
+         lands on its last row without throwing the view up to its first
+         row (it jumped by the paragraph's height). */
+  const keyPress = async (k) => {
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    await sleep(120); await settle(); await settle();
+  };
+  {
+    const inside = LONG.indexOf('soft2 line three') + 3;
+    await setDoc(LONG, inside);
+    await scrollToText('soft2 line one');
+    const blankNo = lineOf(inside).number + 1;
+    const y0 = lineTop(blankNo);
+    await keyPress('ArrowDown');
+    R.arrowLeave = {
+      onBlank: lineOf(main().head).number === blankNo,
+      rerendered: !!widgetWith('soft2 line one'),
+      kept: kept(y0, lineTop(blankNo)),
+    };
+  }
+  {
+    const blank = LONG.indexOf('\n', LONG.indexOf('para2')) + 1;
+    await setDoc(LONG, blank);
+    view.dispatch({ effects: CM.EditorView.scrollIntoView(blank, { y: 'start', yMargin: 6 }) });
+    await settle(); await settle();
+    const st0 = view.scrollDOM.scrollTop;
+    await keyPress('ArrowUp');
+    const c = view.coordsAtPos(main().head);
+    const sr = view.scrollDOM.getBoundingClientRect();
+    const line = lineOf(main().head);
+    R.arrowUpTall = {
+      onPara: line.text.startsWith('para2'),
+      lastRow: !!c && Math.abs(c.top - view.coordsAtPos(line.to, -1).top) <= 1, // the row the line ends on
+      noJump: Math.abs(view.scrollDOM.scrollTop - st0) <= 2 * view.defaultLineHeight + 4,
+      caretVisible: !!c && c.top >= sr.top - 1 && c.bottom <= sr.bottom + 1,
+    };
+  }
+
+  /* X. Images and display math stay rendered UNDER their source while
+        their block is edited, and a formula's preview follows typing. */
+  {
+    /* A real file beside index.html: markdown-it rejects data: URLs, and
+       web mode resolves relative paths against the page. */
+    const MEDIA = ['intro', '', '![pic](image_assets/bg_1_web.jpg)', '', '$$', 'x = \\frac{a}{b}', '$$', '', 'end'].join('\n');
+    const loaded = async (sel) => {
+      for (let i = 0; i < 60; i++) {
+        const im = document.querySelector(sel);
+        if (im && im.complete && im.naturalHeight) break;
+        await sleep(50);
+      }
+      await settle(); await settle();
+    };
+    await setDoc(MEDIA);
+    await loaded('#editor .lp-render img');
+    const imgWidget = widgets().find((w) => w.querySelector('img') && !w.closest('.lp-below'));
+    const imgH = imgWidget ? imgWidget.querySelector('img').getBoundingClientRect().height : 0;
+    view.dispatch({ selection: { anchor: MEDIA.indexOf('![pic') + 2 } });
+    await loaded('#editor .lp-below img');
+    const below = document.querySelector('#editor .lp-below img');
+    R.mediaImage = {
+      rendered: imgH > 50,
+      sourceShown: Array.from(document.querySelectorAll('#editor .cm-line')).some((l) => l.textContent.startsWith('![pic](')),
+      previewBelow: !!below && Math.abs(below.getBoundingClientRect().height - imgH) <= 2,
+    };
+    view.dispatch({ selection: { anchor: MEDIA.indexOf('x = ') + 1 } });
+    await settle(); await settle();
+    const k1 = document.querySelector('#editor .lp-below .katex');
+    const t1 = k1 ? k1.textContent : null;
+    view.dispatch(Object.assign(view.state.replaceSelection('y'), { userEvent: 'input.type' }));
+    await settle(); await settle();
+    const k2 = document.querySelector('#editor .lp-below .katex');
+    R.mediaMath = {
+      previewBelow: !!k1,
+      followsTyping: !!k2 && k2.textContent !== t1,
+      imageBackToRendered: !!widgets().find((w) => w.querySelector('img') && !w.closest('.lp-below')),
+    };
+  }
+
+  /* Y. Rendered blocks CodeMirror has not drawn keep the height they were
+        measured at, instead of counting as one line each: reopening a long
+        note at its end gives the same document height as scrolling
+        through it. */
+  {
+    const LONG6 = [1, 2, 3, 4, 5, 6].map((n) => SECTION(n)).join('\n') + '\nend line';
+    const scrollThrough = async () => {
+      const sd = view.scrollDOM;
+      for (let y = 0; y <= sd.scrollHeight; y += Math.round(sd.clientHeight * 0.7)) {
+        sd.scrollTop = y;
+        /* Hidden window: force the measure that draws the newly visible
+           blocks, then the one that measures them. */
+        view.requestMeasure();
+        await sleep(30); await settle(); await settle();
+      }
+    };
+    await setDoc(LONG6, BLANK2);
+    await scrollThrough();
+    replaceEditorContent(LONG6);
+    view.dispatch({ selection: { anchor: LONG6.length }, effects: CM.EditorView.scrollIntoView(LONG6.length, { y: 'end' }) });
+    await settle(); await settle();
+    const h0 = view.contentHeight;
+    await scrollThrough();
+    R.heightEstimate = { drift: Math.round(Math.abs(view.contentHeight - h0)), total: Math.round(view.contentHeight) };
+  }
+
+  /* U. The block being edited keeps its rendered geometry: raw height ==
+        rendered height (±2 px) for headings, a tight and a nested list, a
+        one-line quote and a wrapped paragraph — at two text sizes. */
+  const PARITY = [
+    'intro line', '',
+    '# One', '', '## Two', '', '### Three', '',
+    '- tight alpha', '- tight beta', '- tight gamma', '',
+    'a paragraph between the two lists', '',
+    '- outer one', '  - inner one', '  - inner two', '- outer two', '',
+    '> a one line quote', '',
+    'wrapped parity ' + 'filler words '.repeat(40).trim(), '',
+    'tail line',
+  ].join('\n');
+  const parityRun = async () => {
+    const out = {};
+    const blank = PARITY.indexOf('\n') + 1;
+    await setDoc(PARITY, blank);
+    for (const [key, text] of [['h1', '# One'], ['h2', '## Two'], ['h3', '### Three'], ['list', '- tight alpha'],
+      ['nested', '- outer one'], ['quote', '> a one line quote'], ['para', 'wrapped parity']]) {
+      const from = PARITY.indexOf(text);
+      const d = view.state.doc;
+      let n = d.lineAt(from).number;
+      while (n < d.lines && d.line(n + 1).text !== '') n++;
+      const to = d.line(n).to;
+      view.dispatch({ selection: { anchor: blank }, effects: CM.EditorView.scrollIntoView(from, { y: 'center' }) });
+      await settle(); await settle();
+      const w = widgets().find((x) => { try { return view.posAtDOM(x) === from; } catch (_) { return false; } });
+      const rendered = w ? w.getBoundingClientRect().height : NaN;
+      view.dispatch({ selection: { anchor: from + 1 } });
+      await settle(); await settle();
+      const raw = view.lineBlockAt(to).bottom - view.lineBlockAt(from).top;
+      out[key] = Math.round((raw - rendered) * 10) / 10;
+    }
+    return out;
+  };
+  R.rawParity = await parityRun();
+  window.setPreviewTextSize(100);
+  await sleep(200);
+  R.rawParitySmall = await parityRun();
+  window.setPreviewTextSize(140);
+  await sleep(200);
 
   /* T. The block being edited re-renders when another block below it is
         clicked: the clicked block keeps its place although the content

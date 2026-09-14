@@ -2288,6 +2288,14 @@ body.live-preview-active #editor .cm-content {
 body.live-preview-active #editor .cm-scroller {
   justify-content: center;
 }
+/* Raw lines wrap at the SAME width as rendered blocks. CodeMirror's base
+   theme pads every .cm-line 6px left / 2px right; a rendered <p> has no
+   padding, so a revealed paragraph wrapped 8px narrower than it rendered —
+   words jumped rows and a long paragraph grew a row on every click.   */
+body.live-preview-active #editor .cm-line {
+  padding-left: 0;
+  padding-right: 0;
+}
 
 /* ── v2 rendered blocks ────────────────────────────────────────────────
    Each non-active top-level markdown block is a widget whose HTML comes
@@ -2401,6 +2409,77 @@ body.live-preview-active #editor-pane {
   font-family: var(--font-mono, monospace);
   font-size: 0.85em;
   opacity: 0.55;
+}
+
+/* ── The block being edited keeps its rendered geometry ────────────────
+   Revealing a block swaps its rendering for raw lines, and every px of
+   height that differs moves the text around it. So the raw lines of the
+   block being edited (classes set by buildBlocks in
+   markdown_editor_livepreview.js) mirror the rendered block's box: a
+   heading's size, line-height, case and alignment; a quote's bar, indent
+   and paragraph margins; a list's item spacing and text indent, with the
+   markers hung inside that indent so wrapped rows start where rendered
+   text does; paragraph justification. Values mirror the heading scale
+   near the top of this file and the prose-lg rules (em of the text size,
+   or of --lp-prose-size, the prose-lg base set in menus.js). The live
+   preview E2E asserts raw == rendered height for each kind.           */
+body.live-preview-active #editor .cm-line.lp-raw-h1 { font-size: calc(var(--text-body) * 2.6);  line-height: 1; }
+body.live-preview-active #editor .cm-line.lp-raw-h2 { font-size: calc(var(--text-body) * 2);    line-height: 1.3333333; }
+body.live-preview-active #editor .cm-line.lp-raw-h3 { font-size: calc(var(--text-body) * 1.5);  line-height: 1.5; }
+body.live-preview-active #editor .cm-line.lp-raw-h4 { font-size: calc(var(--text-body) * 1.2);  line-height: 1.5555556; }
+body.live-preview-active #editor .cm-line.lp-raw-h5 { font-size: calc(var(--text-body) * 1.05); line-height: 1.5555556; }
+body.live-preview-active #editor .cm-line.lp-raw-h6 { font-size: calc(var(--text-body) * 0.95); line-height: 1.5; }
+body.live-preview-active #editor .cm-line:is(.lp-raw-h1, .lp-raw-h2, .lp-raw-h3, .lp-raw-h4, .lp-raw-h5, .lp-raw-h6) {
+  text-transform: uppercase;
+}
+body.center-headers-active.live-preview-active #editor .cm-line:is(.lp-raw-h1, .lp-raw-h2, .lp-raw-h3, .lp-raw-h4, .lp-raw-h5, .lp-raw-h6) {
+  text-align: center;
+}
+body.live-preview-active #editor .cm-line.lp-raw-p { text-align: justify; }
+body.live-preview-active #editor .cm-line.lp-raw-quote {
+  --lp-hang: var(--lp-prose-size, 1.125rem);
+  position: relative;
+  padding-left: calc(0.25rem + var(--lp-hang)); /* bar + the blockquote's indent */
+  font-style: italic;
+  text-align: justify;
+}
+/* The bar spans the text rows only, like the rendered blockquote, whose
+   paragraph margins sit outside it: a pseudo-element that stops at the
+   first/last line's padding (a border would run through it). */
+body.live-preview-active #editor .cm-line.lp-raw-quote::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0.25rem;
+  background: var(--border-md);
+}
+body.live-preview-active #editor .cm-line.lp-raw-quote-first { padding-top: 1.3333333em; }
+body.live-preview-active #editor .cm-line.lp-raw-quote-last  { padding-bottom: 1.5rem; } /* the prose p margin-bottom: rem, not text-size */
+body.live-preview-active #editor .cm-line.lp-raw-quote-first::before { top: 1.3333333em; }
+body.live-preview-active #editor .cm-line.lp-raw-quote-last::before  { bottom: 1.5rem; }
+body.live-preview-active #editor .cm-line.lp-raw-li          { padding-left: var(--lp-hang); }
+body.live-preview-active #editor .cm-line.lp-raw-li-gap      { padding-top: 0.15em; }
+body.live-preview-active #editor .cm-line.lp-raw-li-gap-nest { padding-top: 0.8888889em; }
+body.live-preview-active #editor .cm-line.lp-raw-li-end      { padding-bottom: 0.15em; }
+body.live-preview-active #editor .cm-line.lp-raw-li-end-nest { padding-bottom: 0.8888889em; }
+/* A marker hung inside its line's indent: the box is exactly the indent
+   wide and pulled back over it, so the text after the marker starts at
+   the indent (the rendered text's x) on the first row as on every
+   wrapped row. */
+body.live-preview-active #editor .lp-raw-hang {
+  display: inline-block;
+  width: var(--lp-hang);
+  margin-left: calc(-1 * var(--lp-hang));
+  white-space: pre;
+  font-style: normal;
+}
+/* Media preview under the block being edited (MediaWidget). */
+.lp-below {
+  display: flow-root; /* contain child margins — see .lp-render */
+  padding-top: 0.4em;
+  cursor: text;
 }
 
 /* ── Editor completion menu (YAML frontmatter + link paths) ──────────

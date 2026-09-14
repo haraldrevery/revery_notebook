@@ -14,7 +14,7 @@ const path = require('node:path');
 
 const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY || process.platform !== 'linux');
 
-test('live preview pointer model end-to-end', { skip: !hasDisplay, timeout: 90000 }, async () => {
+test('live preview pointer model end-to-end', { skip: !hasDisplay, timeout: 180000 }, async () => {
   const electronBin = require('electron');
   const mainScript = path.join(__dirname, 'helpers', 'web_e2e_main.js');
   const driver = path.join(__dirname, 'helpers', 'lp_e2e_driver.js');
@@ -23,7 +23,7 @@ test('live preview pointer model end-to-end', { skip: !hasDisplay, timeout: 9000
   delete env.ELECTRON_RUN_AS_NODE;
 
   const output = await new Promise((resolve, reject) => {
-    const child = spawn(electronBin, [mainScript, driver, '75000'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(electronBin, [mainScript, driver, '160000'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
@@ -49,6 +49,9 @@ test('live preview pointer model end-to-end', { skip: !hasDisplay, timeout: 9000
     'clicking a table cell must land on that row line, inside the cell text');
   assert.deepEqual(r.clickWrappedRow, { found: true, lowerRow: true, inWord: true, topKept: true },
     'clicking a lower visual row of a wrapped paragraph must land on that word and keep the paragraph\'s top edge in place');
+  assert.deepEqual(r.clickJitter,
+    { found: true, renderedWhilePressed: true, noSelection: true, revealedOnRelease: true, inWord: true },
+    'the layout must not change while the button is down, and a few px of pointer jitter during a click must not select anything');
   assert.deepEqual(r.dragFromWidget,
     { found: true, targetVisible: true, nonEmpty: true, anchorInFirst: true, headInInside: true, blockRaw: true },
     'a drag starting on a rendered block must select text inside it');
@@ -89,10 +92,32 @@ test('live preview pointer model end-to-end', { skip: !hasDisplay, timeout: 9000
     'a click on the blank line just below a rendered block must land on that line: no reveal, no scroll');
   assert.deepEqual(r.sideClick, { found: true, targetIsPadding: true, onLine: true, lowerRow: true, topKept: true },
     'a click in the padding beside a lower row of a rendered paragraph must land on that row, the top edge kept in place');
-  assert.deepEqual(r.shiftHeading, { found: true, revealed: true, belowMoved: true, aboveKept: true },
-    'revealing a heading (shorter raw) must shift only what is below it');
-  assert.deepEqual(r.shiftSoftLines, { found: true, revealed: true, belowMoved: true, aboveKept: true },
-    'revealing soft-break lines (taller raw) must shift only what is below them');
+  assert.deepEqual(r.shiftSoftLow, { found: true, revealed: true, aboveKept: true, belowKept: false },
+    'a block clicked low on the screen must change height downward only (less visible text below it)');
+  assert.deepEqual(r.shiftSoftHigh, { found: true, revealed: true, aboveKept: false, belowKept: true },
+    'a block clicked high on the screen must change height upward only (less visible text above it)');
+  assert.deepEqual(r.shiftTableLow, { found: true, revealed: true, aboveKept: true, belowKept: false },
+    'a table (shorter raw) clicked low on the screen must shrink from below');
+  assert.deepEqual(r.tallRowPin, { found: true, bothEdgesOff: true, onRow: true, underPointer: true },
+    'a block taller than the screen must keep the clicked row under the pointer');
+  assert.deepEqual(r.typingMerge, { revealed: true, caretKept: true },
+    'typing that merges the caret line into the block above must not move the caret line');
+  assert.deepEqual(r.arrowLeave, { onBlank: true, rerendered: true, kept: true },
+    'ArrowDown out of a revealed block must keep the line the caret lands on in place');
+  assert.deepEqual(r.arrowUpTall, { onPara: true, lastRow: true, noJump: true, caretVisible: true },
+    'ArrowUp into a tall paragraph must land on its last row without jumping the view');
+  assert.deepEqual(r.mediaImage, { rendered: true, sourceShown: true, previewBelow: true },
+    'an edited image must show its source with the rendered image still below it');
+  assert.deepEqual(r.mediaMath, { previewBelow: true, followsTyping: true, imageBackToRendered: true },
+    'an edited $$ block must show its rendered formula below the source, updated while typing');
+  assert.ok(r.heightEstimate.drift <= Math.max(40, r.heightEstimate.total * 0.01),
+    `rendered blocks CodeMirror has not drawn must keep their measured heights: ${JSON.stringify(r.heightEstimate)}`);
+  for (const key of ['rawParity', 'rawParitySmall']) {
+    for (const [kind, diff] of Object.entries(r[key])) {
+      assert.ok(Math.abs(diff) <= 2,
+        `${key}.${kind}: the edited block's raw lines must keep its rendered height (diff ${diff} px): ${JSON.stringify(r[key])}`);
+    }
+  }
   assert.deepEqual(r.collapseAbove, { found: true, firstRevealed: true, firstRerendered: true, aboveKept: true },
     'when the block being edited re-renders above, the newly clicked block must keep its place');
   assert.deepEqual(r.collapseOffscreen, { found: true, firstRevealed: true, firstRerendered: true, aboveKept: true },

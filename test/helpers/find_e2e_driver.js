@@ -387,7 +387,11 @@
   })();
   const tblEl = document.querySelector('.lp-render table');
   const tWidget = tblEl && tblEl.closest('.lp-render');
+  /* A whole click: the block reveals on RELEASE (the live preview keeps
+     the layout frozen while a button is down). */
   if (tWidget) tWidget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  await sleep(100);
+  document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
   await sleep(300);
   lpV2.tableClickReveals = !document.querySelector('.lp-render table')
     && cmText().includes('| Col A | Col B |');

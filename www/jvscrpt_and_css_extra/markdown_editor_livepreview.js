@@ -43,7 +43,7 @@
     console.warn('[LivePreview] CM bundle lacks required exports — feature unavailable.');
     return;
   }
-  const { Decoration, WidgetType, ViewPlugin, syntaxTree, StateField, EditorView, keymap, Prec } = CM;
+  const { Decoration, WidgetType, ViewPlugin, syntaxTree, StateField, StateEffect, EditorView, keymap, Prec } = CM;
 
   /* End offset of a YAML frontmatter block at the very start of the doc,
      or 0. CommonMark would otherwise misparse it: the fences become
@@ -164,54 +164,139 @@
     wrap.querySelectorAll('img, a').forEach((el) => { el.draggable = false; });
   }
 
-  /* ── The block widget ────────────────────────────────────────────────
-     DOM mirrors the preview pane's structure: a `.prose prose-lg
-     max-w-none mx-auto` container (core_cm.js render()) inside an
-     `.lp-render` scope element that the swept `#preview`-parity CSS
-     rules also target. Post-processing reuses the preview's OWN
-     functions (parameterized by root): image path resolution with the
-     root-containment guard, and code copy buttons.                    */
-  class BlockWidget extends WidgetType {
+  /* ── Height estimates ────────────────────────────────────────────────
+     CodeMirror sizes a widget it has not drawn by its `estimatedHeight`,
+     and WidgetType's default (-1) means ONE LINE. Every rendered block
+     outside the drawn viewport therefore counted as a single row: the
+     scrollbar was ~36% short on a long note and grew while scrolling,
+     and whenever CodeMirror rebuilds its height map (its text-metrics
+     oracle refreshes) every off-screen block above the viewport fell
+     back to one row at once. The measure pass (see the selection
+     painter) records each drawn widget's real height by kind + source
+     text; a block never drawn gets a rough estimate from its source
+     instead. Drawn widgets are always measured by CodeMirror itself —
+     estimates only stand in for undrawn ones.                         */
+  const HEIGHT_CACHE_MAX = 5000;
+  const heightCache = new Map();   // key → px; Map order = age, oldest evicted first
+  const metrics = { lineHeight: 34, charsPerRow: 40, width: 340 }; // refreshed by the measure pass
+  const HEADING_ROWS = [0, 2.1, 2.15, 1.8, 1.5, 1.3, 1.15];       // rendered h1…h6 height in raw rows
+  function rememberHeight(key, h) {
+    heightCache.delete(key);
+    heightCache.set(key, h);
+    if (heightCache.size > HEIGHT_CACHE_MAX) heightCache.delete(heightCache.keys().next().value);
+  }
+  function recordHeights(view) {
+    for (const dom of view.contentDOM.querySelectorAll('.lp-render, .lp-yaml, .lp-below')) {
+      if (!dom.lpHeightKey) continue; // the rendered frame inside .lp-below
+      const h = dom.getBoundingClientRect().height;
+      if (h > 0) rememberHeight(dom.lpHeightKey, h);
+    }
+  }
+  function estimateHeight(key, src) {
+    const known = heightCache.get(key);
+    if (known !== undefined) return known;
+    const { lineHeight, charsPerRow, width } = metrics;
+    if (/^!\[[^\]]*\]\([^)]*\)$/.test(src.trim())) return Math.round(width * 0.6); // an image on its own
+    let rows = 0;
+    for (const line of src.split('\n')) rows += Math.max(1, Math.ceil(line.length / charsPerRow));
+    const heading = /^(#{1,6})\s/.exec(src);
+    return Math.round(rows * lineHeight * (heading ? HEADING_ROWS[heading[1].length] : 1));
+  }
+  function updateMetrics(view) {
+    if (view.defaultLineHeight > 0) metrics.lineHeight = view.defaultLineHeight;
+    const line = view.contentDOM.querySelector('.cm-line');
+    if (line && line.clientWidth > 0) metrics.width = line.clientWidth;
+    if (view.defaultCharacterWidth > 0) {
+      metrics.charsPerRow = Math.max(10, Math.floor(metrics.width / view.defaultCharacterWidth));
+    }
+  }
+
+  /* ── Rendered widgets ────────────────────────────────────────────────
+     Shared by the block widget, the YAML box and the media preview below
+     an edited block: identity by kind + source (typing in one block never
+     re-renders the others), the height estimate above, and the pointer
+     contract — CodeMirror handles a mousedown (lpMouseSelection maps it
+     to a source position) unless it targets an interactive child, which
+     keeps its own behaviour. Every other event stays the widget's own:
+     CM's handlers (drag, copy, …) must never treat rendered DOM as
+     editable content.                                                  */
+  class RenderedWidget extends WidgetType {
     constructor(src) { super(); this.src = src; }
     eq(other) { return other.src === this.src; }
-    toDOM(view) {
-      const wrap = document.createElement('div');
-      wrap.className = 'lp-render';
-      const prose = document.createElement('div');
-      prose.className = 'prose prose-lg max-w-none mx-auto';
-      wrap.appendChild(prose);
-      const html = renderBlockHtml(this.src);
-      if (html === null || !html.trim()) {
-        /* Renderer unavailable or empty output — show the raw source. */
-        prose.textContent = this.src;
-        prose.classList.add('lp-render-fallback');
-      } else {
-        prose.innerHTML = html;
-        try {
-          if (typeof postProcessCodeBlocks === 'function') postProcessCodeBlocks(wrap);
-          if (typeof postProcessImages === 'function') postProcessImages(wrap);
-          upgradeTaskItems(wrap, this.src);
-        } catch (err) {
-          console.warn('[LivePreview] widget post-process failed:', err);
-        }
-        /* Images load async and change the block's height — tell
-           CodeMirror to re-measure when they arrive. */
-        wrap.querySelectorAll('img').forEach((img) => {
-          img.addEventListener('load', () => view.requestMeasure());
-          img.addEventListener('error', () => view.requestMeasure());
-        });
-      }
-      wireWidgetDom(wrap);
-      return wrap;
-    }
-    /* CodeMirror handles a mousedown on the widget (lpMouseSelection
-       below maps it to a source position) unless it targets an
-       interactive child, which keeps its own behaviour. Every other
-       event stays the widget's own: CM's handlers (drag, copy, …) must
-       never treat rendered DOM as editable content.                   */
+    get estimatedHeight() { return estimateHeight(this.kind + this.src, this.src); }
+    /* Tags the widget's DOM for the measure pass (recordHeights). */
+    trackHeight(dom) { dom.lpHeightKey = this.kind + this.src; }
     ignoreEvent(event) {
       if (event.type !== 'mousedown') return true;
       return isInteractive(event.target);
+    }
+  }
+
+  /* The classic preview's DOM for `src`, inside `wrap`: a `.prose prose-lg
+     max-w-none mx-auto` container (core_cm.js render()) — `.lp-render` is
+     the scope the swept `#preview`-parity CSS rules also target — with
+     the preview's OWN post-processing (parameterized by root): image path
+     resolution with the root-containment guard, and code copy buttons. */
+  function fillRendered(view, wrap, src) {
+    const prose = document.createElement('div');
+    prose.className = 'prose prose-lg max-w-none mx-auto';
+    wrap.appendChild(prose);
+    const html = renderBlockHtml(src);
+    if (html === null || !html.trim()) {
+      /* Renderer unavailable or empty output — show the raw source. */
+      prose.textContent = src;
+      prose.classList.add('lp-render-fallback');
+      return;
+    }
+    prose.innerHTML = html;
+    try {
+      if (typeof postProcessCodeBlocks === 'function') postProcessCodeBlocks(wrap);
+      if (typeof postProcessImages === 'function') postProcessImages(wrap);
+      upgradeTaskItems(wrap, src);
+    } catch (err) {
+      console.warn('[LivePreview] widget post-process failed:', err);
+    }
+    /* Images load async and change the block's height — tell CodeMirror
+       to re-measure when they arrive. */
+    wrap.querySelectorAll('img').forEach((img) => {
+      img.addEventListener('load', () => view.requestMeasure());
+      img.addEventListener('error', () => view.requestMeasure());
+    });
+  }
+
+  /* ── The block widget: one top-level markdown block, rendered ──────── */
+  class BlockWidget extends RenderedWidget {
+    get kind() { return 'b'; }
+    toDOM(view) {
+      const wrap = document.createElement('div');
+      wrap.className = 'lp-render';
+      fillRendered(view, wrap, this.src);
+      wireWidgetDom(wrap);
+      this.trackHeight(wrap);
+      return wrap;
+    }
+  }
+
+  /* ── Media preview below the block being edited ──────────────────────
+     Images and display math stay visible UNDER their source while their
+     block is raw (Obsidian-style): a formula updates live while typed,
+     and revealing an image adds its source row instead of removing the
+     whole picture. `src` holds just those constructs (mediaSource). The
+     `.lp-below` frame marks it as not a block of its own: pointer mapping
+     skips it, so a click there lands at the end of the edited block,
+     which stays raw.                                                    */
+  class MediaWidget extends RenderedWidget {
+    get kind() { return 'm'; }
+    toDOM(view) {
+      const outer = document.createElement('div');
+      outer.className = 'lp-below';
+      const wrap = document.createElement('div');
+      wrap.className = 'lp-render';
+      outer.appendChild(wrap);
+      fillRendered(view, wrap, this.src);
+      wireWidgetDom(outer);
+      this.trackHeight(outer);
+      return outer;
     }
   }
 
@@ -222,9 +307,8 @@
      places the cursor on that source line (posInYamlWidget), which
      reveals the raw YAML and pops the suggestions menu (the pointer-
      selection contract with yamlClickToComplete in cm_setup.js).     */
-  class YamlWidget extends WidgetType {
-    constructor(src) { super(); this.src = src; }
-    eq(other) { return other.src === this.src; }
+  class YamlWidget extends RenderedWidget {
+    get kind() { return 'y'; }
     toDOM() {
       const wrap = document.createElement('div');
       wrap.className = 'lp-yaml';
@@ -242,11 +326,8 @@
         wrap.classList.add('lp-render-fallback');
       }
       wireWidgetDom(wrap);
+      this.trackHeight(wrap);
       return wrap;
-    }
-    ignoreEvent(event) {
-      if (event.type !== 'mousedown') return true;
-      return isInteractive(event.target);
     }
   }
 
@@ -261,9 +342,11 @@
      is painted inside the rendered text (paintSelection), exactly like
      selecting across formatted text in a WYSIWYG editor; a block the
      range spans entirely is selected as a unit (drawSelection's band +
-     the lp-selected outline). So nothing changes layout while a pointer
-     drags — the only reveal is the click that started it — which is
-     what keeps drags stable. Select-all likewise keeps everything
+     the lp-selected outline). So nothing a drag does changes the layout,
+     and the click that started it takes effect only on release (the
+     field freezes the reveal set while a button is down — freezeEffect):
+     the whole gesture maps against the layout the user sees. That is
+     what keeps clicks and drags stable. Select-all likewise keeps everything
      rendered except the block the anchor sits in.
      The YAML pill box is not linear text, so a head inside it reveals
      the raw frontmatter as before.                                    */
@@ -275,13 +358,142 @@
   const isRevealed = (selection, from, to, linear = true) =>
     selection.ranges.some((r) => revealedBy(from, to, r, linear));
 
+  /* ── Raw geometry of the block being edited ──────────────────────────
+     The revealed block's lines get classes (revery_notebook_style.css,
+     "The block being edited keeps its rendered geometry") that give them
+     the rendered block's box, so a reveal barely moves anything: heading
+     size, quote bar and margins, list spacing with hung markers,
+     paragraph justification. Images and display math also stay rendered
+     under the source (MediaWidget). All of it is display-only.        */
+  const HEADING_NODE = /^(?:ATX|Setext)Heading([1-6])$/;
+  const CODE_NODES = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'CommentBlock']);
+  const DISPLAY_MATH = /\$\$[\s\S]+?\$\$/g;
+  const hangMark = Decoration.mark({ class: 'lp-raw-hang' });
+  const lineClass = (cls, style) =>
+    Decoration.line(style ? { class: cls, attributes: { style } } : { class: cls });
+
+  function eachLine(doc, from, to, fn) {
+    for (let n = doc.lineAt(from).number, last = doc.lineAt(to).number; n <= last; n++) fn(doc.line(n), n, last);
+  }
+
+  /* Quote: bar + indent on every line, the paragraph margins as padding on
+     the first/last line, the first `>` of each line hung in the indent. */
+  function decorateQuote(doc, from, to, out) {
+    eachLine(doc, from, to, (line, n, last) => {
+      let cls = 'lp-raw-quote';
+      if (line.from === doc.lineAt(from).from) cls += ' lp-raw-quote-first';
+      if (n === last) cls += ' lp-raw-quote-last';
+      out.push(lineClass(cls).range(line.from));
+      const m = /^ {0,3}> ?/.exec(line.text);
+      if (m) out.push(hangMark.range(line.from, line.from + m[0].length));
+    });
+  }
+
+  /* List: every line indented to its item's rendered text x (prose-lg:
+     1.5556em of the prose base for the outer list + 0.4444em item padding,
+     2em more per nesting level), the marker (with any indentation before
+     it) hung in that indent. Tight lists also get the item margins as
+     padding: 0.15em between items, 0.8889em around a nested list, and at
+     the list's end. Loose lists keep their blank lines as the gaps.    */
+  function decorateList(doc, list, out) {
+    const lines = new Map(); // line number → { depth, start, gap, markFrom, markTo }
+    const loose = /\n[ \t]*\n/.test(doc.sliceString(list.from, list.to).replace(/\s+$/, ''));
+    const walk = (listNode, depth) => {
+      let first = true, prevNested = false;
+      for (let item = listNode.firstChild; item; item = item.nextSibling) {
+        if (item.name !== 'ListItem') continue;
+        const s = doc.lineAt(item.from).number;
+        const e = doc.lineAt(Math.min(item.to, doc.length)).number;
+        for (let n = s; n <= e; n++) lines.set(n, Object.assign(lines.get(n) || {}, { depth }));
+        const info = lines.get(s);
+        info.start = true;
+        info.gap = (depth > 1 && first) || prevNested ? 'nest' : 'item';
+        const mark = item.firstChild && item.firstChild.name === 'ListMark' ? item.firstChild : null;
+        if (mark) {
+          const line = doc.line(s);
+          info.markFrom = line.from;
+          info.markTo = Math.min(line.to, mark.to + (doc.sliceString(mark.to, mark.to + 1) === ' ' ? 1 : 0));
+        }
+        let nested = false;
+        for (let c = item.firstChild; c; c = c.nextSibling) {
+          if (c.name === 'BulletList' || c.name === 'OrderedList') { nested = true; walk(c, depth + 1); }
+        }
+        first = false;
+        prevNested = nested;
+      }
+    };
+    walk(list, 1);
+    const lastNo = doc.lineAt(Math.min(list.to, doc.length)).number;
+    for (const [n, info] of lines) {
+      const hang = `calc(var(--lp-prose-size, 1.125rem) * 1.5555556 + ${(0.4444444 + 2 * (info.depth - 1)).toFixed(7)}em)`;
+      let cls = 'lp-raw-li';
+      if (!loose && info.start) cls += info.gap === 'nest' ? ' lp-raw-li-gap-nest' : ' lp-raw-li-gap';
+      if (!loose && n === lastNo) cls += info.depth > 1 ? ' lp-raw-li-end-nest' : ' lp-raw-li-end';
+      const line = doc.line(n);
+      out.push(lineClass(cls, '--lp-hang: ' + hang).range(line.from));
+      if (info.markTo > info.markFrom) out.push(hangMark.range(info.markFrom, info.markTo));
+    }
+  }
+
+  /* An inline image the renderer will actually draw. A reference image has
+     no definition in the snippet, and markdown-it refuses some URLs
+     (data:, javascript: — validateLink in core_cm.js), leaving the source
+     as text that a preview would only repeat. */
+  function renderableImage(text) {
+    const m = /\]\(\s*<?([^\s)>]*)/.exec(text);
+    if (!m) return false;
+    try { return typeof md === 'undefined' || !md.validateLink || md.validateLink(m[1]); } catch (_) { return false; }
+  }
+
+  /* The images and display math of a block, as markdown source for the
+     MediaWidget ('' when there are none). Code never contributes. */
+  function mediaSource(state, node) {
+    if (CODE_NODES.has(node.name)) return '';
+    const doc = state.doc;
+    const parts = [];
+    syntaxTree(state).iterate({
+      from: node.from, to: node.to,
+      enter: (n) => {
+        if (n.from < node.from || n.to > node.to) return undefined;
+        if (CODE_NODES.has(n.name)) return false;
+        if (n.name === 'Image') {
+          const text = doc.sliceString(n.from, n.to);
+          if (renderableImage(text)) parts.push(text);
+          return false;
+        }
+        return undefined;
+      },
+    });
+    if (node.name === 'Paragraph') {
+      for (const m of doc.sliceString(node.from, node.to).matchAll(DISPLAY_MATH)) parts.push(m[0]);
+    }
+    return parts.join('\n\n');
+  }
+
+  function decorateRaw(state, node, from, to, out) {
+    const doc = state.doc;
+    const h = HEADING_NODE.exec(node.name);
+    if (h) out.push(lineClass('lp-raw-h' + h[1]).range(from)); // setext: its text line; the underline stays plain
+    else if (node.name === 'Paragraph') eachLine(doc, from, to, (line) => out.push(lineClass('lp-raw-p').range(line.from)));
+    else if (node.name === 'Blockquote') decorateQuote(doc, from, to, out);
+    else if (node.name === 'BulletList' || node.name === 'OrderedList') decorateList(doc, node, out);
+    const media = mediaSource(state, node);
+    if (media) out.push(Decoration.widget({ widget: new MediaWidget(media), block: true, side: 1 }).range(to));
+  }
+
   /* ── Block segmentation + decoration build ───────────────────────── */
-  function buildBlocks(state) {
+  /* `frozen` (the reveal set while a mouse button is down, see the field)
+     overrides the reveal rule: exactly those blocks are raw. */
+  function buildBlocks(state, frozen) {
     const doc = state.doc;
     const ranges = [];
     const blockRanges = [];
+    const revealed = [];   // blocks shown raw, for the layout anchor's flip test
     const fmEnd = frontmatterEnd(doc);
     const sel = state.selection;
+    const shown = (from, to, linear) => (frozen
+      ? frozen.some((r) => r.from === from && r.to === to)
+      : isRevealed(sel, from, to, linear));
 
     const tree = syntaxTree(state);
     for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
@@ -291,7 +503,11 @@
       const to = doc.lineAt(Math.min(node.to, doc.length)).to;
       if (to <= from) continue;
       blockRanges.push({ from, to, linear: true });
-      if (isRevealed(sel, from, to)) continue;   // being edited — stays raw
+      if (shown(from, to, true)) {           // being edited — raw, in its rendered geometry
+        revealed.push({ from, to });
+        decorateRaw(state, node, from, to, ranges);
+        continue;
+      }
       ranges.push(Decoration.replace({
         widget: new BlockWidget(doc.sliceString(from, to)),
         block: true,
@@ -303,7 +519,9 @@
        the cursor is inside it.                                        */
     if (fmEnd) {
       blockRanges.push({ from: 0, to: fmEnd, linear: false });
-      if (!isRevealed(sel, 0, fmEnd, false)) {
+      const fmShown = shown(0, fmEnd, false);
+      if (fmShown) revealed.push({ from: 0, to: fmEnd });
+      if (!fmShown) {
         ranges.push(Decoration.replace({
           widget: new YamlWidget(doc.sliceString(0, fmEnd)),
           block: true,
@@ -319,36 +537,55 @@
         }
       }
     }
-    return { deco: Decoration.set(ranges, true), blockRanges };
+    return { deco: Decoration.set(ranges, true), blockRanges, revealed };
   }
 
   let _warnedOnce = false;
-  function safeBuildBlocks(state) {
+  function safeBuildBlocks(state, frozen) {
+    let value;
     try {
-      return buildBlocks(state);
+      value = buildBlocks(state, frozen);
     } catch (err) {
       if (!_warnedOnce) {
         _warnedOnce = true;
         console.warn('[LivePreview] block build failed — rendering raw markdown:', err);
       }
-      return { deco: Decoration.none, blockRanges: [] };
+      value = { deco: Decoration.none, blockRanges: [], revealed: [] };
     }
+    value.frozen = frozen || null;
+    return value;
   }
 
+  /* While a mouse button is down the reveal set is FROZEN: the layout
+     never changes under a pressed pointer, and the click that reveals a
+     block (and re-renders the one that was being edited) takes effect on
+     release. CodeMirror maps every pointer move of a gesture against the
+     layout on screen at that moment and has no drag threshold for a plain
+     click, so a reveal at mousedown turned 1–2 px of involuntary jitter
+     into a selection of whatever raw text had moved under the pointer —
+     often reaching backwards, above the click (measured: 87 of 131
+     clicks). Set and thawed by lpMouseSelection; any edit also thaws. */
+  const freezeEffect = StateEffect.define();
+
   const blockField = StateField.define({
-    create(state) { return safeBuildBlocks(state); },
+    create(state) { return safeBuildBlocks(state, null); },
     update(value, tr) {
-      if (tr.docChanged) return safeBuildBlocks(tr.state);
+      let frozen = value.frozen;
+      for (const e of tr.effects) {
+        if (e.is(freezeEffect)) frozen = e.value ? (value.frozen || value.revealed) : null;
+      }
+      if (tr.docChanged) frozen = null; // an edit is never hidden inside a rendered block
+      if (tr.docChanged || frozen !== value.frozen) return safeBuildBlocks(tr.state, frozen);
       /* The parser finishes large documents in idle time, AFTER the
          transaction that changed the text: a new tree means blocks the
          previous build could not see yet.                             */
-      if (syntaxTree(tr.state) !== syntaxTree(tr.startState)) return safeBuildBlocks(tr.state);
-      if (tr.selection) {
+      if (syntaxTree(tr.state) !== syntaxTree(tr.startState)) return safeBuildBlocks(tr.state, frozen);
+      if (tr.selection && !frozen) {
         /* Rebuild only when some block's rendered/raw status flips. */
         const flipped = value.blockRanges.some((b) =>
           isRevealed(tr.state.selection, b.from, b.to, b.linear)
             !== isRevealed(tr.startState.selection, b.from, b.to, b.linear));
-        if (flipped) return safeBuildBlocks(tr.state);
+        if (flipped) return safeBuildBlocks(tr.state, null);
       }
       return value;
     },
@@ -374,10 +611,14 @@
     return fv.blockRanges.find((b) => b.from === from) || null;
   }
 
-  /* One of our widget wrappers containing `target`, if it is in this view. */
+  /* The DOM of every block widget — never the media preview under an
+     edited block, which is not a block of its own. */
+  const BLOCK_WRAPS = '.lp-render:not(.lp-below > .lp-render), .lp-yaml';
+
+  /* One of our block widgets containing `target`, if it is in this view. */
   function wrapOf(view, target) {
     const wrap = (target && target.closest) ? target.closest('.lp-render, .lp-yaml') : null;
-    return (wrap && view.contentDOM.contains(wrap)) ? wrap : null;
+    return (wrap && !wrap.closest('.lp-below') && view.contentDOM.contains(wrap)) ? wrap : null;
   }
 
   /* Rendered block under a screen y, from CodeMirror's OWN block geometry
@@ -700,17 +941,18 @@
      pointer in the content padding left/right of a block, where the
      event target is .cm-content itself. */
   function wrapAtY(view, y) {
-    for (const wrap of view.contentDOM.querySelectorAll('.lp-render, .lp-yaml')) {
+    for (const wrap of view.contentDOM.querySelectorAll(BLOCK_WRAPS)) {
       const r = wrap.getBoundingClientRect();
       if (y >= r.top && y < r.bottom) return wrap;
     }
     return null;
   }
 
-  /* A pointer at (x, y) over DOM `target` → {pos, bias, anchor} when it
-     lies on or beside one of our widgets, else null (raw text: the caller
-     uses posAtCoords). `anchor` is the block's start — what a click keeps
-     in place through the reflow (keepInPlace).
+  /* A pointer at (x, y) over DOM `target` → {pos, bias, anchor, to} when
+     it lies on or beside one of our widgets, else null (raw text: the
+     caller uses posAtCoords). `anchor`..`to` is the block's range — the
+     box whose edge a click keeps in place through the reflow
+     (pointerAnchor).
      Beside a block (the padding left/right of the content column) the
      pointer reads the row at that height, as if it were just inside the
      block's element there. CodeMirror's own answer for that spot is the
@@ -740,7 +982,10 @@
       console.warn('[LivePreview] click mapping failed — using the block start:', err);
       pos = block.from;
     }
-    return { pos: Math.max(0, Math.min(view.state.doc.length, pos)), bias: 1, anchor: block.from };
+    return {
+      pos: Math.max(0, Math.min(view.state.doc.length, pos)), bias: 1,
+      anchor: block.from, to: block.to, linear: block.linear,
+    };
   }
 
   /* Which side of `pos` the pointer is on (cursor assoc at wrap points):
@@ -814,24 +1059,49 @@
     return Sel.range(line.from, to);
   }
 
-  /* Screen y of the top edge of the block holding `pos` — a rendered
-     block's widget, or a raw line. From CodeMirror's height map, which
-     matches the screen because widgets contain their margins (.lp-render
-     CSS); the same measure is taken before and after a click.         */
-  function screenTop(view, pos) {
-    return view.documentTop + view.lineBlockAt(pos).top;
+  /* Screen y of the top or bottom edge of the line block holding `pos` —
+     a rendered block's widget, or a raw line with any media preview
+     under it. From CodeMirror's height map, which matches the screen
+     because widgets contain their margins (.lp-render CSS); the same
+     measure is taken before and after a flip.                         */
+  function screenEdge(view, pos, side) {
+    const b = view.lineBlockAt(Math.max(0, Math.min(pos, view.state.doc.length)));
+    return view.documentTop + (side === 'bottom' ? b.bottom : b.top);
   }
 
-  /* After a click the layout reflows: the clicked block swaps to raw text
-     (its own height changes) and the block that was being edited
-     re-renders. Keep the TOP EDGE of what was clicked where it was on
-     screen, so the clicked block grows or shrinks downward and nothing
-     above it moves — the text no longer jumps both ways around the
-     click. Scrolls by exactly the remaining displacement: zero unless
-     something above the clicked block changed height. When the raw text
-     is taller than its rendering (soft line breaks) the caret can land a
-     row below the pointer — the accepted cost of a page that stays put.
-     Void if the document changed in between (file switch).
+  /* What a click keeps in place through the reflow (keepInPlace),
+     measured BEFORE its transaction changes the layout:
+       • on raw text: the clicked line's top. Nothing of it changes; the
+         block that was being edited re-renders on its own side of it.
+       • on a rendered block: its edge on the side with MORE visible text,
+         so its change in height moves the side with less — a block low on
+         the screen grows or shrinks downward, a block high on the screen
+         upward. (With nothing above to scroll, at the start of a note,
+         keepInPlace's clamp leaves the top in place instead.)
+       • on a block taller than the screen (both edges off screen): the
+         clicked row stays under the pointer.                          */
+  function pointerAnchor(view, hit, pos, pointerY) {
+    if (!hit) {
+      const from = view.state.doc.lineAt(pos).from;
+      return { pos: from, side: 'top', y: screenEdge(view, from, 'top') };
+    }
+    const top = screenEdge(view, hit.anchor, 'top');
+    const bottom = screenEdge(view, hit.anchor, 'bottom');
+    const sr = view.scrollDOM.getBoundingClientRect();
+    const above = top - sr.top, below = sr.bottom - bottom;
+    if (above < 0 && below < 0) return { pos, side: 'row', y: pointerY };
+    if (below <= above) return { pos: hit.anchor, side: 'top', y: top };
+    return { pos: hit.to, side: 'bottom', y: bottom };
+  }
+
+  /* After a flip the layout reflows: the block entering edit mode swaps
+     its rendering for raw lines, the block leaving it re-renders.
+     Something on screen moves by the difference; `anchor` says what must
+     not: { pos, side: 'top' | 'bottom', y } keeps that edge of pos's line
+     block at screen y, { pos, side: 'row', y } keeps pos's row centred on
+     y. Scrolls by exactly the remaining displacement, then — never at the
+     cost of the caret — by whatever keeps the caret's row visible. Void if
+     the document changed in between (file switch).
      WHEN: after CodeMirror's whole measure cycle, not inside it. For a
      height change ABOVE the viewport, CodeMirror's own scroll anchoring
      compensates too — and it runs after every measure request has
@@ -840,7 +1110,7 @@
      A microtask queued from the cycle's write phase runs once the cycle
      (anchoring included) is complete and still before the browser
      paints: it sees the final layout and corrects only what is left.  */
-  function keepInPlace(view, anchor, topBefore) {
+  function keepInPlace(view, anchor) {
     const doc = view.state.doc;
     view.requestMeasure({
       key: keepInPlace,
@@ -848,15 +1118,81 @@
       write(_, v) {
         queueMicrotask(() => {
           if (v.state.doc !== doc) return;
-          const delta = screenTop(v, Math.min(anchor, doc.length)) - topBefore;
-          if (Math.abs(delta) < 1) return;
+          /* The caret first: coordsAtPos flushes any measure still pending
+             (a later dispatch's scroll target), so all reads below see the
+             final layout. */
+          const caret = v.coordsAtPos(v.state.selection.main.head);
+          let delta = 0;
+          if (anchor.side === 'row') {
+            const c = v.coordsAtPos(Math.min(anchor.pos, doc.length), 1);
+            if (c) delta = (c.top + c.bottom) / 2 - anchor.y;
+          } else {
+            delta = screenEdge(v, anchor.pos, anchor.side) - anchor.y;
+          }
           const sd = v.scrollDOM;
+          const sr = sd.getBoundingClientRect();
+          if (caret) {
+            const top = caret.top - delta, bottom = caret.bottom - delta;
+            if (top < sr.top) delta -= sr.top - top;
+            else if (bottom > sr.bottom) delta += bottom - sr.bottom;
+          }
+          if (Math.abs(delta) < 1) return;
           const max = Math.max(0, sd.scrollHeight - sd.clientHeight);
           sd.scrollTop = Math.max(0, Math.min(max, sd.scrollTop + delta));
         });
       },
     });
   }
+
+  /* ── Layout anchor for every other flip ──────────────────────────────
+     Arrow keys, typing, find, undo … flip blocks too: typing on the blank
+     line under a paragraph merges it into that paragraph (lazy
+     continuation) and reveals it without any click. For all of these the
+     caret's line never moves: the block or line the caret is now in
+     keeps the edge it was entered from — its top when the caret came from
+     above or stayed inside it, its bottom when it came from below — and
+     whatever changed height elsewhere moves away from it. The "before"
+     geometry comes from a snapshot of the drawn line blocks taken in each
+     measure (in update() the height map is already the new one; the
+     screen has not scrolled yet, so documentTop still holds). Left alone:
+     pointer selections (pointerAnchor handles them), transactions that
+     scroll on purpose (a scrollIntoView effect: outline, find, …), and
+     reconfigurations (the mode toggle).                               */
+  const SCROLL_EFFECT = EditorView.scrollIntoView(0).type;
+  function revealChanged(before, after, changes) {
+    if (before.revealed.length !== after.revealed.length) return true;
+    return before.revealed.some((b, i) =>
+      changes.mapPos(b.from, -1) !== after.revealed[i].from || changes.mapPos(b.to, 1) !== after.revealed[i].to);
+  }
+  const layoutAnchor = ViewPlugin ? ViewPlugin.fromClass(class {
+    constructor(view) { this.blocks = null; this.snapshot(view); }
+    snapshot(view) {
+      view.requestMeasure({ key: this, read: (v) => { this.blocks = v.viewportLineBlocks; } });
+    }
+    update(u) {
+      if ((u.docChanged || u.selectionSet) && this.blocks) this.anchorFlip(u);
+      if (u.docChanged || u.selectionSet || u.viewportChanged || u.geometryChanged) this.snapshot(u.view);
+    }
+    anchorFlip(u) {
+      const before = u.startState.field(blockField, false);
+      const after = u.state.field(blockField, false);
+      if (!before || !after || before === after || !revealChanged(before, after, u.changes)) return;
+      if (u.transactions.some((tr) => tr.reconfigured || tr.isUserEvent('select.pointer')
+        || tr.effects.some((e) => e.is(SCROLL_EFFECT)))) return;
+      const head = u.state.selection.main.head;
+      let entry = null;
+      for (const b of this.blocks) {
+        const from = u.changes.mapPos(b.from, -1), to = u.changes.mapPos(b.to, 1);
+        if (head >= from && head <= to) { entry = { b, from, to }; break; }
+      }
+      if (!entry) return; // the caret left the drawn area: CodeMirror scrolls to it
+      const docTop = u.view.documentTop;
+      const fromBelow = u.changes.mapPos(u.startState.selection.main.head) > entry.to;
+      keepInPlace(u.view, fromBelow
+        ? { pos: entry.to, side: 'bottom', y: docTop + entry.b.bottom }
+        : { pos: entry.b.widget ? entry.from : head, side: 'top', y: docTop + entry.b.top });
+    }
+  }) : null;
 
   /* ── Mouse selection style ───────────────────────────────────────────
      Installed through EditorView.mouseSelectionStyle, so CodeMirror's
@@ -866,7 +1202,8 @@
      only decides WHERE a pointer event points:
        • mousedown on (or beside) a rendered widget → the mapped source
          position (click-to-edit; the block reveals through the reveal
-         rule) — the clicked block's top edge stays put (keepInPlace);
+         rule) — the side with less visible text takes the reflow
+         (pointerAnchor, keepInPlace);
        • mousemove → queryMove (character-precise inside rendered
          blocks, unit for the YAML box);
        • anything on raw text → posAtCoords, exactly like the default.
@@ -888,6 +1225,14 @@
     return lastClick.count;
   }
 
+  /* Pointer moves closer than this to the press point are jitter, not a
+     drag (the usual OS drag threshold). CodeMirror applies none to a
+     plain click, so without it a hand's tremor selects a character. */
+  const DRAG_SLOP = 4;
+  /* Every way a press can end: a release (also outside the window —
+     the next move then has no buttons), a lost focus, a native drag. */
+  const RELEASE_EVENTS = ['mouseup', 'mousemove', 'blur', 'dragend'];
+
   function lpMouseSelection(view, event) {
     if (event.button !== 0 && event.button !== 2) return null;
     const widgetHit = resolveWidgetPoint(view, event.target, event.clientX, event.clientY);
@@ -905,27 +1250,57 @@
 
     const Sel = SelectionOf(view);
     const stationary = event.button === 2;
-    /* What this click keeps in place through the reflow: the rendered
-       block under the pointer, else the raw line clicked. Measured now,
-       before the click's own transaction changes the layout. */
-    let anchor = widgetHit ? widgetHit.anchor : view.state.doc.lineAt(start.pos).from;
-    const anchorTop = screenTop(view, anchor);
+    /* The layout stays frozen until the button is released (freezeEffect),
+       so everything the gesture maps — the click, a drag, jitter — maps
+       against the layout the user is looking at. Not on the YAML box: the
+       frontmatter reveals at once, because its suggestions menu opens on
+       the click (yamlClickToComplete). What the click keeps in place
+       (pointerAnchor) is measured and applied when the layout actually
+       changes — on release, or right away for the YAML box. */
+    const freeze = !(widgetHit && widgetHit.linear === false);
+    const pin = freeze ? null : pointerAnchor(view, widgetHit, start.pos, event.clientY);
+    if (freeze) {
+      view.dispatch({ effects: freezeEffect.of(true) });
+      const win = view.win || window;
+      let lastY = event.clientY;
+      const release = (e) => {
+        if (e.type === 'mousemove') {
+          lastY = e.clientY;
+          if (e.buttons !== 0) return;  // still pressed
+        }
+        for (const t of RELEASE_EVENTS) win.removeEventListener(t, release);
+        if (e.type === 'mouseup') lastY = e.clientY;
+        const fv = view.state.field(blockField, false);
+        if (!fv || !fv.frozen) return;   // an edit thawed it already
+        const anchor = pointerAnchor(view, widgetHit, view.state.selection.main.head, lastY);
+        view.dispatch({ effects: freezeEffect.of(false), userEvent: 'select.pointer' });
+        keepInPlace(view, anchor);
+      };
+      /* Bubble phase on the window: after CodeMirror's own mouseup
+         handling on the document. */
+      for (const t of RELEASE_EVENTS) win.addEventListener(t, release);
+    }
     let startSel = view.state.selection;
-    let pinPending = true;
+    let pinPending = !freeze;
+    let dragging = false;
     return {
       update(update) {
         if (update.docChanged) {
           start.pos = update.changes.mapPos(start.pos);
-          anchor = update.changes.mapPos(anchor);
+          if (pin) pin.pos = update.changes.mapPos(pin.pos);
           startSel = startSel.map(update.changes);
         }
         if (pinPending && update.selectionSet) {
           pinPending = false;
-          keepInPlace(update.view, anchor, anchorTop);
+          keepInPlace(update.view, pin);
         }
       },
       get(curEvent, extend) {
-        const cur = (curEvent === event || stationary) ? start : queryMove(view, curEvent, start.pos);
+        if (!dragging && !stationary && curEvent !== event
+          && Math.hypot(curEvent.clientX - event.clientX, curEvent.clientY - event.clientY) >= DRAG_SLOP) {
+          dragging = true;
+        }
+        const cur = dragging ? queryMove(view, curEvent, start.pos) : start;
         let range = rangeForClick(view, cur.pos, cur.bias, type);
         if (cur.pos !== start.pos && !extend) {
           const startRange = rangeForClick(view, start.pos, start.bias, type);
@@ -974,7 +1349,7 @@
     const ranges = view.state.selection.ranges.filter((r) => !r.empty);
     const fv = view.state.field(blockField, false);
     const partials = [];
-    view.contentDOM.querySelectorAll('.lp-render, .lp-yaml').forEach((wrap) => {
+    view.contentDOM.querySelectorAll(BLOCK_WRAPS).forEach((wrap) => {
       let spanned = false;
       const b = (ranges.length && fv) ? blockForWrap(view, wrap) : null;
       if (b) {
@@ -996,14 +1371,23 @@
     }
   }
 
+  /* Also the MEASURE PASS for height estimates: its read phase records
+     every drawn widget's height (recordHeights) and the text metrics
+     estimateHeight works from. */
   const selectionPainter = ViewPlugin ? ViewPlugin.fromClass(class {
     constructor(view) { this.schedule(view); }
     update(update) {
-      if (update.selectionSet || update.docChanged || update.viewportChanged) this.schedule(update.view);
+      if (update.selectionSet || update.docChanged || update.viewportChanged || update.geometryChanged) {
+        this.schedule(update.view);
+      }
     }
     schedule(view) {
       /* Keyed: repeated scheduling within one measure cycle collapses to one run. */
-      view.requestMeasure({ key: paintSelection, read() { return null; }, write(_, v) { paintSelection(v); } });
+      view.requestMeasure({
+        key: paintSelection,
+        read(v) { recordHeights(v); updateMetrics(v); return null; },
+        write(_, v) { paintSelection(v); },
+      });
     }
     destroy() {
       if (hasHighlightApi) CSS.highlights.delete(HIGHLIGHT_NAME);
@@ -1021,6 +1405,18 @@
      raw text (incl. visual rows of soft-wrapped lines) stays default.
      Home/End/PageUp/PageDown are left alone on purpose: page keys as
      fast block-wise travel is desirable.                              */
+  /* Whether [from, to] lies under a widget that REPLACES text — a
+     rendered block. Line decorations, the hung-marker marks of the block
+     being edited and the media preview (a point widget) do not count. */
+  function coveredByWidget(state, from, to) {
+    const fv = state.field(blockField, false);
+    let covered = false;
+    if (fv) fv.deco.between(from, to, (a, b, deco) => {
+      if (b > a && deco.spec.block) { covered = true; return false; }
+    });
+    return covered;
+  }
+
   function moveByDocLine(view, forward, extend) {
     const state = view.state;
     const sel = state.selection.main;
@@ -1045,16 +1441,15 @@
        swap for raw text, so skips/stuck can flip between identical
        keypresses. If the adjacent doc line is covered by a replace
        widget, always take the override; the heuristic stays as a
-       fallback for geometry cases the coverage test can't see.
-       to > from excludes the zero-length lp-frontmatter line decos.  */
-    let covered = false;
-    const fv = state.field(blockField, false);
-    if (fv) fv.deco.between(target.from, target.to, (from, to) => {
-      if (to > from) { covered = true; return false; }
-    });
+       fallback for geometry cases the coverage test can't see.     */
+    const covered = coveredByWidget(state, target.from, target.to);
     if (!covered && !skips && !stuck) return false;          // default handles it
 
-    const head = target.from + Math.min(sel.head - curLine.from, target.length);
+    /* The landing guess sits on the row the caret enters from: the top
+       row going down (column carried over), the BOTTOM row going up (the
+       line's end). The re-land below then moves it to the goal column on
+       that row. */
+    const head = forward ? target.from + Math.min(sel.head - curLine.from, target.length) : target.to;
     /* Carry the goal column forward. moveVertically resolves it as
        sel.goalColumn ?? pixel-x of the head, so `def` already holds the
        column the user is aiming at; a plain {anchor, head} dispatch
@@ -1075,6 +1470,12 @@
       const range = extend
         ? EditorSelection.range(sel.anchor, head, goal)
         : EditorSelection.cursor(head, assoc, undefined, goal);
+      /* The scroll goes on this guess: it sits on the row the caret enters
+         from, so the scroll that the coordsAtPos below flushes is the
+         natural one-row step at the viewport edge, and it puts that row
+         on screen, where posAtCoords is exact. (The guess used to be the
+         TOP row in both directions: entering a wrapped paragraph from
+         below scrolled the view to its first row — measured −370 px.) */
       view.dispatch({
         selection: EditorSelection.create([range]),
         scrollIntoView: true,
@@ -1082,26 +1483,21 @@
       });
       /* The landing above is a char-offset guess — the target line was
          hidden inside the widget, so its pixels couldn't be measured
-         pre-dispatch (from a blank line it parks at column 0, from a
-         long one it clamps to the line end). Now that the dispatch has
-         revealed the line, re-land at the goal: goalColumn is a pixel x
-         relative to contentDOM's left edge, and posAtCoords flushes
-         measurement synchronously. Both dispatches share one paint, so
-         there is no visible double-move. The line guard means a stray
-         measurement can never move the cursor off the intended line.
-         The y must come from the DEPARTURE side of the target line, not
-         from the guess: a wrapped paragraph is one doc line spanning
-         several visual rows, and entering it from below must land on
-         its BOTTOM row (the guess sits near column 0 = the top row). */
+         pre-dispatch (going down it carries the column over, going up it
+         parks at the line's end). Now that the dispatch has revealed the
+         line, re-land at the goal: goalColumn is a pixel x relative to
+         contentDOM's left edge, and posAtCoords flushes measurement
+         synchronously. Both dispatches share one paint, so there is no
+         visible double-move. The line guard means a stray measurement
+         can never move the cursor off the intended line.
+         The y comes from the DEPARTURE side of the target line: a wrapped
+         paragraph is one doc line spanning several visual rows, and
+         entering it from below must land on its BOTTOM row. */
       /* Only when the landing REVEALED the line: extending a selection
          into a block leaves it rendered (head never reveals), and over a
          block widget posAtCoords answers with the widget's start or end
          by vertical half — it would fling the head to the block end. */
-      let stillCovered = false;
-      const fv2 = view.state.field(blockField, false);
-      if (fv2) fv2.deco.between(target.from, target.to, (from, to) => {
-        if (to > from) { stillCovered = true; return false; }
-      });
+      const stillCovered = coveredByWidget(view.state, target.from, target.to);
       const refPos = forward ? target.from : target.to;
       const lineCoords = stillCovered ? null : view.coordsAtPos(refPos, forward ? 1 : -1);
       if (lineCoords) {
@@ -1178,6 +1574,7 @@
   window.buildLivePreviewExtension = function () {
     const ext = [blockField, EditorView.mouseSelectionStyle.of(lpMouseSelection)];
     if (selectionPainter) ext.push(selectionPainter);
+    if (layoutAnchor) ext.push(layoutAnchor);
     if (keymap && Prec) {
       ext.push(Prec.high(keymap.of([
         { key: 'ArrowDown', run: (v) => moveByDocLine(v, true, false), shift: (v) => moveByDocLine(v, true, true) },

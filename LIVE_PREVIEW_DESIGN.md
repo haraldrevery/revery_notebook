@@ -353,3 +353,100 @@ choice.
   paragraphs, frontmatter) and, in a list, after the item holding the
   line. The classic editor still inserts at the character under the
   pointer.
+
+## 11. Layout stability — what moves when a block switches
+
+Measured on the §10 code (1100×700 window): revealing a block changed
+its height by −37…−41 px (headings, quotes, tables), −25 px (a 5-item
+list), +34 px (a wrapped paragraph), and by the whole picture for an
+image. Every block crossed with ↑/↓ moved the text by that amount;
+typing on the blank line under a paragraph merged into it (lazy
+continuation) and revealed it with no click at all; ArrowUp into a long
+paragraph threw the view up to its first row (−370 px); and undrawn
+widgets counted as ONE line in CodeMirror's height map (19,651 px
+estimated vs 30,770 px drawn on a long note). §10's anchoring only
+decided where a click's shift went, and only for clicks.
+
+- **The block being edited keeps its rendered geometry.** `decorateRaw`
+  gives the raw lines of the revealed block the rendered block's box:
+  headings their size, line-height, case and centring; paragraphs
+  justification; quotes the bar, indent and paragraph margins (as line
+  padding), with the first `>` hung in the indent; tight lists the item
+  margins and the text indent, with the markers hung in that indent so
+  wrapped rows start where rendered text does. CodeMirror's default
+  `.cm-line` padding (6 px / 2 px) is removed in live preview — raw text
+  wrapped 8 px narrower than the rendered block. The CSS mirrors the
+  heading scale and the prose-lg rules (`--lp-prose-size` exposes the
+  prose base from menus.js). The E2E asserts raw == rendered height for
+  every kind at two text sizes. Known limits: loose lists (a blank raw
+  line is 34 px, the rendered gap ~11 px), soft line breaks (three raw
+  lines vs one joined row), tables (pipes), and a heading its `# `
+  prefix pushes onto one more row.
+- **Images and display math stay rendered under their source** while
+  their block is edited: `MediaWidget`, a block widget at the block's
+  end holding just those constructs. A formula follows typing; revealing
+  an image adds its source row instead of removing the picture. The
+  price: an edited `$$` block shows its source rows ON TOP of the
+  rendered formula, so revealing it adds those rows. Images whose URL
+  the renderer refuses (data:) get no preview — it would only repeat
+  their source text.
+- **Which side moves.** Clicks (`pointerAnchor`): the clicked block keeps
+  its edge on the side with MORE visible text — low on the screen it
+  changes height downward, high on the screen upward — so the least
+  visible text moves; a block taller than the screen keeps the clicked
+  row under the pointer; a click on raw text keeps that line. Every
+  other flip (`layoutAnchor`: arrow keys, typing, find, undo): the
+  caret's line never moves — the block or line the caret is now in keeps
+  the edge it was entered from. Transactions carrying a scrollIntoView
+  effect (outline, find) are left to CodeMirror. `keepInPlace` applies
+  both kinds after the measure cycle (timing as in §10) and never at the
+  cost of the caret: its row always stays visible.
+- **ArrowUp into a tall block.** `moveByDocLine`'s landing guess sits on
+  the row the caret enters from (the line's end when going up), so its
+  scrollIntoView is the natural one-row step at the viewport edge.
+- **Height estimates.** `RenderedWidget.estimatedHeight` returns the
+  widget's last measured height (recorded by the selection painter's
+  measure pass, keyed by kind + source), else a rough estimate from the
+  source. CodeMirror also rebuilds its whole height map when its text
+  metrics refresh; with the default estimate that dropped every
+  off-screen block above the viewport to one line at once.
+- **Not done: parsing on file open.** The field renders only blocks the
+  parser has reached. On a 100 KB note the tree covered 3 KB for at
+  least 300 ms after opening, so a jump to the end shows raw text until
+  the parser catches up. Forcing it needs `ensureSyntaxTree` exported
+  from build_tools/cm_entry_slim.js and a bundle rebuild.
+
+## 12. The layout never changes under a pressed pointer
+
+Soak report: a click sometimes left the cursor away from the clicked
+spot, or selected text above it. A sweep of 131 clicks (every word of a
+note with links, bold, soft breaks, lists, quotes, a table, code) found
+the click→source mapping exact in all 131. The fault was timing: the
+block revealed on MOUSEDOWN, and CodeMirror maps every later move of the
+gesture against the layout on screen at that moment, with no drag
+threshold for a plain click (its 10 px threshold only covers dragging
+an existing selection). A block's raw form is not where its rendering
+was — a link's URL, `**` marks and soft breaks reflow the text — so 1–2
+px of involuntary pointer movement selected whatever raw text now sat
+under the pointer: 87 of 131 clicks, 32 of them reaching backwards,
+above the click. §9's "the only reveal is the click that started it"
+was the flaw: that reveal happened inside the gesture.
+
+- **The reveal set is frozen while a button is down** (`freezeEffect` in
+  the field): set by lpMouseSelection on mousedown, thawed on mouseup, a
+  buttonless move (released outside the window), blur or dragend, and by
+  any edit. The click, a drag and jitter all map against the layout the
+  user sees; a drag started on a rendered block extends through it
+  character by character (§9) and the block reveals on release. The
+  click's anchor (`pointerAnchor`, §11) is measured and applied on
+  release, where the layout actually changes. Sweep after: 0 of 131
+  clicks select anything, all 131 blocks stay rendered while pressed.
+- **The YAML box is the exception:** it reveals on press, because its
+  suggestions menu opens on the click (`yamlClickToComplete`).
+- **Moves within 4 px of the press point are jitter**, not a drag
+  (`DRAG_SLOP`, the usual OS drag threshold).
+
+Not a mapping error, and not changed here: after the release the clicked
+word can sit away from the pointer when the block's raw form reflows
+(URLs and marks re-enter the text). §11's click rule decides which part
+moves, and it can move the clicked word itself.
