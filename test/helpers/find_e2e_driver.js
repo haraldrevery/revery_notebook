@@ -1505,6 +1505,144 @@
   const zipEntryHidden = !Array.from(document.querySelectorAll('#file-dropdown .menu-item'))
     .some((b) => (b.textContent || '').includes('Zip Project Export'));
 
+  /* Panel label bars hidden → each pane's −/+ become a hover corner
+     (desktop, mouse): top-right, clear of the divider grab zone, never
+     under the outline overlay, covered by an open find bar, and they
+     never take the editor's focus. Reader mode always uses the corner
+     (its preview bar never shows). Editor alone + outline: the visible
+     bar's buttons and the text clear the overlay too (the editor "+"
+     used to land on the OUTLINE's "+"). :hover itself needs a real
+     pointer, so only the invisible resting state is checked here.
+     Kept AHEAD of §13 on purpose: after §13's Tab-accept the editor
+     currently cannot switch live preview any more (pre-existing bug,
+     found 2026-09-16), and this probe needs that switch. Every layout
+     switch it touches is put back as it found it. */
+  const paneCorner = await (async () => {
+    const res = {};
+    const barsBtn = () => Array.from(document.querySelectorAll('#settings-dropdown .submenu button'))
+      .find((b) => b.textContent.includes('Panel label bars'));
+    const setBars = async (visible) => {
+      if ((!paneLabelsHidden) !== visible) barsBtn().click();
+      await sleep(300); // past the corner's opacity transition
+    };
+    const rect = (id) => document.getElementById(id).getBoundingClientRect();
+    const hitOf = (id) => {
+      const r = rect(id);
+      if (!(r.width > 0 && r.height > 0)) return null;
+      return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    };
+    const reachable = (id) => { const el = hitOf(id); return !!el && el.id === id; };
+    const atCorner = (paneId, ctrlId) => {
+      const el = document.getElementById(ctrlId);
+      /* The RESTING opacity: this hidden window's animation clock can
+         stall, leaving the 0.15s fade at its first frame (opacity 1). */
+      el.getAnimations().forEach((a) => a.finish());
+      const p = rect(paneId);
+      const c = rect(ctrlId);
+      const cs = getComputedStyle(el);
+      return cs.position === 'absolute' && cs.opacity === '0'
+        && c.top - p.top <= 8 && p.right - c.right >= 14 && p.right - c.right <= 30;
+    };
+    const clearOfOutline = (id) =>
+      rect(id).right <= document.getElementById('outline-pane').getBoundingClientRect().left - 12;
+
+    const start = {
+      outline: outlineVisible, preview: previewVisible, reader: readerMode,
+      lp: !!window.livePreviewMode, flip: !!window.flipLayout, barsHidden: paneLabelsHidden,
+      find: findBar.style.display === 'flex', // the suites above leave it open
+    };
+    if (start.find) closeFindBar();
+    if (outlineVisible) toggleOutline();
+    if (readerMode) toggleReaderMode();
+    if (!previewVisible) togglePreview();
+    window.setFlipLayout(false);
+    window.setLivePreviewMode(false);
+    await sleep(200);
+    res.hoverMedia = matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+    await setBars(false);
+    res.persisted = settingsNow().paneLabelsHidden === true
+      && document.body.classList.contains('pane-labels-hidden');
+    res.titlesHidden = getComputedStyle(document.getElementById('editor-pane-title')).display === 'none'
+      && getComputedStyle(document.getElementById('preview-pane-title')).display === 'none';
+    res.editorCorner = atCorner('editor-pane', 'editor-size-controls')
+      && reachable('editor-font-plus') && reachable('editor-font-minus');
+    res.previewCorner = atCorner('preview-pane', 'preview-size-controls')
+      && reachable('preview-font-plus') && reachable('preview-font-minus');
+
+    window.cmView.focus();
+    const sizeBefore = editorTextSize;
+    const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 });
+    document.getElementById('editor-font-plus').dispatchEvent(down);
+    document.getElementById('editor-font-plus').click();
+    res.keepsFocus = down.defaultPrevented && editorTextSize > sizeBefore
+      && document.activeElement === window.cmView.contentDOM;
+    document.getElementById('editor-font-minus').click();
+    res.sizeRestored = editorTextSize === sizeBefore;
+
+    openFindBar();
+    await sleep(150);
+    const underFind = hitOf('editor-font-plus');
+    res.findCovers = !!underFind && document.getElementById('find-bar').contains(underFind);
+    closeFindBar();
+    await sleep(100);
+
+    toggleOutline(); // split: the preview is the covered pane
+    await sleep(250);
+    res.outlineSplit = clearOfOutline('preview-size-controls') && reachable('preview-font-plus');
+
+    togglePreview(); // the editor alone is now the covered pane
+    await sleep(250);
+    res.editorAloneCorner = document.body.classList.contains('preview-hidden')
+      && clearOfOutline('editor-size-controls') && reachable('editor-font-plus');
+    res.editorAloneText = Math.abs(
+      parseFloat(getComputedStyle(document.querySelector('#editor .cm-scroller')).paddingRight)
+      - document.getElementById('outline-pane').getBoundingClientRect().width) < 2;
+    await setBars(true);
+    res.editorAloneBar = clearOfOutline('editor-font-plus') && reachable('editor-font-plus');
+    await setBars(false);
+    togglePreview();
+    await sleep(200);
+
+    window.setLivePreviewMode(true); // LP hides the preview: editor covered
+    await sleep(300);
+    res.lpCorner = clearOfOutline('editor-size-controls') && reachable('editor-font-plus');
+    window.setLivePreviewMode(false);
+    await sleep(200);
+
+    window.setFlipLayout(true); // overlay on the LEFT: corner stays right
+    await sleep(250);
+    {
+      const p = rect('preview-pane');
+      const c = rect('preview-size-controls');
+      res.flipped = p.right - c.right >= 14 && p.right - c.right <= 30 && reachable('preview-font-plus');
+    }
+    window.setFlipLayout(false);
+    toggleOutline();
+    await sleep(250);
+
+    await setBars(true); // reader mode uses the corner even with bars ON
+    toggleReaderMode();
+    await sleep(300);
+    res.readerCorner = !document.body.classList.contains('preview-hidden')
+      && atCorner('preview-pane', 'preview-size-controls') && reachable('preview-font-plus');
+    toggleReaderMode();
+    await sleep(250);
+    res.readerExit = !document.body.classList.contains('reader-mode-active')
+      && getComputedStyle(document.getElementById('editor-pane')).display !== 'none'
+      && getComputedStyle(document.getElementById('preview-size-controls')).position !== 'absolute';
+
+    if (paneLabelsHidden !== start.barsHidden) barsBtn().click();
+    if (readerMode !== start.reader) toggleReaderMode();
+    if (previewVisible !== start.preview) togglePreview();
+    if (outlineVisible !== start.outline) toggleOutline();
+    window.setFlipLayout(start.flip);
+    window.setLivePreviewMode(start.lp);
+    if (start.find) openFindBar();
+    await sleep(200);
+    return res;
+  })();
+
   /* 13. YAML frontmatter autocomplete (web mode: current-doc index).
          Covers: key suggestions, click-to-open on a value position,
          arrow+enter acceptance (after the engine's interactionDelay),
@@ -1639,5 +1777,5 @@
            slowOn, slowOff, opSet, opCleared, bgApplied, bgRemoved, pipeline,
            lpOnState, lpOffState, lpV2, zipEntryHidden, yamlComplete,
            outlineFontButtons, exportSuite, customTemplates, linkComplete, advanced,
-           pdfPrintWindow, customFonts, customLogo, latexRobust };
+           pdfPrintWindow, customFonts, customLogo, latexRobust, paneCorner };
 })()

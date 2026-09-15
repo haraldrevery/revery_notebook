@@ -535,9 +535,10 @@ body:has(.menu-container.show) #outline-divider::after {
   background: var(--bg-panel);
   background: color-mix(in srgb, var(--bg-panel) 40%, transparent);
 }
-/* Settings → Theme → "Pane label bars" off: hide the editor/preview bars.
+/* Settings → Theme → "Panel label bars" off: hide the editor/preview bars.
    Direct-child only — the outline pane's label (hosts its font-size
-   buttons) is deliberately unaffected. */
+   buttons) is deliberately unaffected. On desktop with a mouse the
+   hidden bars' −/+ stay reachable ("Pane hover corner" block). */
 body.pane-labels-hidden #editor-pane > .pane-label,
 body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
 #editor {
@@ -984,8 +985,10 @@ body.reader-mode-active #btn-export,
 body.reader-mode-active #btn-reader-mode,
 body.reader-mode-active #btn-toggle-view { display: none !important; }
 
-/* Hide the Preview pane label (and its bar) in reader mode */
-body.reader-mode-active #preview-pane .pane-label { display: none !important; }
+/* Hide the Preview pane label (and its bar) in reader mode. No !important:
+   on desktop with a mouse the "Pane hover corner" block overrides this
+   (nothing else ever sets a display on .pane-label). */
+body.reader-mode-active #preview-pane .pane-label { display: none; }
 
 body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; }
 
@@ -1293,13 +1296,35 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   body.outline-open #preview {
     padding-right: calc(var(--outline-pane-w, 200px) + 52px);
   }
-  /* Keep the pane-bar title/−/+ buttons clear of the outline overlay
-     (they float:right, so they'd sit under it). LP hides #preview-pane
-     and the editor bar's buttons drive preview size — inset that bar
-     too. 20px = the label's base right padding. */
-  body.outline-open #preview-pane > .pane-label,
-  body.outline-open.live-preview-active #editor-pane > .pane-label {
-    padding-right: calc(var(--outline-pane-w, 200px) + 20px);
+  /* The pane the overlay floats over: the preview whenever it is
+     displayed, otherwise the editor. The editor is alone when live
+     preview hides the preview (same conditions as LP's pane-hiding rule:
+     reader mode and the mobile Preview view keep it) or when the user
+     hid it (body.preview-hidden — set together with the inline pane
+     styles in applyPaneLayout, menus.js). --outline-cover hands the
+     overlay width to THAT pane only and every inset below reads it, so
+     "which pane is covered" is decided in this one place. Which SIDE it
+     covers comes from --outline-right / --outline-left (1 / 0 here;
+     the flipped panel order at the end of the stylesheet swaps them). */
+  body.outline-open #preview-pane,
+  body.outline-open.live-preview-active:not(.reader-mode-active):not([data-view="preview"]) #editor-pane,
+  body.outline-open.preview-hidden:not(.reader-mode-active) #editor-pane {
+    --outline-cover: var(--outline-pane-w, 200px);
+  }
+  /* Keep the pane-bar title/−/+ buttons clear of the overlay (they
+     float:right, so they'd sit under it). 20px = the label's base side
+     padding; with no overlay over the pane both extra terms are 0. */
+  #editor-pane > .pane-label,
+  #preview-pane > .pane-label {
+    padding-right: calc(var(--outline-cover, 0px) * var(--outline-right, 1) + 20px);
+    padding-left:  calc(var(--outline-cover, 0px) * var(--outline-left, 0) + 20px);
+  }
+  /* The classic editor on its own: inset its text past the overlay like
+     #preview and the LP scroller (the LP twin is the !important rule
+     further down — it has to beat LP's padding parity). */
+  body.outline-open.preview-hidden:not(.live-preview-active):not(.reader-mode-active) #editor .cm-scroller {
+    padding-right: calc(var(--outline-cover, 0px) * var(--outline-right, 1));
+    padding-left:  calc(var(--outline-cover, 0px) * var(--outline-left, 0));
   }
 }
 #outline-divider:hover, #outline-divider.dragging { background-color: var(--theme-divider-hover); }
@@ -2721,6 +2746,69 @@ body.live-preview-active #editor .cm-content {
 }
 .pane-size-controls button:hover { color: var(--text); }
 
+/* ── Pane hover corner ───────────────────────────────────────────────
+   Wherever a pane's label bar is not shown — Settings → Theme → "Panel
+   label bars" off (both panes), reader mode and the desktop phone frame
+   (the preview's bar is always hidden in those two) — its −/+ buttons
+   stay reachable: the bar becomes display:contents (no box, so it can
+   never take a click or move the layout), the title hides, and the SAME
+   −/+ group (same ids, handlers, tooltips, translations) floats in the
+   pane's top-right corner, invisible until the pointer is on it.
+   Placement is load-bearing:
+   • a direct child of the PANE — never inside #preview (its innerHTML
+     is rebuilt on every render) or CodeMirror's DOM, and outside the
+     column-edge drag's containers (#preview / .cm-scroller), whose
+     hit-test therefore leaves the buttons alone;
+   • 16px from the right edge: clears the 4–8px scrollbar and the
+     dividers' 12px invisible grab zones (z 10);
+   • z 3: under the find bar (z 20 — while open it covers the corner),
+     the outline overlay (z 5) and every menu; above the text
+     (CodeMirror's scroller is its own z 0 layer, its tooltips are z 500);
+   • --outline-cover shifts it left of the outline overlay.
+   Mouse only: a touch screen has no hover and would tap invisible
+   buttons, and the narrow layout keeps its own bar rules. Must stay
+   AFTER the bar-hiding rules above (same specificity — order decides). */
+@media (min-width: 821px) and (hover: hover) and (pointer: fine) {
+  #editor-pane,
+  #preview-pane { position: relative; } /* containing block for the corner */
+  :is(body.pane-labels-hidden :is(#editor-pane, #preview-pane),
+      body.reader-mode-active #preview-pane,
+      #preview-pane.mobile-preview) > .pane-label {
+    display: contents;
+  }
+  :is(body.pane-labels-hidden :is(#editor-pane, #preview-pane),
+      body.reader-mode-active #preview-pane,
+      #preview-pane.mobile-preview) > .pane-label > :not(.pane-size-controls) {
+    display: none; /* the "Markdown" / "Preview" title */
+  }
+  :is(body.pane-labels-hidden :is(#editor-pane, #preview-pane),
+      body.reader-mode-active #preview-pane,
+      #preview-pane.mobile-preview) > .pane-label > .pane-size-controls {
+    position: absolute;
+    top: 4px;
+    right: calc(var(--outline-cover, 0px) * var(--outline-right, 1) + 16px);
+    z-index: 3;
+    float: none;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg-panel);
+    background: color-mix(in srgb, var(--bg-panel) 85%, transparent);
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  :is(body.pane-labels-hidden :is(#editor-pane, #preview-pane),
+      body.reader-mode-active #preview-pane,
+      #preview-pane.mobile-preview) > .pane-label > .pane-size-controls button {
+    padding: 3px 7px; /* a real target — the bar's 0 5px is tuned to its row */
+  }
+  :is(body.pane-labels-hidden :is(#editor-pane, #preview-pane),
+      body.reader-mode-active #preview-pane,
+      #preview-pane.mobile-preview) > .pane-label > .pane-size-controls:is(:hover, :focus-within) {
+    opacity: 1;
+  }
+}
+
 /* ── Export options popup (markdown_editor_export.js) ──────────────────
    Reuses .modal-overlay/.modal-content; these style the option rows and
    the modal buttons in the app's own aesthetic (all four themes via
@@ -2933,11 +3021,12 @@ body.live-preview-active #editor .cm-content {
     padding-right: 0 !important;
     padding-left: var(--outline-pane-w, 200px) !important;
   }
-  /* Flipped: the overlay covers the pane's LEFT edge (title side). */
-  body.flip-layout.outline-open #preview-pane > .pane-label,
-  body.flip-layout.outline-open.live-preview-active #editor-pane > .pane-label {
-    padding-right: 20px;
-    padding-left: calc(var(--outline-pane-w, 200px) + 20px);
+  /* Flipped: the overlay covers the covered pane's LEFT edge (title
+     side) — every --outline-cover inset (bar padding, hover corner,
+     classic editor text) switches side through these two factors. */
+  body.flip-layout {
+    --outline-right: 0;
+    --outline-left: 1;
   }
   /* The sidebar's separating border faces the workspace. */
   body.flip-layout #project-sidebar {

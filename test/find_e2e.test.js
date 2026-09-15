@@ -210,4 +210,18 @@ test('find/replace regex worker end-to-end', { skip: !hasDisplay, timeout: 90000
     maliciousStripped: true, oversizedRejected: true, invalidRejected: true,
     defaultRestores: true,
   }, 'custom top bar SVG must inject sanitized, keep the menu button working, survive repositioning, strip all script/link/style vectors, reject oversized/invalid input, and restore the default icon cleanly');
+
+  // 21. panel label bars hidden → each pane's −/+ become a hover corner
+  //     (desktop, mouse): invisible at rest but reachable top-right,
+  //     covered by an open find bar, clear of the outline overlay in every
+  //     layout (incl. editor alone, where the editor "+" used to land on
+  //     the outline's "+", and its text ran under the overlay), never
+  //     taking the editor's focus; reader mode always uses the corner
+  assert.deepEqual(r.paneCorner, {
+    hoverMedia: true, persisted: true, titlesHidden: true,
+    editorCorner: true, previewCorner: true, keepsFocus: true, sizeRestored: true,
+    findCovers: true, outlineSplit: true,
+    editorAloneCorner: true, editorAloneText: true, editorAloneBar: true,
+    lpCorner: true, flipped: true, readerCorner: true, readerExit: true,
+  }, 'the hidden bars\' −/+ must stay reachable as a corner on each pane, clear of the outline and under the find bar, without stealing the editor focus');
 });
