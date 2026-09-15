@@ -56,7 +56,7 @@ let editorDragEnabled = true;     // drag the editor column edge to resize it (d
 window.editorDragEnabled = true;  // Mirror read by layout.js at event time
 let flipLayout = false;           // mirror the desktop panel order (Advanced Options)
 window.flipLayout = false;        // Mirror read by the drag handlers at event time
-let paneLabelsHidden = false;     // hide the editor/preview pane label bars (Theme submenu)
+let paneLabelsHidden = false;     // hide the editor/preview panel label bars (Theme submenu)
 
 /* ── Background image options ─────────────────────────────────────────────
    To add a new background: append a new entry to this array.
@@ -243,7 +243,7 @@ window.applyDOMTranslations = function() {
   updateTxt('#btn-reader-outline', 'Outline');
   updateTxt('#btn-export .btn-label-desktop', 'Export .md');
   updateTxt('#btn-export .btn-label-mobile', 'Export');
-  // Target the title spans only — the pane labels also host +/- font buttons.
+  // Target the title spans only — the panel labels also host +/- font buttons.
   updateTxt('#editor-pane-title', 'Markdown');
   updateTxt('#preview-pane-title', 'Preview');
   updateTxt('#outline-pane-title', 'Outline');
@@ -495,7 +495,7 @@ function stepTextSize(current, dir) {
 }
 
 /* Canonical setters — shared by the Settings submenus and the +/- buttons
-   on the pane label bars. Same contract as setOutlineFontSize: snap,
+   on the panel label bars. Same contract as setOutlineFontSize: snap,
    apply, persist, re-sync the Settings checkmark. */
 window.setEditorTextSize = function (pct) {
   editorTextSize = snapTextSize(pct);
@@ -510,7 +510,7 @@ window.setPreviewTextSize = function (pct) {
   if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
 };
 
-/* The +/- buttons on the editor and preview pane label bars. In Live
+/* The +/- buttons on the editor and preview panel label bars. In Live
    Preview the editor surface renders with the PREVIEW text size (raw
    lines and widgets both — the editor size is inert there), so the
    editor-bar buttons drive the size the user is actually looking at. */
@@ -1438,7 +1438,7 @@ function applyEditorBgStyle() {
   }
 }
 
-/* Hide/show the editor & preview pane label bars (CSS keys on the class;
+/* Hide/show the editor & preview panel label bars (CSS keys on the class;
    the outline pane's label is deliberately untouched — it hosts the
    outline font-size buttons). */
 function applyPaneLabelsVisibility() {
@@ -2739,14 +2739,14 @@ const themeOptions = [
   };
   themeSub.appendChild(bgStyleBtn);
 
-  // ── Pane label bars toggle (■ = bars visible), right under the gradient row
+  // ── Panel label bars toggle (■ = bars visible), right under the gradient row
   const paneLabelsBtn = document.createElement('button');
   paneLabelsBtn.className = 'menu-item';
   const paneLabelsCheck = document.createElement('span');
   paneLabelsCheck.className = 'menu-item-check';
   paneLabelsCheck.textContent = paneLabelsHidden ? '□' : '■';
   paneLabelsBtn.appendChild(paneLabelsCheck);
-  paneLabelsBtn.appendChild(document.createTextNode(window.t('Pane label bars')));
+  paneLabelsBtn.appendChild(document.createTextNode(window.t('Panel label bars')));
   paneLabelsBtn.onclick = (e) => {
     e.stopPropagation();
     paneLabelsHidden = !paneLabelsHidden;

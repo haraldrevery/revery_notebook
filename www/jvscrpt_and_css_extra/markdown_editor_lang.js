@@ -169,7 +169,7 @@ window.uiTranslations = {
   "Crash backup unavailable": { "Swedish": "Kraschsäkerhetskopiering otillgänglig" },
   "Custom image…": { "Swedish": "Egen bild…" },
   "Editor gradient bg": { "Swedish": "Gradient-bakgrund i redigeraren" },
-  "Pane label bars": { "Swedish": "Panelrubriker" },
+  "Panel label bars": { "Swedish": "Panelrubriker" },
   "Smaller editor text": { "Swedish": "Mindre redigerartext" },
   "Larger editor text": { "Swedish": "Större redigerartext" },
   "Smaller preview text": { "Swedish": "Mindre förhandsgranskningstext" },
@@ -1073,7 +1073,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Drag the divider</strong> — the vertical bar between editor and preview can be dragged left or right to resize each pane.</li>
           <li><strong>Text column width</strong> — hover the edge of the text column itself (in the editor or the preview/reader) and drag it to exactly the width you like; presets live under Settings → Editor padding ▸ and Reader padding ▸. The <em>Fixed width</em> toggle in each submenu freezes the current width in pixels, so it no longer follows the window when panes or the window resize.</li>
           <li><strong>Panel order</strong> — Advanced Options → Panel order: <em>Mirrored</em> flips the whole layout, putting the preview on the left, the editor on the right, and the file panel on the right edge.</li>
-          <li><strong>Pane label bars</strong> — Settings → Theme ▸: the <em>Pane label bars</em> row hides or shows the small title bars above the editor and preview panes for an even cleaner look.</li>
+          <li><strong>Panel label bars</strong> — Settings → Theme ▸: the <em>Panel label bars</em> row hides or shows the small title bars above the editor and preview panes for an even cleaner look.</li>
           <li><strong>Click any preview block</strong> — jumps the editor cursor to the matching source line.</li>
           <li><strong>CPU performance delay</strong> — Higher value = Saves battery and CPU, but not that great experience. Low value = drains more CPU and battery but smoother experience.</li>
           <li><strong>Forced Prev. Synch.</strong> — "Forced Preview Synchronization" is a more reliable synchronization between the editor and preview window, but might feel a little janky. Use if you notice that the what you type is not visible on the preview.</li>
