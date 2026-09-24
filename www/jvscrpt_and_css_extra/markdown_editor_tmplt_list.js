@@ -11,7 +11,7 @@ const yamlTemplates = [
   },
   {
     label: 'Entry',
-    content: `---\ntitle: "Title of post"\ndate: ${getTodayStr()}\ndescription: "A short description of the post."\ntags: [tag_1, tag_2, tag_3, tag_4]\ncategory: [category_1, category_2]\nauthor: "Forename_Surname"\nversion: 1\ndate: false\n---\n\n`
+    content: `---\ntitle: "Title of post"\ndate: ${getTodayStr()}\ndescription: "A short description of the post."\ntags: [tag_1, tag_2, tag_3, tag_4]\ncategory: [category_1, category_2]\nauthor: "Forename_Surname"\nversion: 1\ndraft: false\n---\n\n`
   }
   // Add as many as you want here!
 ];
