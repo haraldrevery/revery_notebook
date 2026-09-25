@@ -198,22 +198,25 @@ const lineNumbersCompartment = new Compartment();
       borderLeftColor: 'var(--text)',
     },
 
-// Selection (drawSelection uses this class)
+// Selection (drawSelection uses this class) — the palette's own tint.
     '.cm-selectionBackground': {
-      backgroundColor: 'rgba(255,255,255,0.22)',
-    },
-    '[data-theme="light"] & .cm-selectionBackground': {
-      backgroundColor: 'rgba(0,0,0,0.22)',
+      backgroundColor: 'var(--selection)',
     },
     // Highlight-flash: navigation flash changes selection colour (matching old #editor.highlight-flash::selection)
     '&.highlight-flash .cm-selectionBackground': {
-      backgroundColor: 'rgba(255,200,60,0.6) !important',
+      backgroundColor: 'rgba(var(--flash-rgb),0.6) !important',
     },
-    // Fix unreadable syntax highlighting colors in dark mode. Live-preview
-    // widget content (.lp-render/.lp-yaml) is EXCLUDED: it carries its own
-    // colors — hljs token classes in code fences, KaTeX, YAML pill tints —
-    // which this blanket !important used to silently flatten to --text.
-    '[data-theme="dark"] & .cm-content span:not(.cm-placeholder):not(.lp-render *):not(.lp-yaml *)': {
+    // Fix unreadable syntax highlighting colors in dark palettes (the
+    // defaultHighlightStyle colors are made for light backgrounds) and keep
+    // a custom theme's ONE picked text color (html[data-custom-theme]).
+    // Live-preview widget content (.lp-render/.lp-yaml) is EXCLUDED: it
+    // carries its own colors — hljs token classes in code fences, KaTeX,
+    // YAML pill tints — which this blanket !important used to silently
+    // flatten to --text.
+    '.dark & .cm-content span:not(.cm-placeholder):not(.lp-render *):not(.lp-yaml *)': {
+      color: 'var(--text) !important',
+    },
+    '[data-custom-theme] & .cm-content span:not(.cm-placeholder):not(.lp-render *):not(.lp-yaml *)': {
       color: 'var(--text) !important',
     },
     // Strip bold, font-size changes, and underlines that defaultHighlightStyle applies

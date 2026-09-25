@@ -78,7 +78,16 @@ window.uiTranslations = {
   "Dark": { "Swedish": "Mörkt" },
   "Paper": { "Swedish": "Papper" },
   "Forest": { "Swedish": "Skog" },
-  
+  "Custom theme…": { "Swedish": "Anpassat tema…" },
+  // Custom theme dialog
+  "Custom theme": { "Swedish": "Anpassat tema" },
+  "Base": { "Swedish": "Grund" },
+  "Text color": { "Swedish": "Textfärg" },
+  "Text saturation": { "Swedish": "Textmättnad" },
+  "Background color": { "Swedish": "Bakgrundsfärg" },
+  "Background saturation": { "Swedish": "Bakgrundsmättnad" },
+  "Reset": { "Swedish": "Återställ" },
+
   // Background submenu (Settings)
   "Background ▸": { "Swedish": "Bakgrund ▸" },
   "None": { "Swedish": "Ingen" },

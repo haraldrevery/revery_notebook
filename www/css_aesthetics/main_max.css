@@ -317,15 +317,11 @@
     pointer-events: none;
     background-color: #ffffff;
   }
-  @media (prefers-color-scheme: dark) {
-    body::before {
-      background-image: linear-gradient(to bottom right, #000000, #141414, #262626) !important;
-    }
+  .dark body::before {
+    background-image: linear-gradient(to bottom right, #000000, #141414, #262626) !important;
   }
-  @media (prefers-color-scheme: dark) {
-    body {
-      background-color: #000000;
-    }
+  .dark body {
+    background-color: #000000;
   }
   html {
     font-size: var(--text-body-mobile);

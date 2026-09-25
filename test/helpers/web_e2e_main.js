@@ -18,7 +18,7 @@ if (!process.versions.electron) {
   process.exit(0);
 }
 
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, nativeTheme } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
@@ -31,6 +31,12 @@ if (!driverPath) {
 }
 
 app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'revery-e2e-')));
+
+/* Optional OS color scheme for the page's prefers-color-scheme (the app
+   theme must not depend on it): E2E_COLOR_SCHEME=light|dark. */
+if (process.env.E2E_COLOR_SCHEME === 'light' || process.env.E2E_COLOR_SCHEME === 'dark') {
+  nativeTheme.themeSource = process.env.E2E_COLOR_SCHEME;
+}
 
 /* A hung renderer is a failure mode under test; the main process stays
    responsive, so a global deadline can always fire. Keep it below the

@@ -719,7 +719,8 @@ Two hard couplings to respect when touching prose styles: menus.js
 (`applyUiSizeProseCompensation`) mirrors `.prose h1` = 3rem, `.prose h2` =
 1.875rem and the `.prose-lg` base 1.125rem; and the theme system remaps the
 `--tw-prose-*` variables in revery_notebook_style.css — those variable names
-are a contract.
+are a contract. Dark-palette rules in these inputs key on `.dark` (the app
+theme, see [Themes](#themes)), never on `@media (prefers-color-scheme)`.
 
 ### Production Build
 
@@ -788,6 +789,64 @@ saved file itself is never at risk).
 
 ---
 
+## Themes
+
+`markdown_editor_theme.js` runs first in `<head>` and sets, before anything
+paints: `data-theme` (selects a palette block in revery_notebook_style.css),
+the `.dark` class and `color-scheme` on `<html>`.
+
+**One dark signal.** Every rule that differs between light and dark palettes
+keys on `html.dark` — in revery_notebook_style.css, the CodeMirror theme in
+cm_setup.js and the Tailwind inputs. Never key a rule on a theme NAME
+(`[data-theme="light"]` left Paper with a white-on-cream selection) or on
+`@media (prefers-color-scheme)` (the OS setting; it painted white footnotes
+on light app themes). Only the palette blocks themselves use `data-theme`.
+A palette defines ALL its colors as variables — including `--bg-rgb` /
+`--bg-panel-rgb` (`r, g, b` triplets the background-image overlays add
+alpha to), `--selection` (editor + live preview selection tint) and
+`--flash-rgb` (the preview→editor click flash, yellow in every built-in) —
+and is added to `DARK_PALETTES` in theme.js if dark.
+
+Dark-palette prose rules must stay scoped under `.prose` (or
+`:is(#preview, .lp-render)`): the in-app PDF print (export.js
+`printInApp`, Tauri/web) renders the preview's innerHTML — without the
+`.prose` wrapper — inside the live, themed page, and an unscoped
+`.dark .footnotes` rule once printed gray footnotes on white paper.
+
+**Custom theme** (Settings → Theme → Custom theme…). The dialog in menus.js
+(`openCustomThemeDialog`) has five controls, each slider changing only what it
+names: base light/dark; Text color and Text saturation; Background color and
+Background saturation (stored as `textHue`, `textSat`, `bgHue`, `bgSat`;
+`test/custom_theme.test.js` pins that independence). theme.js's
+`buildCustomPalette()` turns them into every palette variable except
+`--bg_oacity`. Muted text, the highlight (`--accent`), the selection tint and
+the click flash all derive from the text color, so one pick colors the whole
+UI and document; in a custom theme the editor shows only that color
+(`[data-custom-theme]` flattens the syntax colors, like `.dark`) and the
+prose rules that force black/white are routed to `--text`. Colors are built
+in OKLCH with lightness fixed per role and base, so the controls move only
+hue and chroma; the text sliders' tracks are painted with the generator's own
+`textColor()`, so the color shown is the color applied. The palette is set as inline
+custom properties on `<html>` over its base block (`data-theme` = the base,
+plus a `data-custom-theme` attribute), so the base block still supplies
+`--bg_oacity` and the Background opacity override keeps working.
+
+- Storage (`revery_md_settings`): `themeMode` holds the custom theme's BASE,
+  plus `customTheme {base, textHue, textSat, bgHue, bgSat}` and
+  `customThemeActive`. `normalizeCustom` also reads the earlier
+  `{hue, vivid, split, tint}` layout (background hue stored as an offset).
+  A build without custom themes therefore still opens readable. Both
+  theme.js and menus.js validate the stored values (`normalizeCustom`),
+  because an unknown `data-theme` matches no palette and empties every color.
+- Every theme change restyles the whole document: about 40 ms for 20 KB of
+  markdown and 1 s for 600 KB (76k elements), built-in themes included.
+  The dialog therefore previews live while dragging only while one repaint
+  stays under 100 ms, and otherwise applies on release.
+- `test/custom_theme.test.js` checks the contrast of every control
+  combination. Change the generator's numbers only with it green.
+
+---
+
 ## Testing
 
 The data-safety layer is covered by automated tests. Run them before and
@@ -825,6 +884,8 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/tauri_config.test.js` | Pins the per-platform file-drop transport to the Tauri config: the Windows override mirrors the main window except `dragDropEnabled:false`, `drop_transport.js` agrees with it, and every npm `tauri build`/`dev` script produces that window once its `--config` arguments are merged the way tauri-codegen does; plus the sidebar drag payload's encode/decode |
 | `test/media_e2e.test.js` | Boots the REAL Electron main (preload, IPC, atomic writes) on a temporary project and drives real DragEvent/ClipboardEvent drops: one encoded link per image, preview resolves it, non-media never copied, sidebar payload inserts once, a Ctrl+click multi-selection dragged from the real tree inserts one link per image on consecutive lines in tree order, image click previews from its own folder, media dropped while previewing lands beside the note it creates with every link resolving, paste, autosave, no native dialog; in live preview a sidebar image dropped on a rendered list item / code line / paragraph lands as its own paragraph after that item / after the whole fence / after the paragraph; in card view a media card owns the drag (its thumbnail `<img>` is non-draggable), so grabbing the picture carries the card payload |
 | `test/livepreview_e2e.test.js` | Boots the REAL app in Electron (web mode, via the generic `test/helpers/web_e2e_main.js` + `lp_e2e_driver.js`) and drives the live preview with DOM mouse events: a click on rendered text lands on THAT word of the source (paragraph, list item, code line, table cell, lower row of a wrapped paragraph) the layout never changes while the button is down (a click's block reveals on release, and a few px of pointer jitter during a click selects nothing), CodeMirror's height map matches the screen below lists/quotes/code/tables, a click on the blank line at a block's edge reveals nothing and never scrolls, a click beside a block lands on the row at that height, a click that changes a block's height moves the side with less visible text (low on the screen it changes downward, high on the screen upward, a block taller than the screen keeps the clicked row under the pointer; also when the previously edited block re-renders above — on screen or scrolled out of view), typing and arrow keys keep the caret's line in place when blocks switch (a lazy-continuation merge, leaving a revealed block, ArrowUp into a tall paragraph without a jump), the block being edited keeps its rendered height (headings, a tight and a nested list, a quote, a wrapped paragraph — at two text sizes), images and `$$` math stay rendered under their source while edited, undrawn blocks keep their measured heights, a drag started on a rendered block selects text, a drag into a rendered block extends character by character with the covered rendered text painted (CSS Custom Highlight) while the block stays rendered, a block the range spans is marked as a unit, heads stay stable over widgets, double-click selects the word, shift-click extends, right-click places the cursor without dragging, select-all keeps spanned blocks rendered, Shift+Arrow into a rendered block paints exactly the selected characters and typing replaces them in the source, arrow keys still reveal, checkboxes and YAML pills keep their behaviour |
+| `test/custom_theme.test.js` | The custom theme generator (theme.js in a vm): it sets exactly the variables every palette block defines; stored values are normalized or rejected (the earlier offset layout is converted); saturation 0 is neutral gray; each slider changes only what it names (text sliders never touch a background variable and vice versa); for every control combination (exact, via the extreme text and surface luminances, since any text color can meet any surface): text ≥ 7:1, muted text ≥ 4.5:1 (4:1 on hover), highlight ≥ 4.5:1 (3:1 on hover), editor gradient visible but gentle; selection tint visible on a dense grid; the text-slider tracks paint with the generator; boot and live switching never leave an empty palette |
+| `test/theme_e2e.test.js` | Boots the REAL app (web mode) once with the OS in light mode and once in dark: every built-in palette and six custom ones are measured on screen (html.dark matches the actual background, body/footnote/editor-code contrast, visible selection, background-image overlay tinted with the palette's own `--bg`, click flashes yellow in built-ins and the highlight color in custom themes, one text color everywhere in a custom theme), identical under both OS settings; in-app PDF print stays dark-on-white under every palette; plus the custom theme dialog through the real menu: the text sliders apply the generator's color without moving the background and the background sliders leave the text alone, live preview, Escape/outside click/Cancel restore, Save stores the base + custom values, Reset, the Background opacity override stays independent |
 | `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side

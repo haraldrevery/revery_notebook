@@ -157,9 +157,17 @@ html :is(#preview, .lp-render) .prose b {
   --reader-max-width: none;
   --editor-max-width: none; /* classic editor column cap (Editor padding fixed/drag) */
 }
-/* ── Editor UI Themes ── */
+/* ── Editor UI Themes ──
+   Rules that differ between light and dark palettes key on html.dark
+   (set by markdown_editor_theme.js for every dark palette), never on a
+   theme name, so a new palette only has to define these variables.
+   --bg-rgb / --bg-panel-rgb repeat --bg / --bg-panel as r, g, b so the
+   background-image overlays below can add alpha to them. The custom theme
+   (markdown_editor_theme.js) sets every one of these variables inline.  */
 [data-theme="dark"] {
   --bg: #0a0a0a;
+  --bg-rgb:       10, 10, 10;   /* --bg as an r, g, b triplet (overlay tints) */
+  --bg-panel-rgb: 30, 30, 30;   /* --bg-panel as an r, g, b triplet */
   --editor-bg-start: #0a0a0a;
   --editor-bg-end: #000000;
   --bg-panel:   #1e1e1e;
@@ -174,10 +182,14 @@ html :is(#preview, .lp-render) .prose b {
   --accent:     rgba(255,255,255,0.58);
   --scrollbar:  rgba(255,255,255,0.1);
   --menu-bg:    #1f1f1f;
+  --selection:  rgba(255, 255, 255, 0.22);   /* editor + live preview selection */
+  --flash-rgb:  255, 200, 60;   /* preview→editor click flash (r, g, b) */
   --bg_oacity:  0.027
 }
 [data-theme="light"] {
   --bg: #fafaf8;
+  --bg-rgb:       250, 250, 248;   /* --bg as an r, g, b triplet (overlay tints) */
+  --bg-panel-rgb: 255, 255, 255;   /* --bg-panel as an r, g, b triplet */
   --editor-bg-start: #fafaf8;
   --editor-bg-end:  #e3e3e3;
   --bg-panel:   #ffffff;
@@ -192,11 +204,15 @@ html :is(#preview, .lp-render) .prose b {
   --accent:     rgba(0,0,0,0.58);
   --scrollbar:  rgba(0,0,0,0.1);
   --menu-bg:    #ffffff;
+  --selection:  rgba(0, 0, 0, 0.22);   /* editor + live preview selection */
+  --flash-rgb:  255, 200, 60;   /* preview→editor click flash (r, g, b) */
   --bg_oacity:  0.027
 }
 
 [data-theme="paper"] {
   --bg: #f4efe4;
+  --bg-rgb:       244, 239, 228;   /* --bg as an r, g, b triplet (overlay tints) */
+  --bg-panel-rgb: 236, 229, 214;   /* --bg-panel as an r, g, b triplet */
   --editor-bg-start: #f4efe4;
   --editor-bg-end: #e7d7c0;
   --bg-panel:            #ece5d6;
@@ -211,10 +227,14 @@ html :is(#preview, .lp-render) .prose b {
   --accent:              rgba(176, 95, 51, 0.55);
   --scrollbar:           rgba(110, 80, 40, 0.14);
   --menu-bg:             #ece5d6;
+  --selection:           rgba(0, 0, 0, 0.22);   /* editor + live preview selection */
+  --flash-rgb:           255, 200, 60;   /* preview→editor click flash (r, g, b) */
   --bg_oacity:           0.05;
 }
 [data-theme="forest"] {
   --bg: #0e1a11;
+  --bg-rgb:       14, 26, 17;   /* --bg as an r, g, b triplet (overlay tints) */
+  --bg-panel-rgb: 21, 32, 25;   /* --bg-panel as an r, g, b triplet */
   --editor-bg-start: #0e1a11;
   --editor-bg-end: #0c1b09;
   --bg-panel:            #152019;
@@ -229,6 +249,8 @@ html :is(#preview, .lp-render) .prose b {
   --accent:              rgba(130, 195, 118, 0.65);
   --scrollbar:           rgba(90, 170, 90, 0.11);
   --menu-bg:             #192a1d;
+  --selection:           rgba(255, 255, 255, 0.22);   /* editor + live preview selection */
+  --flash-rgb:           255, 200, 60;   /* preview→editor click flash (r, g, b) */
   --bg_oacity:           0.030;
 }
 
@@ -558,8 +580,7 @@ body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
   white-space: pre-wrap;
   word-break: break-word;
 }
-#editor::selection { background: rgba(255, 255, 255, 0.22); }
-[data-theme="light"] #editor::selection { background: rgba(0, 0, 0, 0.22); }
+#editor::selection { background: var(--selection); }
 
 /* ── Preview pane ── */
 #preview-pane {
@@ -607,34 +628,22 @@ body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
   --tw-prose-td-borders: var(--border);
   color: var(--text);
 }
+/* A custom theme has ONE picked text color. The prose stylesheet still
+   forces black/white on a few elements for the built-in palettes; route
+   those to the palette instead. Scoped to the on-screen preview so the
+   in-app PDF print (export.js, no .prose wrapper) keeps its own colors. */
+[data-custom-theme] :is(#preview, .lp-render) .prose :is(code, .footnotes, figcaption) { color: var(--text); }
+[data-custom-theme] :is(#preview, .lp-render) .prose sup a { color: var(--text) !important; }
+[data-custom-theme] :is(#preview, .lp-render) .prose .footnotes ol li::marker { color: var(--text-muted) !important; }
+[data-custom-theme] :is(#preview, .lp-render) .prose thead th { border-bottom-color: var(--text-muted); }
+[data-custom-theme] :is(#preview, .lp-render) .prose .footnotes hr { border-color: var(--border-md); opacity: 1; }
 
 
-/* ── CHANGE THESE URLS TO YOUR OWN BACKGROUND IMAGES ── */
-[data-theme="dark"] #preview {
-  /* Overlays dark bg (#0a0a0a) to mimic low opacity without needing a scrolling ::before element */
+/* Background image under a --bg overlay, to mimic low image opacity
+   without needing a scrolling ::before element. */
+[data-theme] #preview {
   background-image:
-    linear-gradient(rgba(10, 10, 10, calc(1 - var(--bg_oacity))), rgba(10, 10, 10, calc(1 - var(--bg_oacity)))),
-    var(--preview-bg-image, none);
-}
-
-[data-theme="light"] #preview {
-  /* Overlays light bg (#fafaf8) to mimic low opacity without needing a scrolling ::before element */
-  background-image:
-    linear-gradient(rgba(250, 250, 248, calc(1 - var(--bg_oacity))), rgba(250, 250, 248, calc(1 - var(--bg_oacity)))),
-    var(--preview-bg-image, none);
-}
-
-[data-theme="paper"] #preview {
-  /* Overlays paper bg (#f4efe4) */
-  background-image:
-    linear-gradient(rgba(244, 239, 228, calc(1 - var(--bg_oacity))), rgba(244, 239, 228, calc(1 - var(--bg_oacity)))),
-    var(--preview-bg-image, none);
-}
-
-[data-theme="forest"] #preview {
-  /* Overlays forest bg (#0e1a11) */
-  background-image:
-    linear-gradient(rgba(14, 26, 17, calc(1 - var(--bg_oacity))), rgba(14, 26, 17, calc(1 - var(--bg_oacity)))),
+    linear-gradient(rgba(var(--bg-rgb), calc(1 - var(--bg_oacity))), rgba(var(--bg-rgb), calc(1 - var(--bg_oacity)))),
     var(--preview-bg-image, none);
 }
 
@@ -771,14 +780,14 @@ body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
 /* Flash played on the clicked preview block */
 @keyframes previewFlash {
   0%   { background: rgba(128,128,128,0.07); }
-  35%  { background: rgba(255,200,60,0.18); }
+  35%  { background: rgba(var(--flash-rgb), 0.18); }
   100% { background: transparent; }
 }
 .preview-flash { animation: previewFlash 0.55s ease forwards; }
 
 /*Flash played on the editor pane to draw the eye. Custom class to override the selection highlight color */
 #editor.highlight-flash::selection {
-  background: rgba(255, 200, 60, 0.6) !important;
+  background: rgba(var(--flash-rgb), 0.6) !important;
   color: #000 !important;
 }
 
@@ -1124,32 +1133,10 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   background-color: var(--bg-panel); /* Changed to background-color to preserve the image */
 }
 
-/* Preserve the mobile phone frame texture overlay */
-[data-theme="dark"] #preview-pane.mobile-preview #preview {
-  /* --bg-panel in dark mode is #111111 */
-  background-image: 
-    linear-gradient(rgba(17, 17, 17, calc(1 - var(--bg_oacity))), rgba(17, 17, 17, calc(1 - var(--bg_oacity)))), 
-    var(--preview-bg-image, none);
-}
-
-[data-theme="light"] #preview-pane.mobile-preview #preview {
-  /* --bg-panel in light mode is #ffffff */
-  background-image: 
-    linear-gradient(rgba(255, 255, 255, calc(1 - var(--bg_oacity))), rgba(255, 255, 255, calc(1 - var(--bg_oacity)))), 
-    var(--preview-bg-image, none);
-}
-
-[data-theme="paper"] #preview-pane.mobile-preview #preview {
-  /* --bg-panel in paper mode is #ece5d6 */
-  background-image: 
-    linear-gradient(rgba(236, 229, 214, calc(1 - var(--bg_oacity))), rgba(236, 229, 214, calc(1 - var(--bg_oacity)))), 
-    var(--preview-bg-image, none);
-}
-
-[data-theme="forest"] #preview-pane.mobile-preview #preview {
-  /* --bg-panel in forest mode is #152019 */
-  background-image: 
-    linear-gradient(rgba(21, 32, 25, calc(1 - var(--bg_oacity))), rgba(21, 32, 25, calc(1 - var(--bg_oacity)))), 
+/* Preserve the mobile phone frame texture overlay (tinted with --bg-panel) */
+[data-theme] #preview-pane.mobile-preview #preview {
+  background-image:
+    linear-gradient(rgba(var(--bg-panel-rgb), calc(1 - var(--bg_oacity))), rgba(var(--bg-panel-rgb), calc(1 - var(--bg_oacity)))),
     var(--preview-bg-image, none);
 }
 /* apply mobile font scale inside the phone frame */
@@ -1212,6 +1199,58 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
 .btn-danger:hover {
   background: rgba(255, 85, 85, 0.1) !important;
 }
+
+/* ── Custom theme dialog (openCustomThemeDialog, menus.js) ──
+   The whole app is the live preview, so the overlay neither dims nor
+   blurs it, and on desktop the dialog docks top-right, off the text. */
+.modal-overlay.custom-theme-overlay {
+  background: transparent;
+  backdrop-filter: none;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 3rem 1.25rem 0;
+}
+@media (max-width: 820px) {
+  .modal-overlay.custom-theme-overlay {
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+}
+.custom-theme-content { max-width: 380px; }
+.ct-base { display: flex; gap: 6px; }
+.ct-base .modal-btn[aria-pressed="true"] { border-color: var(--accent); }
+.ct-buttons { margin-top: 14px; }
+.ct-spacer { flex: 1; }
+/* Range with the track painted inline (hue / tint gradients). */
+.ct-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 55%;
+  height: 10px;
+  margin: 0;
+  border: 1px solid var(--border-md);
+  border-radius: 5px;
+  background: var(--bg-hover);
+  cursor: pointer;
+}
+.ct-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  border: 2px solid var(--text);
+}
+.ct-range::-moz-range-track { background: transparent; }
+.ct-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  border: 2px solid var(--text);
+}
+.ct-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 /* ── Custom Date Picker Calendar ── */
 .md-cal {
@@ -1882,15 +1921,13 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
 #editor .cm-dropCursor { border-left-color: var(--text); }
 
 #editor .cm-selectionBackground {
-  background: rgba(255, 255, 255, 0.22);
-}
-[data-theme="light"] #editor .cm-selectionBackground {
-  background: rgba(0, 0, 0, 0.22);
+  background: var(--selection);
 }
 
-/* highlight-flash: yellow selection during preview→editor click sync */
+/* highlight-flash: selection blink during preview→editor click sync
+   (yellow in the built-in palettes, the highlight color in a custom one) */
 #editor.highlight-flash .cm-selectionBackground {
-  background: rgba(255, 200, 60, 0.6) !important;
+  background: rgba(var(--flash-rgb), 0.6) !important;
 }
 
 /* 6. Placeholder */
@@ -2376,11 +2413,7 @@ body.live-preview-active #editor .cm-line {
    parts of one selection look alike.                                  */
 .lp-render::highlight(revery-lp-selection),
 .lp-render *::highlight(revery-lp-selection) {
-  background-color: rgba(255, 255, 255, 0.22);
-}
-[data-theme="light"] .lp-render::highlight(revery-lp-selection),
-[data-theme="light"] .lp-render *::highlight(revery-lp-selection) {
-  background-color: rgba(0, 0, 0, 0.22);
+  background-color: var(--selection);
 }
 
 /* Background texture parity: same per-theme overlay recipe as #preview
@@ -2391,24 +2424,9 @@ body.live-preview-active #editor-pane {
   background-repeat: no-repeat;
   background-position: center;
 }
-[data-theme="dark"] body.live-preview-active #editor-pane {
+[data-theme] body.live-preview-active #editor-pane {
   background-image:
-    linear-gradient(rgba(10, 10, 10, calc(1 - var(--bg_oacity))), rgba(10, 10, 10, calc(1 - var(--bg_oacity)))),
-    var(--preview-bg-image, none);
-}
-[data-theme="light"] body.live-preview-active #editor-pane {
-  background-image:
-    linear-gradient(rgba(250, 250, 248, calc(1 - var(--bg_oacity))), rgba(250, 250, 248, calc(1 - var(--bg_oacity)))),
-    var(--preview-bg-image, none);
-}
-[data-theme="paper"] body.live-preview-active #editor-pane {
-  background-image:
-    linear-gradient(rgba(244, 239, 228, calc(1 - var(--bg_oacity))), rgba(244, 239, 228, calc(1 - var(--bg_oacity)))),
-    var(--preview-bg-image, none);
-}
-[data-theme="forest"] body.live-preview-active #editor-pane {
-  background-image:
-    linear-gradient(rgba(14, 26, 17, calc(1 - var(--bg_oacity))), rgba(14, 26, 17, calc(1 - var(--bg_oacity)))),
+    linear-gradient(rgba(var(--bg-rgb), calc(1 - var(--bg_oacity))), rgba(var(--bg-rgb), calc(1 - var(--bg_oacity)))),
     var(--preview-bg-image, none);
 }
 

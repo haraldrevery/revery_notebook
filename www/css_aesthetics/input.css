@@ -29,17 +29,15 @@ body::before {
   background-color: #ffffff;
 }
 
-/* 3. Dark Mode for EVERYONE */
-@media (prefers-color-scheme: dark) {
-  body::before {
-    background-image: linear-gradient(to bottom right, #000000, #141414, #262626) !important;
-  }
+/* 3. Dark palettes. Keyed on html.dark (set by markdown_editor_theme.js
+   for the app's theme), NOT @media (prefers-color-scheme): the OS setting
+   and the app theme can differ. */
+.dark body::before {
+  background-image: linear-gradient(to bottom right, #000000, #141414, #262626) !important;
 }
-@media (prefers-color-scheme: dark) {
-    body {
-      background-color: #000000; /* Pure black to match your dark gradient start */
-    }
-  }
+.dark body {
+  background-color: #000000; /* Pure black to match your dark gradient start */
+}
   /* 2. Responsive Root Scaling (V1 Logic) */
   html {
     font-size: var(--text-body-mobile); /* Mobile Root Base */

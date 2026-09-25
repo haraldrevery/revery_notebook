@@ -1100,24 +1100,22 @@
     font-size: var(--text-body);
   }
 }
-@media (prefers-color-scheme: dark) {
-  .prose {
-    --tw-prose-body: var(--color-white);
-    --tw-prose-headings: var(--color-white);
-    --tw-prose-bold: var(--color-white);
-    --tw-prose-links: var(--color-white);
-    --tw-prose-counters: var(--color-white);
-    --tw-prose-bullets: var(--color-white);
-    --tw-prose-quotes: var(--color-white);
-    --tw-prose-quote-borders: var(--color-white);
-  }
-  .prose .footnotes ol li::marker {
-    color: var(--color-white) !important;
-  }
-  .prose sup a {
-    color: var(--color-white) !important;
-    text-decoration: none;
-  }
+.dark .prose {
+  --tw-prose-body: var(--color-white);
+  --tw-prose-headings: var(--color-white);
+  --tw-prose-bold: var(--color-white);
+  --tw-prose-links: var(--color-white);
+  --tw-prose-counters: var(--color-white);
+  --tw-prose-bullets: var(--color-white);
+  --tw-prose-quotes: var(--color-white);
+  --tw-prose-quote-borders: var(--color-white);
+}
+.dark .prose .footnotes ol li::marker {
+  color: var(--color-white) !important;
+}
+.dark .prose sup a {
+  color: var(--color-white) !important;
+  text-decoration: none;
 }
 @layer components {
   .footnotes .footnote-backref {
@@ -1136,15 +1134,13 @@
     font-size: 1.2em;
     margin-left: 0.25rem;
   }
-  @media (prefers-color-scheme: dark) {
-    .footnotes {
-      color: var(--color-gray-300);
-      border-color: var(--color-gray-800);
-    }
-    .footnotes hr {
-      border-color: var(--color-white);
-      opacity: 0.2;
-    }
+  .dark .prose .footnotes {
+    color: var(--color-gray-300);
+    border-color: var(--color-gray-800);
+  }
+  .dark .prose .footnotes hr {
+    border-color: var(--color-white);
+    opacity: 0.2;
   }
 }
 .prose code {
@@ -1155,19 +1151,15 @@
   padding: 0.125rem 0.25rem;
   border-radius: 0.25rem;
 }
-@media (prefers-color-scheme: dark) {
-  .prose code {
-    background-color: rgba(0, 0, 0, 0.1);
-    color: var(--color-white);
-  }
+.dark .prose code {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: var(--color-white);
 }
 .prose pre {
   background-color: rgba(0, 0, 0, 0.02);
 }
-@media (prefers-color-scheme: dark) {
-  .prose pre {
-    background-color: rgba(0, 0, 0, 0.5);
-  }
+.dark .prose pre {
+  background-color: rgba(0, 0, 0, 0.5);
 }
 .prose pre code {
   font-size: 1.2em !important;
@@ -1185,10 +1177,8 @@
   border-bottom: 1.2px solid rgba(0, 0, 0, 0.8);
   padding-bottom: 8px;
 }
-@media (prefers-color-scheme: dark) {
-  .prose thead th {
-    border-bottom: 1.2px solid rgba(255, 255, 255, 0.8);
-  }
+.dark .prose thead th {
+  border-bottom: 1.2px solid rgba(255, 255, 255, 0.8);
 }
 .prose em {
   font-style: italic;
@@ -1200,10 +1190,8 @@
   color: var(--color-neutral-600);
   margin-top: 0.5rem;
 }
-@media (prefers-color-scheme: dark) {
-  .prose figcaption {
-    color: var(--color-neutral-400);
-  }
+.dark .prose figcaption {
+  color: var(--color-neutral-400);
 }
 @property --tw-rotate-x {
   syntax: "*";

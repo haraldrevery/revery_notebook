@@ -189,33 +189,34 @@
       font-size: var(--text-body); /* V1 Desktop Scaling */
     }
   }
-/* 2. Dark Mode Overrides (Matching your gradient background) */
-@media (prefers-color-scheme: dark) {
-  .prose {
-    --tw-prose-body: var(--color-white);
-    --tw-prose-headings: var(--color-white);
-    --tw-prose-bold: var(--color-white);
-    --tw-prose-links: var(--color-white);
-    
-    /* FIX: Force list counters (1., 2., 3.) to be white */
-    --tw-prose-counters: var(--color-white);
-    
-    /* FIX: Force bullet points to be white */
-    --tw-prose-bullets: var(--color-white);
-    --tw-prose-quotes: var(--color-white);        /* ← fixes blockquote text */
-    --tw-prose-quote-borders: var(--color-white); /* ← fixes the left border too */
-  }
+/* 2. Dark Mode Overrides (Matching your gradient background).
+   All dark rules in this file key on html.dark — the app's theme, set by
+   markdown_editor_theme.js — NOT @media (prefers-color-scheme), which
+   follows the OS and made light app themes paint white footnotes. */
+.dark .prose {
+  --tw-prose-body: var(--color-white);
+  --tw-prose-headings: var(--color-white);
+  --tw-prose-bold: var(--color-white);
+  --tw-prose-links: var(--color-white);
+  
+  /* FIX: Force list counters (1., 2., 3.) to be white */
+  --tw-prose-counters: var(--color-white);
+  
+  /* FIX: Force bullet points to be white */
+  --tw-prose-bullets: var(--color-white);
+  --tw-prose-quotes: var(--color-white);        /* ← fixes blockquote text */
+  --tw-prose-quote-borders: var(--color-white); /* ← fixes the left border too */
+}
 
-  /* EXTRA FIX: Explicitly target the footnote area numbers if variables fail */
-  .prose .footnotes ol li::marker {
-    color: var(--color-white) !important;
-  }
+/* EXTRA FIX: Explicitly target the footnote area numbers if variables fail */
+.dark .prose .footnotes ol li::marker {
+  color: var(--color-white) !important;
+}
 
-  /* EXTRA FIX: Make sure the superscript links [1] in the text are visible */
-  .prose sup a {
-    color: var(--color-white) !important;
-    text-decoration: none; /* Optional: cleaner look for numbers */
-  }
+/* EXTRA FIX: Make sure the superscript links [1] in the text are visible */
+.dark .prose sup a {
+  color: var(--color-white) !important;
+  text-decoration: none; /* Optional: cleaner look for numbers */
 }
 
 
@@ -239,17 +240,18 @@
     margin-left: 0.25rem;
   }
 
-  /* 2. Dark Mode Footnote Specifics */
-  @media (prefers-color-scheme: dark) {
-    .footnotes {
-      color: var(--color-gray-300);
-      border-color: var(--color-gray-800);
-    }
-    
-    .footnotes hr {
-      border-color: var(--color-white);
-      opacity: 0.2;
-    }
+  /* 2. Dark Mode Footnote Specifics. Scoped under .prose: the in-app PDF
+     print (export.js printInApp) puts the preview's innerHTML — without
+     the .prose wrapper — into the live page, and an unscoped rule here
+     printed gray-300 footnotes on white paper. */
+  .dark .prose .footnotes {
+    color: var(--color-gray-300);
+    border-color: var(--color-gray-800);
+  }
+  
+  .dark .prose .footnotes hr {
+    border-color: var(--color-white);
+    opacity: 0.2;
   }
 }
 
@@ -263,21 +265,17 @@
   border-radius: 0.25rem;                   /* Rounded corners */
 }
 
-@media (prefers-color-scheme: dark) {
-  .prose code {
-    background-color: rgba(0, 0, 0, 0.1);
-    color: var(--color-white);
-  }
+.dark .prose code {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: var(--color-white);
 }
 
 .prose pre {
   background-color: rgba(0, 0, 0, 0.02);
 }
 
-@media (prefers-color-scheme: dark) {
-  .prose pre {
-    background-color: rgba(0, 0, 0, 0.5);
-  }
+.dark .prose pre {
+  background-color: rgba(0, 0, 0, 0.5);
 }
 
 .prose pre code {
@@ -304,11 +302,9 @@
     padding-bottom: 8px; /* Control the gap exactly */
 }
 /* Dark Mode Overrides */
-@media (prefers-color-scheme: dark) {
-    .prose thead th {
-        /* A light gray or semi-transparent white works best for your dark aesthetic */
-        border-bottom: 1.2px solid rgba(255, 255, 255, 0.8);
-    }
+.dark .prose thead th {
+    /* A light gray or semi-transparent white works best for your dark aesthetic */
+    border-bottom: 1.2px solid rgba(255, 255, 255, 0.8);
 }
   .prose em {
     font-style: italic;
@@ -323,8 +319,6 @@
     margin-top: 0.5rem;
   }
 
-  @media (prefers-color-scheme: dark) {
-    .prose figcaption {
-      color: var(--color-neutral-400);
-    }
+  .dark .prose figcaption {
+    color: var(--color-neutral-400);
   }
