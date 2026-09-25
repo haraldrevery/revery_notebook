@@ -78,6 +78,16 @@ function resolveProjectMediaPath(dest) {
   return P.isInsideRoot(abs, rootPath) ? abs : null;
 }
 
+/* ── YAML frontmatter in the preview ──────────────────────────────────
+   The preview's frontmatter rule (render() below and the HTML export
+   share it): the block is stripped from the markdown and shown as the
+   Properties sheet (window.ReveryYaml, markdown_editor_yaml.js) — with a
+   fold toggle in reader mode, whose state is the one global choice the
+   live preview shares (window.yamlPropsCollapsed, menus.js). */
+function previewFrontmatterMatch(raw) {
+  return raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+}
+
 /**
  * postProcessImages() — called after every render().
  *
@@ -91,36 +101,10 @@ function resolveProjectMediaPath(dest) {
  *
  * This fixes the Tauri "no images" bug (images resolve against tauri://localhost,
  * not the filesystem) and the Electron "absolute-path-only" bug.
+ *
+ * `root` defaults to the preview pane; live preview passes its own
+ * rendered block so both surfaces share one pipeline.
  */
-/* `root` defaults to the preview pane; live preview passes its own
-   rendered block so both surfaces share one pipeline. */
-/* ── YAML "Properties" pill box ─────────────────────────────────────────
-   Shared by the classic preview (render() above) and the live preview's
-   frontmatter widget (markdown_editor_livepreview.js), so both surfaces
-   render YAML identically. `baseOffset` = doc offset of the first
-   frontmatter line (keeps the pills' data-start/data-end source map).
-   All keys/values pass through escapeHtml — frontmatter is untrusted. */
-function buildYamlRenderHtml(yamlContent, baseOffset) {
-  let pills = '';
-  let lineStart = baseOffset;
-
-  yamlContent.split('\n').forEach(line => {
-    const parts = line.split(':');
-    if (parts.length >= 2) {
-      const key = escapeHtml(parts[0].trim());
-      const val = escapeHtml(parts.slice(1).join(':').trim());
-      const startChar = lineStart;
-      const endChar   = lineStart + line.length;
-      pills += `<div class="yaml-pill" data-start="${startChar}" data-end="${endChar}"><span class="yaml-key">${key}:</span><span class="yaml-value">${val}</span></div>`;
-    }
-    lineStart += line.length + 1; // +1 for the newline character
-  });
-
-  if (!pills) return '';
-  const propertiesLabel = window.t('Properties');
-  return `<div class="yaml-render"><div class="yaml-render-title">${propertiesLabel}</div><div class="yaml-pill-container">${pills}</div></div>`;
-}
-
 function postProcessImages(root) {
   root = root || preview;
   if (!window.NativeAPI || !window.NativeAPI.isDesktop) return;
@@ -285,11 +269,12 @@ function render() {
   if (preview.contains(empty)) preview.removeChild(empty);
 
   let yamlHtml = '';
-  // Check for YAML Frontmatter
-  const yamlMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const yamlMatch = previewFrontmatterMatch(raw);
   if (yamlMatch) {
-    // Shared builder — the live preview renders the SAME pill box.
-    yamlHtml = buildYamlRenderHtml(yamlMatch[1], raw.indexOf('\n') + 1);
+    // Shared builder — the live preview renders the SAME sheet.
+    const reader = document.body.classList.contains('reader-mode-active');
+    yamlHtml = window.ReveryYaml.buildSheetHtml(yamlMatch[1], raw.indexOf('\n') + 1,
+      { collapsible: reader, collapsed: !!window.yamlPropsCollapsed });
     raw = raw.replace(yamlMatch[0], ''); // Remove from MD parsing
   }
 

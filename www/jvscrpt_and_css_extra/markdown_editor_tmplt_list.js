@@ -96,6 +96,11 @@ window.createCustomTemplate = function (kind, label, content) {
   if (label.length > CUSTOM_TMPL_MAX_LABEL) return { ok: false, error: T('Template name is too long.') };
   if (content.length > CUSTOM_TMPL_MAX_CONTENT) return { ok: false, error: T('Template content is too long.') };
   if (arr.some((t) => t.label === label)) return { ok: false, error: T('A template with this name already exists.') };
+  /* A YAML template is inserted as (or merged into) the note's
+     frontmatter, so it must BE one: fences by the editor's rule. */
+  if (kind === 'yaml' && typeof window.frontmatterOfText === 'function' && !window.frontmatterOfText(content)) {
+    return { ok: false, error: T('A YAML template must start with a --- line and end with a --- line.') };
+  }
 
   const store = _loadCustomTmplStore();
   const list = kind === 'yaml' ? store.yaml : store.md;

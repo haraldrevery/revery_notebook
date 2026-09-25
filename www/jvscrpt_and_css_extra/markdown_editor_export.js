@@ -96,17 +96,23 @@
 
   /* ── Shared metadata helpers ─────────────────────────────────────── */
 
+  /* One frontmatter property as a single line of plain text — the same
+     reading the Properties sheet shows (window.ReveryYaml), '' when it is
+     absent or empty. (A per-key regex used to run across lines: an empty
+     `author:` exported the NEXT line, "date: …", as the author, and a
+     folded `title: >` exported as ">".) */
+  function frontmatterProp(yml, key) {
+    const e = window.ReveryYaml.readEntries(yml, 0).find((x) => x.key === key);
+    return window.ReveryYaml.entryText(e).replace(/\s*\n\s*/g, ' ').trim();
+  }
+
   function readFrontmatterMeta() {
     const meta = { title: '', author: '', date: '' };
     const m = editor.value.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (m) {
-      const get = (key) => {
-        const mm = m[1].match(new RegExp(`^${key}:\\s*["']?(.+?)["']?\\s*$`, 'm'));
-        return mm ? mm[1] : '';
-      };
-      meta.title = get('title');
-      meta.author = get('author');
-      meta.date = get('date');
+      meta.title = frontmatterProp(m[1], 'title');
+      meta.author = frontmatterProp(m[1], 'author');
+      meta.date = frontmatterProp(m[1], 'date');
     }
     return meta;
   }
@@ -374,10 +380,7 @@
     const frontmatterMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (frontmatterMatch) {
       const yml = frontmatterMatch[1];
-      const ymlGet = (key) => {
-        const m = yml.match(new RegExp(`^${key}:\\s*["']?(.+?)["']?\\s*$`, 'm'));
-        return m ? m[1] : '';
-      };
+      const ymlGet = (key) => frontmatterProp(yml, key);
       if (ymlGet('title'))  metaTitle  = ymlGet('title');
       if (ymlGet('date'))   metaDate   = { raw: ymlGet('date') }; // escaped below, once latexEsc's tables exist
       if (ymlGet('author')) metaAuthor = ymlGet('author');

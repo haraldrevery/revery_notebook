@@ -315,157 +315,207 @@ const lineNumbersCompartment = new Compartment();
   // the current document only). Always on — it can only ever appear
   // inside frontmatter.
 
+  /* The frontmatter rule (same as the live preview's frontmatterEnd):
+     line 1 is exactly '---' and a '---' or '...' line closes it within
+     the first 60 lines. `lines` = the document's first lines (at least
+     60 when it has them); returns the closing line's index, or -1. */
+  function _fmCloseIndex(lines) {
+    if (lines.length < 2 || lines[0] !== '---') return -1;
+    for (let i = 1; i < Math.min(lines.length, 60); i++) {
+      if (lines[i] === '---' || lines[i] === '...') return i;
+    }
+    return -1;
+  }
+
   /* Start offset of the CLOSING '---'/'...' line of a leading YAML block,
-     or 0 when the document has no frontmatter. Same rules as the live
-     preview's protected region (markdown_editor_livepreview.js). */
+     or 0 when the document has no frontmatter. */
   function _fmCloseLineStart(state) {
     const doc = state.doc;
-    if (doc.lines < 2 || doc.line(1).text.replace(/\r$/, '') !== '---') return 0;
-    const maxScan = Math.min(doc.lines, 60);
-    for (let n = 2; n <= maxScan; n++) {
-      const t = doc.line(n).text.replace(/\r$/, '');
-      if (t === '---' || t === '...') return doc.line(n).from;
+    const lines = [];
+    for (let n = 1; n <= Math.min(doc.lines, 60); n++) lines.push(doc.line(n).text);
+    const i = _fmCloseIndex(lines);
+    return i < 0 ? 0 : doc.line(i + 1).from;
+  }
+
+  /* The frontmatter of a text by the rule above, or null:
+       yaml      — the lines between the fences;
+       closeFrom — offset of the closing '---'/'...' line;
+       end       — offset just past that line.
+     Offsets count line breaks as one character, like CodeMirror's
+     (so they are editor positions for editor.value). Used by the
+     template inserts (menus.js) and the YAML template check. */
+  window.frontmatterOfText = function (text) {
+    const lines = String(text || '').split(/\r\n?|\n/, 61);
+    const i = _fmCloseIndex(lines);
+    if (i < 0) return null;
+    const closeFrom = lines.slice(0, i).join('\n').length + 1;
+    return { yaml: lines.slice(1, i).join('\n'), closeFrom, end: closeFrom + lines[i].length };
+  };
+
+  /* Where the cursor starts in a freshly opened document: the line after
+     its frontmatter, else 0. At 0 the live preview would show the YAML
+     raw (the cursor is inside it) instead of its Properties sheet, and
+     typing straight away would land above '---' and break the
+     frontmatter. Offsets count line breaks as one character, like
+     CodeMirror's own (CRLF files included). */
+  function _openCursorPos(text) {
+    const lines = text.split(/\r\n?|\n/, 61);
+    const i = _fmCloseIndex(lines);
+    if (i < 0) return 0;
+    let pos = 0;
+    for (let n = 0; n <= i; n++) pos += lines[n].length + 1;
+    return i + 1 < lines.length ? pos : pos - 1; // closing line is the last: its end
+  }
+
+  /* Keys may be any letters or digits: `författare:` and `créé:` get
+     suggestions like `title:` does. */
+  const YAML_KEY_RE = /^([\p{L}\p{N}_][\p{L}\p{N}_-]*)(\s*):(.*)$/u;
+
+  /* The token the cursor is in, inside the frontmatter, or null:
+       key          — a bare (partial) key on its own line;
+       key-replace  — the key of an existing "key: value" line;
+       value        — what a suggestion replaces: an item of a flow list
+                      ([a, b]) or of a comma list under a list key
+                      (tags: a, b — window.ReveryYaml.isListKey), a
+                      "- item" of a block list, or else the WHOLE value
+                      (a title with a comma is one value, not two).
+     from..to spans the whole token, never just the text before the
+     cursor: accepting "gamma" with the cursor in "al|pha" gives "gamma",
+     not "gammapha". `inList` = the value sits in a comma list (quoting
+     differs there). Worked out again when a suggestion is ACCEPTED, from
+     the document as it is then: the menu stays open while the user
+     types, so the positions from when it opened are stale.            */
+  function _yamlTokenAt(state, pos) {
+    const closeAt = _fmCloseLineStart(state);
+    if (!closeAt) return null;
+    const line = state.doc.lineAt(pos);
+    if (line.number === 1 || line.from >= closeAt) return null; // outside the block
+    const text = line.text;
+    const col = pos - line.from;
+    let m;
+    const kv = YAML_KEY_RE.exec(text);
+    if (kv && col <= kv[1].length) {
+      return { mode: 'key-replace', from: line.from, to: line.from + kv[1].length };
     }
-    return 0;
+    if (kv && col > text.indexOf(':')) {
+      const key = kv[1];
+      const valStart = text.indexOf(':') + 1;
+      const val = text.slice(valStart);
+      const rel = col - valStart;
+      const inList = val.trimStart().startsWith('[')
+        || !!(window.ReveryYaml && window.ReveryYaml.isListKey(key));
+      let segStart = 0, segEnd = val.length;
+      if (inList) {
+        segStart = Math.max(val.lastIndexOf(',', rel - 1), val.lastIndexOf('[', rel - 1)) + 1;
+        for (const stop of [',', ']']) {
+          const i = val.indexOf(stop, rel);
+          if (i !== -1 && i < segEnd) segEnd = i;
+        }
+      }
+      segStart += /^\s*/.exec(val.slice(segStart))[0].length;
+      while (segEnd > segStart && /\s/.test(val[segEnd - 1])) segEnd--;
+      return {
+        mode: 'value', key, inList,
+        from: Math.min(line.from + valStart + segStart, pos),
+        to: Math.max(line.from + valStart + segEnd, pos),
+      };
+    }
+    if ((m = /^(\s*-\s+)(.*)$/.exec(text)) && col >= m[1].length) {
+      /* "- item" under a block-list key: replace the whole item text. */
+      let key = null;
+      for (let n = line.number - 1; n >= 2; n--) {
+        const t = state.doc.line(n).text;
+        const k = YAML_KEY_RE.exec(t);
+        if (k) { key = k[1]; break; }
+        if (!/^\s*-\s/.test(t)) break;
+      }
+      if (!key) return null;
+      return {
+        mode: 'value', key, inList: false,
+        from: line.from + m[1].length,
+        to: Math.max(line.from + (m[1] + m[2].replace(/\s+$/, '')).length, pos),
+      };
+    }
+    if (!text.includes(':') && (m = /^([\p{L}\p{N}_-]*)\s*$/u.exec(text))) {
+      return { mode: 'key', from: line.from, to: Math.max(line.from + m[1].length, pos) };
+    }
+    return null;
+  }
+
+  /* Accept a value suggestion: replace the token the cursor is in NOW,
+     quoted when plain YAML cannot hold it (window.ReveryYaml.quoteValue:
+     "Note: part 2" taken from a quoted title elsewhere used to land as
+     `title: Note: part 2`, which no YAML parser accepts). */
+  function _applyYamlValue(view, label) {
+    const head = view.state.selection.main.head;
+    const tok = _yamlTokenAt(view.state, head);
+    const at = tok && tok.mode === 'value' ? tok : { from: head, to: head, inList: false };
+    const insert = window.ReveryYaml ? window.ReveryYaml.quoteValue(label, at.inList) : label;
+    view.dispatch({
+      changes: { from: at.from, to: at.to, insert },
+      selection: { anchor: at.from + insert.length },
+      userEvent: 'input.complete',
+    });
   }
 
   async function yamlCompletionSource(context) {
     const state = context.state;
     const pos = context.pos;
-    const closeAt = _fmCloseLineStart(state);
-    if (!closeAt) return null;
-    const line = state.doc.lineAt(pos);
-    if (line.number === 1 || line.from >= closeAt) return null; // outside the block
-
-    /* TOKEN-AWARE replacement: from..to always spans the WHOLE current
-       token (key, value segment, or list item), never just the text
-       before the cursor. Accepting a suggestion with the cursor in the
-       middle of "alpha" must produce "gamma", never "gammapha". CM
-       filters options by the from..cursor slice, so clicking at the
-       start of a token shows the full list.                           */
-    const lineText = line.text;
-    const col = pos - line.from;
-    let mode = null, key = null, from = pos, to = pos;
-    let m;
-
-    const kvLine = /^([A-Za-z0-9_][\w-]*)(\s*):(.*)$/.exec(lineText);
-    if (kvLine && col <= kvLine[1].length) {
-      /* Cursor inside the KEY of an existing "key: value" line —
-         replace the key only, keep the colon and value. */
-      mode = 'key-replace';
-      from = line.from;
-      to = line.from + kvLine[1].length;
-    } else if (kvLine && col > lineText.indexOf(':')) {
-      /* In the VALUE area — replace the whole segment between the
-         nearest , or [ before the cursor and the next , or ] after. */
-      mode = 'value';
-      key = kvLine[1];
-      const valStart = lineText.indexOf(':') + 1;
-      const val = lineText.slice(valStart);
-      const rel = col - valStart;
-      const segStart = Math.max(val.lastIndexOf(',', rel - 1), val.lastIndexOf('[', rel - 1)) + 1;
-      let segEnd = val.length;
-      for (const stop of [',', ']']) {
-        const i = val.indexOf(stop, rel);
-        if (i !== -1 && i < segEnd) segEnd = i;
-      }
-      const lead = /^\s*/.exec(val.slice(segStart))[0].length;
-      from = line.from + valStart + segStart + lead;
-      to = line.from + valStart + segEnd;
-      while (to > from && /\s/.test(lineText[(to - line.from) - 1])) to--;
-      if (from > pos) from = pos;
-      if (to < pos) to = pos;
-    } else if ((m = /^(\s*-\s+)(.*)$/.exec(lineText)) && col >= m[1].length) {
-      /* "- item" under a block-list key: replace the whole item text. */
-      mode = 'value';
-      from = line.from + m[1].length;
-      to = line.from + (m[1] + m[2].replace(/\s+$/, '')).length;
-      if (to < pos) to = pos;
-      for (let n = line.number - 1; n >= 2; n--) {
-        const t = state.doc.line(n).text;
-        const kv = /^([A-Za-z0-9_][\w-]*)\s*:/.exec(t);
-        if (kv) { key = kv[1]; break; }
-        if (!/^\s*-\s/.test(t)) break;
-      }
-      if (!key) return null;
-    } else if (!lineText.includes(':') && (m = /^([A-Za-z0-9_-]*)\s*$/.exec(lineText))) {
-      /* Bare (partial) key on its own line. */
-      mode = 'key';
-      from = line.from;
-      to = line.from + m[1].length;
-      if (to < pos) to = pos;
-    } else {
-      return null;
-    }
+    const tok = _yamlTokenAt(state, pos);
+    if (!tok) return null;
 
     /* Only the frontmatter slice is passed for current-doc merging —
        never the whole document (docs can be large; frontmatter is tiny). */
     let index = null;
     try {
       if (typeof window.sidebarYamlIndex === 'function') {
+        const closeAt = _fmCloseLineStart(state);
         const fmSlice = state.doc.sliceString(0, Math.min(closeAt + 4, state.doc.length));
         index = await window.sidebarYamlIndex(fmSlice);
       }
     } catch (_) { /* index unavailable — no completions, never an error */ }
     if (!index) return null;
 
-    const currentToken = state.doc.sliceString(from, to);
+    const rawToken = state.doc.sliceString(tok.from, tok.to);
+    const currentToken = window.ReveryYaml ? window.ReveryYaml.unquote(rawToken) : rawToken;
 
     let options;
-    if (mode === 'key' || mode === 'key-replace') {
+    if (tok.mode === 'key' || tok.mode === 'key-replace') {
       options = (index.keys || []).map((k) => ({
         label: k.label,
         /* On a bare line the colon is added; inside an existing
            "key: value" line the colon is already there. */
-        apply: mode === 'key' ? k.label + ': ' : k.label,
+        apply: tok.mode === 'key' ? k.label + ': ' : k.label,
         boost: Math.min(k.count || 1, 99) / 100,
       }));
     } else {
-      const vals = (index.values && index.values[key]) || [];
-      /* Every value option replaces the WHOLE clicked segment via a
-         function apply (from..to spans the value). This decouples what
-         is SHOWN from what is REPLACED: on an explicit open the menu can
-         list all values with an empty filter while still cleanly
-         swapping the value the user landed on. */
-      const applyValue = (view, completion) => {
-        view.dispatch({
-          changes: { from, to, insert: completion.label },
-          selection: { anchor: from + completion.label.length },
-          userEvent: 'input.complete',
-        });
-      };
+      const vals = (index.values && index.values[tok.key]) || [];
       options = vals.map((v) => ({
         label: v.label,
-        apply: applyValue,
+        apply: (view, completion) => _applyYamlValue(view, completion.label),
         boost: Math.min(v.count || 1, 99) / 100,
       }));
     }
     if (!options.length) return null;
 
-    /* Explicit open (pill click / Ctrl+Space) vs. implicit (typing):
-       - EXPLICIT: show ALL options with an empty filter (from = the
-         cursor, so CM has no existing text to match against), the
-         current value DEMOTED to the bottom. Function applies still
-         replace the full from..to segment. This is what makes clicking a
-         "tags: [alpha, beta]" pill list both alpha and beta.
-       - IMPLICIT: filter by the typed prefix (from..to spans it) and
-         demote the exact current token so a half-typed value that leaked
-         into the current-doc index can't shadow the real suggestion.   */
+    /* The exact current token is demoted, never hidden: a half-typed
+       value that leaked into the current-doc index can't shadow the
+       real suggestion, and a click lists the current value last.     */
     options = options.map((o) =>
       o.label === currentToken ? Object.assign({}, o, { boost: -99 }) : o);
 
-    /* The empty-filter reveal only applies to VALUES (whose function
-       apply replaces the whole segment). Keys keep span-replace so an
-       explicit key completion still overwrites the key text. */
-    if (context.explicit && mode === 'value') {
-      return { from: pos, options };
-    }
-    return {
-      from,
-      to,
-      options,
-      validFor: (mode === 'key' || mode === 'key-replace') ? /^[\w-]*$/ : /^[^,\[\]\n]*$/,
-    };
+    const validFor = tok.mode === 'value'
+      ? (tok.inList ? /^[^,\[\]\n]*$/ : /^[^\n]*$/)
+      : /^[\p{L}\p{N}_-]*$/u;
+    /* Explicit open (a click, Ctrl+Space) on a VALUE: every option, with
+       an empty filter (from = the cursor), so clicking "tags: [alpha,
+       beta]" lists both. validFor keeps that result while the user
+       types, so what they type from there filters it — without it the
+       engine asked again on every key with a fresh empty filter, and Tab
+       took the first row whatever was typed ("be" gave "alpha"). The
+       apply still replaces the whole token. Keys keep span-replace.   */
+    if (context.explicit && tok.mode === 'value') return { from: pos, options, validFor };
+    return { from: tok.from, to: tok.to, options, validFor };
   }
 
   /* Clicking into the frontmatter opens the menu (the CLAUDE.md UX:
@@ -856,9 +906,20 @@ const lineNumbersCompartment = new Compartment();
 window.replaceEditorContent = function (text) {
     const freshState = EditorState.create({
       doc: text,
+      selection: { anchor: _openCursorPos(text) },
       extensions: _editorExtensions,
     });
-    window.cmView.setState(freshState);
+    /* End a mouse gesture still in progress on the old document — setState
+     keeps it (CodeMirror's input state outlives the swap). Its positions
+     belong to that document: mapping them through the new one's first
+     edit threw inside the view update, and the screen stopped matching
+     the saved text from then on (the old "Tab-accept corrupts the
+     editor" report — Tab was merely the first edit after a stray press). */
+  const gesture = window.cmView.inputState && window.cmView.inputState.mouseSelection;
+  if (gesture && typeof gesture.destroy === 'function') {
+    try { gesture.destroy(); } catch (_) { /* never block a file switch */ }
+  }
+  window.cmView.setState(freshState);
     _docGeneration++; // a different document is on screen now (see 1b)
     
     // Re-apply the line numbers visibility state to the fresh editor

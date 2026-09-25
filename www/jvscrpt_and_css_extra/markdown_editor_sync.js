@@ -27,14 +27,27 @@ preview.addEventListener('click', function (e) {
     return; // Exit early, do nothing else
   }
 
+  /* Reader mode's Properties fold toggle: fold / unfold, nothing else
+     (not the sheet's own "select this YAML in the editor" below). The
+     render replaces the button — keep keyboard focus on the new one. */
+  const yamlToggle = e.target.closest('.yaml-toggle');
+  if (yamlToggle) {
+    e.stopPropagation();
+    const hadFocus = document.activeElement === yamlToggle;
+    if (typeof window.setYamlPropsCollapsed === 'function') window.setYamlPropsCollapsed(!window.yamlPropsCollapsed);
+    const again = hadFocus && preview.querySelector('.yaml-toggle');
+    if (again) again.focus();
+    return;
+  }
+
   // Prevent crashes if the user clicks a broken image or a raw media file wrapper
   if (e.target.tagName === 'IMG' || window._showingUnsupportedFile) {
     return;
   }
 
   const raw = editor.value;
-/* NEW: Check if an individual YAML pill was clicked */
-  const pillEl = e.target.closest('.yaml-pill');
+/* An individual Properties row was clicked: select its source lines */
+  const pillEl = e.target.closest('.yaml-row');
   if (pillEl) {
     e.stopPropagation(); // Prevent the outer YAML block click from firing
     

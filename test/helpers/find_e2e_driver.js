@@ -292,10 +292,10 @@
       .find((el) => el.textContent.includes('$a+b$'));
     return !!codeEl;
   })();
-  /* Frontmatter renders as the preview's "Properties" pill box when the
+  /* Frontmatter renders as the preview's "Properties" sheet when the
      cursor is elsewhere (reader parity), and reveals raw dim YAML when
      clicked (pointer selection).                                       */
-  lpV2.fmProtected = document.querySelectorAll('.lp-yaml .yaml-pill').length === 2 // title + tags
+  lpV2.fmProtected = document.querySelectorAll('.lp-yaml .yaml-row').length === 2 // title + tags
     && !document.querySelector('.lp-render h2'); // Setext misparse guard
   window.cmView.dispatch({ selection: { anchor: 6 }, userEvent: 'select.pointer' });
   await sleep(300);
@@ -305,7 +305,7 @@
   if (CM.closeCompletion) CM.closeCompletion(window.cmView); // auto-opened menu
   editor.setSelectionRange(editor.value.length, editor.value.length);
   await sleep(300);
-  lpV2.fmPillsReturn = !!document.querySelector('.lp-yaml .yaml-pill');
+  lpV2.fmPillsReturn = !!document.querySelector('.lp-yaml .yaml-row');
   /* cursor onto the inline-math paragraph -> its raw $ source returns */
   const mathPos = editor.value.indexOf('$e^');
   editor.setSelectionRange(mathPos, mathPos);
@@ -1706,7 +1706,7 @@
   replaceEditorContent('---\ntags: [alpha, beta]\nstatus: done\n---\n\nbody');
   editor.setSelectionRange(editor.value.length, editor.value.length);
   await sleep(400);
-  const tagsPill = Array.from(document.querySelectorAll('.lp-yaml .yaml-pill'))
+  const tagsPill = Array.from(document.querySelectorAll('.lp-yaml .yaml-row'))
     .find((p) => p.textContent.startsWith('tags'));
   if (tagsPill) {
     tagsPill.dispatchEvent(new MouseEvent('mousedown', {

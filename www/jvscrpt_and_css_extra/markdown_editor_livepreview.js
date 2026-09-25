@@ -46,9 +46,10 @@
   const { Decoration, WidgetType, ViewPlugin, syntaxTree, StateField, StateEffect, EditorView, keymap, Prec } = CM;
 
   /* End offset of a YAML frontmatter block at the very start of the doc,
-     or 0. CommonMark would otherwise misparse it: the fences become
-     thematic breaks and 'key: value' + '---' becomes a Setext heading.
-     Frontmatter stays a raw, dim-styled protected region.              */
+     or 0. The markdown parser knows no frontmatter (its fences parse as
+     thematic breaks, 'key: value' + '---' as a Setext heading), so this
+     scan decides: the region renders as the Properties sheet (YamlWidget)
+     and shows its raw, dim lines while being edited.                   */
   function frontmatterEnd(doc) {
     if (doc.lines < 2) return 0;
     if (doc.line(1).text.replace(/\r$/, '') !== '---') return 0;
@@ -301,26 +302,36 @@
   }
 
   /* ── YAML frontmatter widget ─────────────────────────────────────────
-     Renders the frontmatter as the SAME "Properties" pill box the
-     classic preview/reader shows (shared buildYamlRenderHtml in
-     markdown_editor_core_cm.js — escapeHtml'd there). Clicking a pill
+     Renders the frontmatter as the SAME "Properties" sheet the classic
+     preview/reader shows (window.ReveryYaml.buildSheetHtml in
+     markdown_editor_yaml.js — escaped there). Clicking a row
      places the cursor on that source line (posInYamlWidget), which
      reveals the raw YAML and pops the suggestions menu (the pointer-
-     selection contract with yamlClickToComplete in cm_setup.js).     */
+     selection contract with yamlClickToComplete in cm_setup.js).
+     The header is a toggle that folds the sheet to one line — the one
+     global, persisted choice reader mode shares (setYamlPropsCollapsed,
+     menus.js), carried here by the field (yamlCollapseEffect). Folding is
+     display only: a cursor inside the frontmatter always shows its raw
+     lines, folded or not.                                              */
   class YamlWidget extends RenderedWidget {
-    get kind() { return 'y'; }
-    toDOM() {
+    constructor(src, collapsed) { super(src); this.collapsed = collapsed; }
+    get kind() { return this.collapsed ? 'yc' : 'y'; }
+    eq(other) { return other.src === this.src && other.collapsed === this.collapsed; }
+    toDOM(view) {
       const wrap = document.createElement('div');
       wrap.className = 'lp-yaml';
       let html = '';
       try {
         const m = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)\s*$/.exec(this.src);
-        if (m && typeof buildYamlRenderHtml === 'function') {
-          html = buildYamlRenderHtml(m[1], this.src.indexOf('\n') + 1);
+        if (m && window.ReveryYaml) {
+          html = window.ReveryYaml.buildSheetHtml(m[1], this.src.indexOf('\n') + 1,
+            { collapsible: true, collapsed: this.collapsed });
         }
       } catch (_) { /* fall through to raw */ }
       if (html) {
         wrap.innerHTML = html; // every key/value escapeHtml'd by the builder
+        const toggle = wrap.querySelector('.yaml-toggle');
+        if (toggle) toggle.addEventListener('click', (e) => { e.preventDefault(); toggleYamlCollapsed(view); });
       } else {
         wrap.textContent = this.src;
         wrap.classList.add('lp-render-fallback');
@@ -330,6 +341,29 @@
       return wrap;
     }
   }
+
+  /* The sheet's header toggle: store the choice (menus.js redraws every
+     sheet through syncYamlCollapsed below), keeping this header where it
+     was — the text below moves instead. */
+  function toggleYamlCollapsed(view) {
+    const fv = view.state.field(blockField, false);
+    if (!fv) return;
+    const next = !fv.yamlCollapsed;
+    const anchor = { pos: 0, side: 'top', y: screenEdge(view, 0, 'top') };
+    if (typeof window.setYamlPropsCollapsed === 'function') window.setYamlPropsCollapsed(next);
+    else window.livePreviewSyncYamlCollapsed(next);
+    keepInPlace(view, anchor);
+  }
+
+  /* Redraws the live preview's sheet folded / unfolded when the choice
+     changes anywhere (menus.js setYamlPropsCollapsed — this toggle, or
+     reader mode's). A no-op when live preview is off or already agrees. */
+  window.livePreviewSyncYamlCollapsed = function (collapsed) {
+    window.yamlPropsCollapsed = !!collapsed;
+    const view = window.cmView;
+    const fv = view && view.state.field(blockField, false);
+    if (fv && fv.yamlCollapsed !== !!collapsed) view.dispatch({ effects: yamlCollapseEffect.of(!!collapsed) });
+  };
 
   /* ── Reveal rule ─────────────────────────────────────────────────────
      A block shows its raw markdown while the user is EDITING it:
@@ -425,7 +459,7 @@
     walk(list, 1);
     const lastNo = doc.lineAt(Math.min(list.to, doc.length)).number;
     for (const [n, info] of lines) {
-      const hang = `calc(var(--lp-prose-size, 1.125rem) * 1.5555556 + ${(0.4444444 + 2 * (info.depth - 1)).toFixed(7)}em)`;
+      const hang = `calc(var(--prose-base-size, 1.125rem) * 1.5555556 + ${(0.4444444 + 2 * (info.depth - 1)).toFixed(7)}em)`;
       let cls = 'lp-raw-li';
       if (!loose && info.start) cls += info.gap === 'nest' ? ' lp-raw-li-gap-nest' : ' lp-raw-li-gap';
       if (!loose && n === lastNo) cls += info.depth > 1 ? ' lp-raw-li-end-nest' : ' lp-raw-li-end';
@@ -482,9 +516,25 @@
   }
 
   /* ── Block segmentation + decoration build ───────────────────────── */
+  /* The part of a top-level node below the frontmatter, as a block of its
+     own, or null. The parser knows no frontmatter, so a node can start
+     inside it and run past its end: a `...` closer lets the next line
+     join a paragraph, and an HTML line or a code fence in a `|` value
+     swallows the body below. That body still renders — as ONE block, the
+     rest of the node, since the tree has nothing finer there. */
+  function belowFrontmatter(doc, node, fmEnd) {
+    const end = Math.min(node.to, doc.length);
+    if (end <= fmEnd || fmEnd >= doc.length) return null;
+    let line = doc.lineAt(fmEnd + 1);
+    while (!line.text.trim() && line.to < end) line = doc.line(line.number + 1);
+    if (line.from >= end || !line.text.trim()) return null;
+    return { name: 'BelowFrontmatter', from: line.from, to: end };
+  }
+
   /* `frozen` (the reveal set while a mouse button is down, see the field)
-     overrides the reveal rule: exactly those blocks are raw. */
-  function buildBlocks(state, frozen) {
+     overrides the reveal rule: exactly those blocks are raw.
+     `yamlCollapsed`: the frontmatter sheet is folded (YamlWidget). */
+  function buildBlocks(state, frozen, yamlCollapsed) {
     const doc = state.doc;
     const ranges = [];
     const blockRanges = [];
@@ -496,8 +546,9 @@
       : isRevealed(sel, from, to, linear));
 
     const tree = syntaxTree(state);
-    for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
-      if (node.from < fmEnd) continue;      // protected frontmatter region
+    for (let top = tree.topNode.firstChild; top; top = top.nextSibling) {
+      const node = top.from < fmEnd ? belowFrontmatter(doc, top, fmEnd) : top;
+      if (!node) continue;                  // inside the frontmatter (rendered below)
       if (KEEP_RAW.has(node.name)) continue;
       const from = doc.lineAt(node.from).from;
       const to = doc.lineAt(Math.min(node.to, doc.length)).to;
@@ -514,7 +565,7 @@
       }).range(from, to));
     }
 
-    /* Frontmatter: rendered as the preview's "Properties" pill box when
+    /* Frontmatter: rendered as the preview's "Properties" sheet when
        not being edited (parity with reader mode); dim raw lines while
        the cursor is inside it.                                        */
     if (fmEnd) {
@@ -523,7 +574,7 @@
       if (fmShown) revealed.push({ from: 0, to: fmEnd });
       if (!fmShown) {
         ranges.push(Decoration.replace({
-          widget: new YamlWidget(doc.sliceString(0, fmEnd)),
+          widget: new YamlWidget(doc.sliceString(0, fmEnd), yamlCollapsed),
           block: true,
         }).range(0, fmEnd));
       } else {
@@ -541,10 +592,10 @@
   }
 
   let _warnedOnce = false;
-  function safeBuildBlocks(state, frozen) {
+  function safeBuildBlocks(state, frozen, yamlCollapsed) {
     let value;
     try {
-      value = buildBlocks(state, frozen);
+      value = buildBlocks(state, frozen, yamlCollapsed);
     } catch (err) {
       if (!_warnedOnce) {
         _warnedOnce = true;
@@ -553,6 +604,7 @@
       value = { deco: Decoration.none, blockRanges: [], revealed: [] };
     }
     value.frozen = frozen || null;
+    value.yamlCollapsed = yamlCollapsed;
     return value;
   }
 
@@ -566,26 +618,32 @@
      often reaching backwards, above the click (measured: 87 of 131
      clicks). Set and thawed by lpMouseSelection; any edit also thaws. */
   const freezeEffect = StateEffect.define();
+  /* Folds (true) / unfolds the frontmatter sheet — toggleYamlCollapsed. */
+  const yamlCollapseEffect = StateEffect.define();
 
   const blockField = StateField.define({
-    create(state) { return safeBuildBlocks(state, null); },
+    create(state) { return safeBuildBlocks(state, null, !!window.yamlPropsCollapsed); },
     update(value, tr) {
       let frozen = value.frozen;
+      let collapsed = value.yamlCollapsed;
       for (const e of tr.effects) {
         if (e.is(freezeEffect)) frozen = e.value ? (value.frozen || value.revealed) : null;
+        else if (e.is(yamlCollapseEffect)) collapsed = !!e.value;
       }
       if (tr.docChanged) frozen = null; // an edit is never hidden inside a rendered block
-      if (tr.docChanged || frozen !== value.frozen) return safeBuildBlocks(tr.state, frozen);
+      if (tr.docChanged || frozen !== value.frozen || collapsed !== value.yamlCollapsed) {
+        return safeBuildBlocks(tr.state, frozen, collapsed);
+      }
       /* The parser finishes large documents in idle time, AFTER the
          transaction that changed the text: a new tree means blocks the
          previous build could not see yet.                             */
-      if (syntaxTree(tr.state) !== syntaxTree(tr.startState)) return safeBuildBlocks(tr.state, frozen);
+      if (syntaxTree(tr.state) !== syntaxTree(tr.startState)) return safeBuildBlocks(tr.state, frozen, collapsed);
       if (tr.selection && !frozen) {
         /* Rebuild only when some block's rendered/raw status flips. */
         const flipped = value.blockRanges.some((b) =>
           isRevealed(tr.state.selection, b.from, b.to, b.linear)
             !== isRevealed(tr.startState.selection, b.from, b.to, b.linear));
-        if (flipped) return safeBuildBlocks(tr.state, null);
+        if (flipped) return safeBuildBlocks(tr.state, null, collapsed);
       }
       return value;
     },
@@ -907,16 +965,28 @@
     return block.from + segmentOf(view.state.doc.sliceString(block.from, block.to), slEl).start;
   }
 
-  /* Click inside the YAML pill box → source position. A pill carries
-     data-start = doc offset of its source line; the cursor lands at the
-     start of that key's first value so the suggestions menu opens with
-     the full value list for exactly that key. Elsewhere in the box the
-     click's vertical position picks the frontmatter line.            */
+  /* Click inside the YAML Properties sheet → source position. A row
+     carries data-start = doc offset of its key's line; the cursor lands
+     at the start of that key's first value so the suggestions menu opens
+     with the full value list for exactly that key. Beside or between
+     rows the nearest row counts; below the last row (the sheet's bottom
+     margin) or anywhere on a folded sheet the click lands outside the
+     frontmatter, like a click on any block's own frame. Only the raw-text
+     fallback (no entries) maps by vertical position.                  */
   function posInYamlWidget(view, block, wrap, target, x, y) {
     const doc = view.state.doc;
-    const pill = target.closest ? target.closest('.yaml-pill') : null;
-    if (pill && pill.dataset && pill.dataset.start !== undefined) {
-      const ds = parseInt(pill.dataset.start, 10);
+    let row = target.closest ? target.closest('.yaml-row') : null;
+    const rows = wrap.querySelectorAll('.yaml-row');
+    if (!row && rows.length && y <= rows[rows.length - 1].getBoundingClientRect().bottom) {
+      let best = Infinity;
+      for (const r of rows) {
+        const rr = r.getBoundingClientRect();
+        const d = y < rr.top ? rr.top - y : y > rr.bottom ? y - rr.bottom : 0;
+        if (d < best) { best = d; row = r; }
+      }
+    }
+    if (row && row.dataset && row.dataset.start !== undefined) {
+      const ds = parseInt(row.dataset.start, 10);
       if (Number.isFinite(ds)) {
         const line = doc.lineAt(Math.max(0, Math.min(ds, doc.length)));
         const colon = line.text.indexOf(':');
@@ -926,6 +996,7 @@
         return line.from + p;
       }
     }
+    if (wrap.querySelector('.yaml-render')) return outsidePos(view, block, wrap.getBoundingClientRect(), y);
     const rect = wrap.getBoundingClientRect();
     const lines = doc.sliceString(block.from, block.to).split('\n');
     let pos = block.from;
@@ -1283,8 +1354,17 @@
     let startSel = view.state.selection;
     let pinPending = !freeze;
     let dragging = false;
+    /* The document this gesture's positions belong to. A document swap
+       (setState) never arrives here as an update, so an update that does
+       not start from it means the gesture outlived its document: its
+       positions mean nothing any more, and mapping them through the new
+       document's changes throws inside the view update. The gesture goes
+       inert instead (replaceEditorContent also ends it outright). */
+    let gestureDoc = view.state.doc;
     return {
       update(update) {
+        if (update.startState.doc !== gestureDoc) { gestureDoc = null; return; }
+        gestureDoc = update.state.doc;
         if (update.docChanged) {
           start.pos = update.changes.mapPos(start.pos);
           if (pin) pin.pos = update.changes.mapPos(pin.pos);
@@ -1296,6 +1376,7 @@
         }
       },
       get(curEvent, extend) {
+        if (gestureDoc !== view.state.doc) return view.state.selection;
         if (!dragging && !stationary && curEvent !== event
           && Math.hypot(curEvent.clientX - event.clientX, curEvent.clientY - event.clientY) >= DRAG_SLOP) {
           dragging = true;

@@ -83,7 +83,31 @@ test('live preview pointer model end-to-end', { skip: !hasDisplay, timeout: 1800
   assert.deepEqual(r.checkboxNoReveal, { found: true, stillRendered: true, docUntouched: true },
     'a mousedown on a task checkbox must neither reveal the block nor edit the document');
   assert.deepEqual(r.yamlPill, { found: true, onStatusLine: true, revealed: true },
-    'clicking a YAML pill must reveal the frontmatter with the cursor on that key line');
+    'clicking a YAML row must reveal the frontmatter with the cursor on that key line');
+  assert.deepEqual(r.yamlSheet, {
+    openCursorAfterYaml: true, openShowsSheet: true, readsShapes: true, keyNotSqueezed: true, previewParity: true,
+    folds: true, foldDisplayOnly: true, foldKeepsHeader: true, foldHeightExact: true, foldPersisted: true,
+    foldedMarginClickOutside: true, foldIsGlobal: true, cursorInsideShowsRaw: true, foldReturns: true, unfolds: true,
+  }, 'the Properties sheet must show on open, read lists/maps/block scalars, and fold through its toggle as a persisted, display-only choice that never hides the raw YAML from a cursor inside it');
+  assert.deepEqual(r.yamlExport, { captured: true, listJoined: true, mapJoined: true },
+    'the HTML export metadata table must keep list and nested values separated');
+  assert.deepEqual(r.fmStraddle, { dotsCloser: true, fenceInScalar: true },
+    'the body below a frontmatter the markdown parser misreads must still render');
+  assert.deepEqual(r.readerFold, {
+    toggleInReader: true, folds: true, noEditorSelection: true, exportKeepsRows: true,
+    sharedWithLivePreview: true, splitPaneNeverFolds: true, unfoldShared: true,
+  }, 'reader mode must fold the sheet with the same stored choice as live preview, without touching the editor, the HTML export or the split-view preview');
+  assert.equal(r.sheetFollowsPreviewSize, true, 'the Properties sheet must scale with the preview text size');
+  assert.deepEqual(r.staleGesture, { pressed: true, editOk: true, screenMatchesDoc: true, noErrors: true },
+    'a mouse press still held when the document is swapped must not corrupt the next edit (screen and saved text must agree)');
+  assert.deepEqual(r.yamlAutocomplete, { opens: true, typedFilters: true, tabTakesTyped: true, quotesSpecial: true, unicodeKey: true },
+    'frontmatter autocomplete must filter by what is typed after a click, quote values YAML cannot hold plain, and suggest for any-letter keys');
+  assert.deepEqual(r.yamlTemplates, {
+    mergesMissing: true, oneUndo: true, nothingMissingNoop: true, mdBelowFrontmatter: true,
+    yamlOnTopWithoutFm: true, fenceLessRefused: true,
+  }, 'templates must never break the frontmatter: YAML merges missing keys, markdown goes below it, fence-less YAML templates are refused');
+  assert.deepEqual(r.exportMeta, { foldedTitle: true, emptyAuthor: true },
+    'export metadata must read the frontmatter like the sheet does');
   assert.ok(r.heightMap.widgets >= 8 && r.heightMap.maxDrift <= 1,
     `CodeMirror's height map must match the screen for every rendered block, even below lists and quotes (widgets must contain their margins): ${JSON.stringify(r.heightMap)}`);
   assert.deepEqual(r.edgeAbove, { found: true, onBlankLine: true, stillRendered: true, noScroll: true },

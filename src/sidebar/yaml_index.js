@@ -29,51 +29,31 @@ const _fileCache = new Map(); // path -> { mtime, parsed: {keys, pairs} | null }
 let _built = { at: 0, root: null, agg: null };
 
 /* ── Parsing ──────────────────────────────────────────────────────────────
-   Deliberately the same dialect the preview understands (simple
-   "key: value" lines): scalars, inline [a, b] arrays, and "- item" block
-   lists under a key. Not a YAML parser — never throws, never surprises. */
+   Keys and values through window.ReveryYaml (markdown_editor_yaml.js) —
+   the SAME reading the Properties sheet and the exports use, so a
+   suggestion is always a value the sheet shows: a list's items one by
+   one (flow, block, or a comma value under a list key such as tags),
+   any other value whole — `title: Hello, world` suggests "Hello, world",
+   never "Hello" and "world". Keys may be any letters (`författare`).
+   Nested maps contribute their key only. Never throws.               */
+const MAX_VALUE_LEN = 80;
+
 export function parseFrontmatterBlock(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)(?:\r?\n|$)/.exec(text || '');
   if (!m) return null;
+  const Y = window.ReveryYaml;
+  if (!Y) return null;
   const keys = [];
   const pairs = new Map(); // key -> [values]
-  let currentKey = null;
-
-  const addVals = (key, vals) => {
-    if (!vals.length) return;
-    const arr = pairs.get(key) || [];
-    arr.push(...vals);
-    pairs.set(key, arr);
-  };
-
-  for (const rawLine of m[1].split('\n')) {
-    const line = rawLine.replace(/\r$/, '');
-    const kv = /^([A-Za-z0-9_][\w-]*)\s*:\s*(.*)$/.exec(line);
-    if (kv) {
-      currentKey = kv[1];
-      keys.push(currentKey);
-      addVals(currentKey, splitYamlValues(kv[2]));
-      continue;
-    }
-    const li = /^\s*-\s+(.+)$/.exec(line);
-    if (li && currentKey) addVals(currentKey, splitYamlValues(li[1]));
+  for (const e of Y.readEntries(m[1], 0)) {
+    if (!e.key) continue;
+    keys.push(e.key);
+    const vals = (e.kind === 'list' ? e.value : e.kind === 'text' ? [e.value] : [])
+      .map((v) => String(v).trim())
+      .filter((v) => v && v.length <= MAX_VALUE_LEN && !v.includes('\n'));
+    if (vals.length) pairs.set(e.key, (pairs.get(e.key) || []).concat(vals));
   }
   return { keys, pairs };
-}
-
-/* Comma-separated values are treated as LISTS in both spellings —
-   "tags: a, b" and "tags: [a, b]" index identically. This matches the
-   editor-side completion, which already segments values at commas, so
-   the two dialects behave the same everywhere. (Strict YAML calls the
-   unbracketed form a single string, but for tag-like metadata the list
-   reading is what users mean — and consistency beats pedantry.)      */
-function splitYamlValues(raw) {
-  let v = (raw || '').trim();
-  if (!v) return [];
-  if (v.startsWith('[') && v.endsWith(']')) v = v.slice(1, -1);
-  return v.split(',')
-    .map((s) => s.trim().replace(/^["']|["']$/g, ''))
-    .filter((s) => s && s.length <= 80);
 }
 
 /* ── Aggregation ────────────────────────────────────────────────────── */

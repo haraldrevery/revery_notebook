@@ -670,13 +670,15 @@ async function exportHtmlFile() {
   });
 
   /* ── 2. Build an optional YAML metadata table ── */
+  /* Read from the note itself with the preview's own rule — never from the
+     rendered sheet, which a folded reader view draws without its rows. */
   let yamlBlock = '';
-  const yamlPills = preview.querySelectorAll('.yaml-pill');
-  if (yamlPills.length > 0) {
-    const rows = Array.from(yamlPills).map(pill => {
-      const key = pill.querySelector('.yaml-key')?.textContent ?? '';
-      const val = pill.querySelector('.yaml-value')?.textContent ?? '';
-      return `<tr><th>${escapeHtml(key)}</th><td>${escapeHtml(val)}</td></tr>`;
+  const fm = previewFrontmatterMatch(editor.value);
+  const entries = fm ? window.ReveryYaml.readEntries(fm[1], 0) : [];
+  if (entries.length > 0) {
+    const rows = entries.map((e) => {
+      const val = window.ReveryYaml.entryText(e);
+      return `<tr><th>${escapeHtml(e.key)}</th><td>${escapeHtml(val)}</td></tr>`;
     }).join('\n      ');
     yamlBlock = `<table class="yaml-meta">\n      ${rows}\n    </table>\n    `;
   }

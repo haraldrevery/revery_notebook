@@ -485,11 +485,11 @@
     }
   }
 
-  /* O. Click on a rendered YAML pill still opens editing on that line
+  /* O. Click on a rendered YAML row still opens editing on that line
         (pointer-selection contract with the frontmatter autocomplete). */
   await setDoc('---\ntags: [alpha, beta]\nstatus: done\n---\n\nbody text');
   {
-    const pill = Array.from(document.querySelectorAll('#editor .lp-yaml .yaml-pill'))
+    const pill = Array.from(document.querySelectorAll('#editor .lp-yaml .yaml-row'))
       .find((p) => p.textContent.startsWith('status'));
     R.yamlPill = { found: !!pill };
     if (pill) {
@@ -500,6 +500,335 @@
       if (CM.closeCompletion) CM.closeCompletion(view);
       await release(r.left + 8, r.top + r.height / 2);
     }
+  }
+
+  /* O2. The Properties sheet. Opening a note puts the cursor on the line
+         after its frontmatter, so the sheet shows (at 0 the cursor sat
+         inside the YAML and revealed it raw). The sheet reads the usual
+         YAML shapes, folds to one header line through its toggle — a
+         persisted, global, display-only choice that keeps the header in
+         place and the height map exact — and a cursor inside the YAML
+         still shows it raw while folded. */
+  {
+    const FM = '---\ntitle: "A: quoted title"\ntags:\n  - alpha\n  - beta\nauthor:\n  name: Harald\n  url: https://example.com\n'
+      + 'summary: |\n  first line\n  second line\nlong: ' + 'word '.repeat(40).trim() + '\n---\n\nbody paragraph\n\n## Next heading\n';
+    const fmEnd = FM.indexOf('\n---\n') + 4;
+    const S = R.yamlSheet = {};
+    replaceEditorContent(FM);           // the real file-open path: no cursor move
+    await sleep(400);
+    await settle();
+    S.openCursorAfterYaml = main().head === fmEnd + 1 && main().empty;
+    S.openShowsSheet = !!document.querySelector('#editor .lp-yaml .yaml-row');
+    const rowOf = (key) => Array.from(document.querySelectorAll('#editor .lp-yaml .yaml-row'))
+      .find((row) => row.querySelector('.yaml-key').textContent === key) || null;
+    const tags = rowOf('tags'), author = rowOf('author'), summary = rowOf('summary'), title = rowOf('title'), long = rowOf('long');
+    S.readsShapes = !!(tags && author && summary && title)
+      && Array.from(tags.querySelectorAll('.yaml-chip'), (c) => c.textContent).join() === 'alpha,beta'
+      && author.querySelectorAll('.yaml-sub').length === 2
+      && summary.textContent.includes('second line')
+      && title.querySelector('.yaml-value').textContent === 'A: quoted title';
+    /* The key's TEXT stays on one line beside a long wrapping value (the
+       grid cell itself stretches to the row, so measure the text). */
+    S.keyNotSqueezed = !!long && (() => {
+      const range = document.createRange();
+      range.selectNodeContents(long.querySelector('.yaml-key'));
+      const valueRows = long.querySelector('.yaml-value').getClientRects();
+      return range.getClientRects().length === 1 && long.getBoundingClientRect().height > 40 && valueRows.length > 0;
+    })();
+    S.previewParity = document.querySelectorAll('#preview .yaml-row').length
+        === document.querySelectorAll('#editor .lp-yaml .yaml-row').length
+      && !document.querySelector('#preview .yaml-toggle');
+
+    /* Fold through the header toggle: the mousedown is the toggle's own
+       (CodeMirror places no cursor, nothing reveals), the click folds. */
+    const toggle = document.querySelector('#editor .lp-yaml .yaml-toggle');
+    const headTop = toggle ? toggle.getBoundingClientRect().top : null;
+    const docBefore = editor.value, headBefore = main().head;
+    if (toggle) {
+      const r = toggle.getBoundingClientRect();
+      await press(r.left + 20, r.top + r.height / 2);
+      await release(r.left + 20, r.top + r.height / 2);
+      toggle.click();
+      await sleep(150);
+      await settle();
+    }
+    const yamlBox = () => document.querySelector('#editor .lp-yaml');
+    const drift = () => {
+      const w = yamlBox();
+      const b = view.lineBlockAt(0);
+      return w ? Math.abs(b.top + view.documentTop - w.getBoundingClientRect().top)
+        + Math.abs(b.height - w.getBoundingClientRect().height) : 99;
+    };
+    const settingNow = () => { try { return JSON.parse(localStorage.getItem('revery_md_settings')).yamlPropsCollapsed; } catch (_) { return null; } };
+    S.folds = !!document.querySelector('#editor .lp-yaml .yaml-collapsed')
+      && !document.querySelector('#editor .lp-yaml .yaml-row')
+      && (document.querySelector('#editor .lp-yaml .yaml-count') || {}).textContent === '5';
+    S.foldDisplayOnly = editor.value === docBefore && main().head === headBefore;
+    S.foldKeepsHeader = kept(headTop, (document.querySelector('#editor .lp-yaml .yaml-toggle') || { getBoundingClientRect: () => ({}) }).getBoundingClientRect().top);
+    S.foldHeightExact = drift() <= 1;
+    S.foldPersisted = settingNow() === true;
+
+    /* A click in the folded sheet's bottom margin lands below it. */
+    {
+      const w = yamlBox().getBoundingClientRect();
+      await press(w.left + w.width / 2, w.bottom - 3);
+      await release(w.left + w.width / 2, w.bottom - 3);
+      S.foldedMarginClickOutside = main().head > fmEnd && !!document.querySelector('#editor .lp-yaml .yaml-collapsed');
+    }
+
+    /* The choice is global: another note opens folded too. */
+    replaceEditorContent('---\nk: v\n---\n\nother note');
+    await sleep(300);
+    await settle();
+    S.foldIsGlobal = !!document.querySelector('#editor .lp-yaml .yaml-collapsed');
+
+    /* The cursor inside a folded frontmatter shows its raw lines. */
+    editor.setSelectionRange(5, 5);
+    await sleep(250);
+    await settle();
+    S.cursorInsideShowsRaw = !yamlBox() && !!document.querySelector('#editor .cm-line.lp-frontmatter');
+    if (CM.closeCompletion) CM.closeCompletion(view);
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    await sleep(250);
+    await settle();
+    S.foldReturns = !!document.querySelector('#editor .lp-yaml .yaml-collapsed');
+
+    /* Unfold again (and leave the setting as the rest of the run expects). */
+    const t2 = document.querySelector('#editor .lp-yaml .yaml-toggle');
+    if (t2) t2.click();
+    await sleep(150);
+    await settle();
+    S.unfolds = !!document.querySelector('#editor .lp-yaml .yaml-row') && settingNow() === false && drift() <= 1;
+  }
+
+  /* O3. HTML export: list chips and nested values keep their separators
+         in the metadata table (textContent alone ran them together). */
+  {
+    replaceEditorContent('---\ntags: [alpha, beta]\nauthor:\n  name: Harald\n  url: x\n---\n\nbody');
+    await sleep(300);
+    let blob = null;
+    const origCreate = URL.createObjectURL, origClick = HTMLAnchorElement.prototype.click;
+    URL.createObjectURL = (b) => { blob = b; return 'blob:about:blank'; };
+    HTMLAnchorElement.prototype.click = function () {};
+    try { await exportHtmlFile(); } finally {
+      URL.createObjectURL = origCreate;
+      HTMLAnchorElement.prototype.click = origClick;
+    }
+    const html = blob ? await blob.text() : '';
+    R.yamlExport = {
+      captured: !!blob,
+      listJoined: html.includes('<th>tags</th><td>alpha, beta</td>'),
+      mapJoined: html.includes('<th>author</th><td>name: Harald; url: x</td>'),
+    };
+  }
+
+  /* O4. Body below a frontmatter the markdown parser misreads still
+         renders: a `...` closer made the next line part of a paragraph
+         starting inside the YAML, and a fence in a `|` value swallowed
+         the whole body — both used to stay raw text forever. */
+  {
+    R.fmStraddle = {};
+    /* The cursor on a blank line, so no probed block is being edited. */
+    const dots = '---\ntitle: x\n...\nBody line right after\n\nPara two';
+    await setDoc(dots, dots.indexOf('\n\nPara') + 1);
+    R.fmStraddle.dotsCloser = !!document.querySelector('#editor .lp-yaml')
+      && !!widgetWith('Body line right after') && !!widgetWith('Para two');
+    const fence = '---\ndesc: |\n  ```\n---\n\n# Straddle Heading\n\nPara text';
+    await setDoc(fence, fence.indexOf('\n\n#') + 1);
+    R.fmStraddle.fenceInScalar = !!document.querySelector('#editor .lp-yaml')
+      && !!Array.from(document.querySelectorAll('#editor .lp-render h1')).find((h) => h.textContent.includes('Straddle Heading'));
+  }
+
+  const settingNow = () => { try { return JSON.parse(localStorage.getItem('revery_md_settings')).yamlPropsCollapsed; } catch (_) { return null; } };
+  const captureHtmlExport = async () => {
+    let blob = null;
+    const origCreate = URL.createObjectURL, origClick = HTMLAnchorElement.prototype.click;
+    URL.createObjectURL = (b) => { blob = b; return 'blob:about:blank'; };
+    HTMLAnchorElement.prototype.click = function () {};
+    try { await exportHtmlFile(); } finally {
+      URL.createObjectURL = origCreate;
+      HTMLAnchorElement.prototype.click = origClick;
+    }
+    return blob ? blob.text() : '';
+  };
+
+  /* O5. Reader mode folds the sheet too — the SAME stored choice as live
+         preview; its toggle only folds (no selection in the hidden
+         editor); the HTML export still lists every property while the
+         reader sheet is folded; the split-view preview never folds. */
+  {
+    const RF = R.readerFold = {};
+    await setDoc('---\ntitle: Reader note\ntags: [a, b]\n---\n\nbody text');
+    toggleReaderMode();
+    await sleep(200);
+    RF.toggleInReader = !!document.querySelector('#preview .yaml-toggle') && !!document.querySelector('#preview .yaml-row');
+    const headBefore = main().head, docBefore = editor.value;
+    const t = document.querySelector('#preview .yaml-toggle');
+    if (t) t.click();
+    await sleep(150);
+    RF.folds = !!document.querySelector('#preview .yaml-collapsed') && !document.querySelector('#preview .yaml-row')
+      && settingNow() === true;
+    RF.noEditorSelection = main().head === headBefore && main().empty && editor.value === docBefore;
+    RF.exportKeepsRows = (await captureHtmlExport()).includes('<th>title</th><td>Reader note</td>');
+    toggleReaderMode();
+    await sleep(200);
+    await settle();
+    RF.sharedWithLivePreview = !!document.querySelector('#editor .lp-yaml .yaml-collapsed');
+    window.setLivePreviewMode(false);
+    await sleep(250);
+    RF.splitPaneNeverFolds = !document.querySelector('#preview .yaml-toggle') && !!document.querySelector('#preview .yaml-row');
+    window.setLivePreviewMode(true);
+    await sleep(250);
+    await settle();
+    const lt = document.querySelector('#editor .lp-yaml .yaml-toggle');
+    if (lt) lt.click();
+    await sleep(150);
+    RF.unfoldShared = settingNow() === false && !!document.querySelector('#editor .lp-yaml .yaml-row');
+  }
+
+  /* O6. The sheet follows the PREVIEW text size (it used rem, the UI size). */
+  {
+    await setDoc('---\ntitle: Sized\n---\n\nA paragraph.');
+    const sheetPx = () => parseFloat(getComputedStyle(document.querySelector('#editor .lp-yaml .yaml-render')).fontSize);
+    const before = sheetPx();
+    const orig = previewTextSize;
+    window.setPreviewTextSize(stepTextSize(previewTextSize, 1));
+    await sleep(200);
+    await settle();
+    const after = sheetPx();
+    const expected = before * (previewTextSize / orig);
+    window.setPreviewTextSize(orig);
+    await sleep(150);
+    R.sheetFollowsPreviewSize = after > before && Math.abs(after - expected) < 0.5;
+  }
+
+  /* O7. A mouse gesture still in progress when the document is swapped
+         (a press with no release yet, e.g. during an external-change
+         reload) must not corrupt the next edit. It used to: the gesture
+         mapped the OLD document's positions through the new one's
+         changes, threw inside the view update, and the screen stopped
+         matching the saved text. */
+  {
+    const S = R.staleGesture = {};
+    /* The old positions must lie beyond the new document's end, where
+       mapping them throws: a longer note, then a much shorter one. */
+    const before = '---\ntags: [alpha]\nstatus: done\n---\n\nbody paragraph with enough text in it';
+    await setDoc(before, before.indexOf('\n---\n') + 5);
+    const row = Array.from(document.querySelectorAll('#editor .lp-yaml .yaml-row'))
+      .find((r) => r.textContent.startsWith('status'));
+    const errs = [];
+    const origErr = console.error;
+    console.error = function (...a) { errs.push(String(a[0] && a[0].message || a[0])); return origErr.apply(this, a); };
+    try {
+      if (row) {
+        const r = row.getBoundingClientRect();
+        mouse('mousedown', r.left + 8, r.top + r.height / 2);   // pressed, never released
+        await sleep(150);
+      }
+      S.pressed = !!(view.inputState && view.inputState.mouseSelection); // the gesture is live
+      if (CM.closeCompletion) CM.closeCompletion(view);
+      replaceEditorContent('short');
+      await sleep(150);
+      /* A paste, not typing: CodeMirror ends a gesture itself on typed
+         input, but a paste, an undo, an autocomplete accept or a toolbar
+         edit reached the stale gesture — the old report's trigger was a
+         Tab-accepted suggestion. */
+      try {
+        view.dispatch({ changes: { from: view.state.doc.length, insert: ' more' }, userEvent: 'input.paste' });
+        S.editOk = true;
+      } catch (e) { S.editOk = false; errs.push(e.message); }
+      window.setLivePreviewMode(false);
+      await sleep(200);
+      const screen = Array.from(document.querySelectorAll('#editor .cm-line'), (l) => l.textContent).join('\n');
+      S.screenMatchesDoc = !!row && screen === editor.value && editor.value === 'short more';
+      S.noErrors = errs.length === 0;
+      window.setLivePreviewMode(true);
+      await sleep(200);
+    } finally {
+      console.error = origErr;
+      mouse('mouseup', 0, 0);
+    }
+  }
+
+  /* O8. Frontmatter autocomplete: after a click opens the menu, what is
+         typed filters it (Tab took the first row whatever was typed —
+         "be" gave "alpha"); a value YAML cannot hold plain is inserted
+         quoted; keys in any letters get suggestions. */
+  {
+    const AC = R.yamlAutocomplete = {};
+    window.setLivePreviewMode(false);
+    await sleep(150);
+    const menuOpen = async () => {
+      for (let w = 0; w < 30 && !document.querySelector('.cm-tooltip-autocomplete'); w++) await sleep(100);
+      return !!document.querySelector('.cm-tooltip-autocomplete');
+    };
+    const labels = () => Array.from(document.querySelectorAll('.cm-tooltip-autocomplete .cm-completionLabel'), (e) => e.textContent);
+    const typeText = (s) => { for (const ch of s) { const p = main().head; view.dispatch({ changes: { from: p, insert: ch }, selection: { anchor: p + 1 }, userEvent: 'input.type' }); } };
+    const tab = () => view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    /* A click on the value of the key line `line` (its empty value). */
+    const clickAt = async (doc, line) => {
+      replaceEditorContent(doc);
+      view.focus();
+      view.dispatch({ selection: { anchor: doc.indexOf(line + '\n') + line.length }, userEvent: 'select.pointer' });
+      const open = await menuOpen();
+      await sleep(400); // the engine's interactionDelay
+      return open;
+    };
+    const D1 = '---\ntags: [alpha, beta]\ntags: \n---\n\nbody';
+    AC.opens = await clickAt(D1, 'tags: ');
+    typeText('be');
+    await sleep(300);
+    AC.typedFilters = labels().length > 0 && !labels().includes('alpha');
+    tab();
+    await sleep(200);
+    AC.tabTakesTyped = editor.value.split('\n')[2] === 'tags: beta';
+
+    const D2 = '---\ntitle: "Note: part 2"\ntitle: \n---\n\nbody';
+    await clickAt(D2, 'title: ');
+    tab();
+    await sleep(200);
+    AC.quotesSpecial = editor.value.split('\n')[2] === 'title: "Note: part 2"';
+
+    const D3 = '---\nförfattare: Harald\nförfattare: \n---\n\nbody';
+    AC.unicodeKey = (await clickAt(D3, 'författare: ')) && labels().includes('Harald');
+    if (CM.closeCompletion) CM.closeCompletion(view);
+    window.setLivePreviewMode(true);
+    await sleep(150);
+  }
+
+  /* O9. Templates never break the frontmatter: Insert YAML merges only
+         the missing keys into an existing block (never a second block),
+         Import Template goes below the frontmatter, and a YAML template
+         without --- fences is refused. */
+  {
+    const T = R.yamlTemplates = {};
+    replaceEditorContent('---\ntitle: Mine\ndraft: true\n---\n\nbody');
+    insertTemplate('yaml', '---\ntitle: T\ndate: 2026-01-01\ntags: [a]\ndraft: false\n---\n\n');
+    T.mergesMissing = editor.value === '---\ntitle: Mine\ndraft: true\ndate: 2026-01-01\ntags: [a]\n---\n\nbody';
+    CM.undo(view);
+    T.oneUndo = editor.value === '---\ntitle: Mine\ndraft: true\n---\n\nbody';
+    insertTemplate('yaml', '---\ntitle: T\n---\n\n');
+    T.nothingMissingNoop = editor.value === '---\ntitle: Mine\ndraft: true\n---\n\nbody';
+    insertTemplate('md', '# Recipe Name\n\n## Ingredients\n\n');
+    T.mdBelowFrontmatter = editor.value === '---\ntitle: Mine\ndraft: true\n---\n\n# Recipe Name\n\n## Ingredients\n\nbody';
+    replaceEditorContent('plain note');
+    insertTemplate('yaml', '---\ntitle: T\n---\n\n');
+    T.yamlOnTopWithoutFm = editor.value === '---\ntitle: T\n---\n\nplain note';
+    const bad = window.createCustomTemplate('yaml', 'No fences ' + Date.now(), 'title: x');
+    T.fenceLessRefused = bad.ok === false && /---/.test(bad.error);
+  }
+
+  /* O10. Export metadata reads the same YAML the sheet shows: a folded
+          title is its text (it exported as ">"), and an empty author
+          stays empty (the next line, "date: …", became the author). */
+  {
+    replaceEditorContent('---\ntitle: >\n  A folded\n  title\nauthor:\ndate: 2026-09-25\n---\n\nbody');
+    await sleep(150);
+    const tex = window.exporterBuildLatex({ template: 'article', engine: 'pdflatex', titlePage: true, toc: false }).tex;
+    R.exportMeta = {
+      foldedTitle: tex.includes('\\title{A folded title}'),
+      emptyAuthor: tex.includes('\\author{}') && !/\\author\{[^}]*date/.test(tex),
+    };
   }
 
   /* ── Geometry: height map, edge and side clicks, layout-shift direction.

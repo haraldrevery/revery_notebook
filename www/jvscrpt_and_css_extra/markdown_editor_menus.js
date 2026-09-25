@@ -34,6 +34,8 @@ let selectedBackground = 'bg_6'; // Active background image key
 let slowHardwareMode = false;    // One switch for older machines — see setSlowHardwareMode
 let backgroundOpacity = null;    // null = per-theme CSS default; number 0.01–1 overrides
 let livePreviewMode = false;     // Obsidian-style in-editor rendering — see setLivePreviewMode
+let yamlPropsCollapsed = false;  // live preview's Properties sheet folded — see setYamlPropsCollapsed
+window.yamlPropsCollapsed = false; // Mirror read by the live preview when it builds the sheet
 const CUSTOM_BG_KEY = 'revery_custom_bg'; // data: URL of an imported background (outside the settings JSON)
 const CUSTOM_LOGO_KEY = 'revery_custom_logo'; // sanitized <svg> markup; presence = custom icon active (outside the settings JSON)
 const CUSTOM_LOGO_MAX_BYTES = 256 * 1024;
@@ -97,6 +99,7 @@ window.saveEditorSettings = function() {
     slowHardwareMode,
     backgroundOpacity,
     livePreviewMode,
+    yamlPropsCollapsed,
     logoPosition,
     readerDragEnabled,
     readerPaddingCustom,
@@ -178,6 +181,10 @@ function loadEditorSettings() {
       backgroundOpacity = s.backgroundOpacity;
     }
     if (s.livePreviewMode !== undefined) livePreviewMode = !!s.livePreviewMode;
+    if (s.yamlPropsCollapsed !== undefined) {
+      yamlPropsCollapsed = !!s.yamlPropsCollapsed;
+      window.yamlPropsCollapsed = yamlPropsCollapsed;
+    }
     /* Same validation markdown_editor_theme.js applied at boot, so the
        menu's ■ matches the palette on screen. */
     if (window.ReveryTheme) {
@@ -571,11 +578,12 @@ function applyUiSizeProseCompensation() {
   const tScale = (previewTextSize / 100).toFixed(4);
   /* .lp-render is the live preview's rendered-block scope: it must get
      the exact same compensation or its blocks drift from the preview.
-     --lp-prose-size exposes the same base to the live preview's raw
-     lines, whose quote/list spacing mirrors em-sized prose rules. */
+     --prose-base-size exposes the same base to what sits outside .prose
+     but must size with it: the live preview's raw lines (their quote/list
+     spacing mirrors em-sized prose rules) and the Properties sheet. */
   styleEl.textContent =
     `:is(#preview, .lp-render) .prose.prose-lg { font-size: calc(1.125rem * ${inv} * ${tScale}); }\n` +
-    `:root { --lp-prose-size: calc(1.125rem * ${inv} * ${tScale}); }`;
+    `:root { --prose-base-size: calc(1.125rem * ${inv} * ${tScale}); }`;
 }
 
 /* Apply reader mode padding: constrains the prose content width so text
@@ -941,6 +949,18 @@ window.setLivePreviewMode = function (on) {
         : []
     );
   }
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+};
+
+/* The Properties sheet folded to its header — ONE global choice,
+   persisted, shared by live preview and reader mode (the split-view
+   preview pane never folds). Called by either sheet's toggle; redraws
+   both: the live preview through its field, the preview by a render. */
+window.setYamlPropsCollapsed = function (on) {
+  yamlPropsCollapsed = !!on;
+  window.yamlPropsCollapsed = yamlPropsCollapsed;
+  if (typeof window.livePreviewSyncYamlCollapsed === 'function') window.livePreviewSyncYamlCollapsed(yamlPropsCollapsed);
+  if (document.body.classList.contains('reader-mode-active') && typeof render === 'function') render();
   if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
 };
 
@@ -1678,8 +1698,12 @@ window.setLivePreviewMode(livePreviewMode);   // install editor extension + hide
    stylesheet). Boot, the Preview toggle and the Reader toggle all come
    through here, so the classes and the inline styles cannot drift. */
 function applyPaneLayout() {
+  const readerChanged = document.body.classList.contains('reader-mode-active') !== readerMode;
   document.body.classList.toggle('reader-mode-active', readerMode);
   document.body.classList.toggle('preview-hidden', !previewVisible);
+  /* The preview's Properties sheet folds only in reader mode: redraw it
+     with (or without) its toggle. */
+  if (readerChanged && typeof render === 'function') render();
   if (readerMode) {
     edPane.style.display  = 'none';
     divider.style.display = 'none';
@@ -2221,6 +2245,44 @@ const fileActions = [
   /* Whole-project zip export — desktop only (web mode has no project). */
   { label: 'Zip Project Export', action: 'file_zip_export', desktopOnly: true }
 ];
+/* Insert a template (the Insert YAML / Import Template submenus) without
+   breaking the note's frontmatter. One undoable edit each.
+     • YAML template, note without frontmatter → at the top, as always.
+     • YAML template, note WITH frontmatter → only the template's keys the
+       note does not have yet, added inside the existing block. Prepending
+       a second block made the note's own properties body text. Existing
+       values are never changed; nothing missing → a status message.
+     • Markdown template → below the frontmatter: above it, the note's
+       first line was no longer '---' and its frontmatter stopped being one.
+   Frontmatter by the editor's rule (window.frontmatterOfText, cm_setup). */
+function insertTemplate(kind, content) {
+  const say = (msg) => {
+    if (typeof window.showStatusWarning === 'function') {
+      window.showStatusWarning('template-insert', window.t(msg), { priority: 10, ttl: 4000 });
+    }
+  };
+  const noteFm = window.frontmatterOfText(editor.value);
+  if (kind === 'yaml') {
+    const tpl = window.frontmatterOfText(content);
+    if (!tpl) { say('This YAML template has no --- block, so it was not inserted.'); return; }
+    if (!noteFm) { insertWithUndo(0, 0, content); return; }
+    const Y = window.ReveryYaml;
+    const have = new Set(Y.readEntries(noteFm.yaml, 0).map((e) => e.key).filter(Boolean));
+    const missing = Y.readEntries(tpl.yaml, 0)
+      .filter((e) => e.key && !have.has(e.key))
+      .map((e) => tpl.yaml.slice(e.start, e.end));
+    if (!missing.length) { say('This note already has all of the template\'s properties.'); return; }
+    const add = missing.join('\n') + '\n';
+    /* The cursor stays where it was, so the sheet shows the new rows. */
+    const head = window.cmView.state.selection.main.head;
+    insertWithUndo(noteFm.closeFrom, noteFm.closeFrom, add, head >= noteFm.closeFrom ? head + add.length : head);
+    return;
+  }
+  if (!noteFm) { insertWithUndo(0, 0, content); return; }
+  const body = '\n\n' + content.replace(/\s+$/, '');
+  insertWithUndo(noteFm.end, noteFm.end, body);
+}
+
 /* Populate Menus — supports submenus */
 function buildMenu(container, actions) {
   actions.forEach(item => {
@@ -2250,7 +2312,8 @@ function buildMenu(container, actions) {
         subBtn.textContent = subItem.custom ? subItem.label : window.t(subItem.label);
         subBtn.onclick = (e) => {
           e.stopPropagation();
-          insertWithUndo(0, 0, subItem.content);
+          if (item.customKind) insertTemplate(item.customKind, subItem.content);
+          else insertWithUndo(0, 0, subItem.content);
           render();
           container.classList.remove('show');
         };

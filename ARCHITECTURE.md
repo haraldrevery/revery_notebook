@@ -33,6 +33,8 @@ revery_notebook/
 │       ├── project_sidebar.js        ← GENERATED bundle — edit src/sidebar/, npm run build:sidebar
 │       ├── pdf_print.js              ← Print-page logic (payload graft + print + self-close)
 │       ├── find_worker.js            ← Regex search Web Worker (loaded at runtime, not a <script>)
+│       ├── markdown_editor_yaml.js   ← The ONE YAML frontmatter reader (window.ReveryYaml): Properties
+│       │                                sheet, export metadata, autocomplete index — unit tested
 │       └── markdown_editor_*.js      ← Editor core, menus, actions, export, sync, find, theme, lang
 │
 ├── src/sidebar/                      ← Sidebar source modules (state, save, tree, cards,
@@ -1000,14 +1002,29 @@ Editing the frontmatter block suggests the keys and values used across
 the project (first-party `@codemirror/autocomplete`; the source in
 `markdown_editor_cm_setup.js` gates itself to the frontmatter region, so
 the engine is inert everywhere else — always on, no setting). Data feed:
-`window.sidebarYamlIndex` from `src/sidebar/yaml_index.js`, which parses
-each note's frontmatter and caches the result **per file by mtime** —
+`window.sidebarYamlIndex` from `src/sidebar/yaml_index.js`, which reads
+each note's frontmatter through `window.ReveryYaml` (the same reader as the
+Properties sheet and the exports — see below) and caches the result **per file by mtime** —
 rebuilds only re-read changed files. File enumeration comes from
 `src/sidebar/project_scan.js` (`listProjectTextFiles`): a **shared,
 TTL-cached primitive intended for reuse** — a future project-wide search
 should consume it rather than growing its own walker. Caps: 800 files,
 1 MB/file, 200 keys, 300 values per key. Web mode indexes the current
 document only. Read-only by construction.
+
+**One reading of YAML** (`markdown_editor_yaml.js`, `window.ReveryYaml`,
+tests in `test/yaml_reader.test.js`): the Properties sheet (preview,
+reader mode, live preview), the LaTeX/PDF/HTML export metadata and the
+autocomplete index all read frontmatter here, so they agree on what a
+note says. Writing styles converge: quoted or not, `[a, b]`, a block list,
+or — under a LIST KEY (tags, categories, keywords, aliases, authors…) — a
+plain `a, b` are the same value; any other key keeps a comma value whole.
+Lines a YAML parser would read differently (`title: Note: part 2`,
+`Issue #5`, `key:value`, duplicates, tabs…) are flagged on the sheet with
+a ⚠ tooltip — display only. The autocomplete re-reads the token under
+the cursor when a suggestion is ACCEPTED (the menu stays open while the
+user types; filtering continues after a click-open) and quotes a value
+plain YAML cannot hold (`quoteValue`).
 
 **Menu skin & keys** (shared with the link-path menu below): the
 `#editor .cm-tooltip.cm-tooltip-autocomplete…` block in
@@ -1056,7 +1073,10 @@ hit that.
   YAML/markdown templates stored under `revery_custom_templates`
   ({v:1, yaml:[], md:[]}, validated on load, caps, duplicate-name
   rejection). Menus offer "New template…" (creation modal) and a hover ✕
-  on custom rows; built-ins are untouchable.
+  on custom rows; built-ins are untouchable. Inserting never breaks the
+  note's frontmatter (`insertTemplate`, menus.js): a YAML template merges
+  only the missing keys into an existing block, a markdown template goes
+  below the frontmatter, and a custom YAML template must have `---` fences.
 - **Custom fonts** (`markdown_editor_menus.js`): the Editor/Preview font
   menus end with "Custom font…". Two kinds — imported font FILES (data-URL
   `@font-face` in one regenerated `<style id="custom-fonts-css">`, family

@@ -4315,37 +4315,21 @@ Restore these changes, or discard and keep the saved version.`,
   var READ_BATCH = 8;
   var _fileCache = /* @__PURE__ */ new Map();
   var _built = { at: 0, root: null, agg: null };
+  var MAX_VALUE_LEN = 80;
   function parseFrontmatterBlock(text) {
     const m = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)(?:\r?\n|$)/.exec(text || "");
     if (!m) return null;
+    const Y = window.ReveryYaml;
+    if (!Y) return null;
     const keys = [];
     const pairs = /* @__PURE__ */ new Map();
-    let currentKey = null;
-    const addVals = (key, vals) => {
-      if (!vals.length) return;
-      const arr = pairs.get(key) || [];
-      arr.push(...vals);
-      pairs.set(key, arr);
-    };
-    for (const rawLine of m[1].split("\n")) {
-      const line = rawLine.replace(/\r$/, "");
-      const kv = /^([A-Za-z0-9_][\w-]*)\s*:\s*(.*)$/.exec(line);
-      if (kv) {
-        currentKey = kv[1];
-        keys.push(currentKey);
-        addVals(currentKey, splitYamlValues(kv[2]));
-        continue;
-      }
-      const li = /^\s*-\s+(.+)$/.exec(line);
-      if (li && currentKey) addVals(currentKey, splitYamlValues(li[1]));
+    for (const e of Y.readEntries(m[1], 0)) {
+      if (!e.key) continue;
+      keys.push(e.key);
+      const vals = (e.kind === "list" ? e.value : e.kind === "text" ? [e.value] : []).map((v) => String(v).trim()).filter((v) => v && v.length <= MAX_VALUE_LEN && !v.includes("\n"));
+      if (vals.length) pairs.set(e.key, (pairs.get(e.key) || []).concat(vals));
     }
     return { keys, pairs };
-  }
-  function splitYamlValues(raw) {
-    let v = (raw || "").trim();
-    if (!v) return [];
-    if (v.startsWith("[") && v.endsWith("]")) v = v.slice(1, -1);
-    return v.split(",").map((s) => s.trim().replace(/^["']|["']$/g, "")).filter((s) => s && s.length <= 80);
   }
   function newAgg() {
     return { keyCounts: /* @__PURE__ */ new Map(), valueCounts: /* @__PURE__ */ new Map() };

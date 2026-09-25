@@ -376,7 +376,7 @@ decided where a click's shift went, and only for clicks.
   wrapped rows start where rendered text does. CodeMirror's default
   `.cm-line` padding (6 px / 2 px) is removed in live preview — raw text
   wrapped 8 px narrower than the rendered block. The CSS mirrors the
-  heading scale and the prose-lg rules (`--lp-prose-size` exposes the
+  heading scale and the prose-lg rules (`--prose-base-size` exposes the
   prose base from menus.js). The E2E asserts raw == rendered height for
   every kind at two text sizes. Known limits: loose lists (a blank raw
   line is 34 px, the rendered gap ~11 px), soft line breaks (three raw
@@ -450,3 +450,81 @@ Not a mapping error, and not changed here: after the release the clicked
 word can sit away from the pointer when the block's raw form reflows
 (URLs and marks re-enter the text). §11's click rule decides which part
 moves, and it can move the clicked word itself.
+
+## 13. The frontmatter: Properties sheet, folding, opening
+
+Supersedes the "protected dim-raw region" of §6b/§8: outside editing,
+the frontmatter renders as the Properties sheet, the same markup as the
+classic preview and reader mode (`ReveryYaml.buildSheetHtml`,
+markdown_editor_yaml.js). It is a key column beside a value column,
+with list values as chips.
+
+- **A display-only reader** (`ReveryYaml.readEntries`, the app's one
+  YAML reader since the follow-up below) replaced
+  `line.split(':')`. The old split dropped block lists (`tags:` then
+  `  - a` lines), flattened nested keys, showed a literal `|` for block
+  scalars and squeezed a key to one letter per row beside a long value.
+  The reader handles flow and block sequences, one level of maps, `|`/`>`
+  scalars, continued plain values and quotes. Any other line shows as
+  keyless text, so nothing written disappears from the sheet. It never
+  writes. The HTML export's metadata table reads the sheet, and joins
+  chips with `, ` and nested lines with `; `.
+- **Folding (live preview and reader mode):** the header is a toggle
+  button. The choice is global and persisted (`yamlPropsCollapsed` in the
+  editor settings), one choice for both surfaces: `setYamlPropsCollapsed`
+  (menus.js) redraws reader mode by a render and the live preview
+  through `livePreviewSyncYamlCollapsed`. The split-view preview pane
+  never folds. It reaches the field through `yamlCollapseEffect`, and the
+  widget's identity and height-cache key include it. A fold keeps the
+  header under the pointer (`keepInPlace`). It is display only: a cursor
+  inside the frontmatter still shows its raw lines through the ordinary
+  reveal rule, folded or not, so nothing can be typed into hidden text.
+- **Clicks on the sheet:** a row maps to its key's value (the completion
+  contract). Beside or between rows, the nearest row counts. Below the
+  last row, or on a folded sheet, the click lands outside the frontmatter.
+- **Opening a document** (`replaceEditorContent`) puts the cursor on the
+  line after its frontmatter instead of 0. At 0 the cursor was inside the
+  YAML, so live preview showed it raw on every open, and typing straight
+  away landed above `---` and broke the frontmatter. This applies in
+  both editor modes.
+- **The body below a misparsed frontmatter still renders.** The markdown
+  parser knows no frontmatter. A `...` closer lets the next line join a
+  paragraph that starts inside the YAML, and an HTML line or a code fence
+  in a `|` value swallows the body. `buildBlocks` used to skip every node
+  starting inside the frontmatter, so that body stayed raw text forever.
+  Now the part below the frontmatter renders as one block
+  (`belowFrontmatter`).
+  A lezer `Frontmatter` block parser (plain config, no bundle rebuild)
+  would give a correct tree. But lezer reuses the old tree when a closer
+  is typed far below the opener, so the text scan (`frontmatterEnd`)
+  would have to stay the authority anyway. Not done.
+
+Still open: about 15 places decide "is this frontmatter?" with 4
+different rules. LP and completion scan 60 lines and accept `---`/`...`;
+the preview, outline, scroll sync and both exporters use a regex with a
+prefix closer and no cap; card previews strip with a `/m` regex. Unifying
+them touches the preview, sync, export and sidebar bundle.
+
+### 13b. Follow-up: one reader, sizing, and a stale mouse gesture
+
+- **Sizing:** the sheet sizes from the prose base (`--prose-base-size`,
+  renamed from `--lp-prose-size` now that the preview uses it too), so it
+  follows the preview text size like the text around it. With `rem` it
+  followed the UI size and ignored the preview text size.
+- **One reader** (markdown_editor_yaml.js) for the sheet, the export
+  metadata and the autocomplete index. See ARCHITECTURE.md, "One reading
+  of YAML", for the writing styles it unifies and the traps it flags.
+- **The "Tab-accept corrupts the editor" report, root-caused.** It was
+  not Tab. `EditorView.setState` (every file open) keeps CodeMirror's
+  input state, so a mouse gesture still in progress on the old document
+  survives the swap. The next edit that is not typed (typing ends a
+  gesture itself; a paste, an undo, an autocomplete accept or a toolbar
+  edit does not) reached `lpMouseSelection.update`. That mapped the old
+  document's positions through the new document's changes and threw a
+  RangeError inside the view update. From then on the screen stopped
+  matching the saved text. The E2E triggered it with a synthetic press
+  that was never released. In real use it needs a press held across a
+  document swap, such as an external-change reload.
+  Fixed twice: `replaceEditorContent` ends any gesture before `setState`,
+  and the live preview gesture goes inert when its document is gone.
+  E2E O7 fails with both fixes removed and passes with either one alone.

@@ -654,44 +654,112 @@ body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
 }
 
 
-/* YAML Frontmatter Rendering */
+/* ── YAML frontmatter: the "Properties" sheet ─────────────────────────
+   Markup from ReveryYaml.buildSheetHtml (markdown_editor_yaml.js), shared
+   by the preview, reader mode and the live preview's frontmatter widget:
+   a key column beside a value column, list values as chips. In live
+   preview and reader mode the header is a fold toggle (.yaml-toggle). A
+   click on a row selects / edits that entry's source
+   (markdown_editor_sync.js, markdown_editor_livepreview.js). Sized from
+   the prose base (--prose-base-size, menus.js), so it follows the
+   preview text size like the text around it, not the UI size.        */
 .yaml-render {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 16px;
-  margin-bottom: 24px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: background 0.15s;
   max-width: var(--reader-max-width, none);
-  margin-left: auto;
-  margin-right: auto;
+  margin: 0 auto 24px;
+  font-family: var(--preview-font, var(--font-brand, inherit));
+  font-size: calc(var(--prose-base-size, 1.125rem) * 0.765);
+  line-height: 1.45;
+  color: var(--text);
 }
-.yaml-render:hover {
-  background: rgba(128,128,128,0.04);
-}
-.yaml-render-title {
-  font-size: 0.7rem;
+.yaml-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0 6px;
+  color: var(--text-muted);
+  font-size: 0.79em;
+  line-height: 1; /* caps centre on the chevron (a taller line box rides them high) */
   letter-spacing: var(--tracking-wider);
   text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
 }
-.yaml-pill-container { display: flex; flex-wrap: wrap; gap: 8px; }
-.yaml-pill {
+.yaml-render-title { color: inherit; }
+button.yaml-toggle {
+  width: 100%;
+  margin: 0;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+.yaml-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-top: -2px; /* optical: level with the caps */
+  border-radius: 3px;
+  color: var(--text-muted);
+  transform: rotate(90deg);
+  transition: transform 0.15s ease, background 0.15s;
+}
+.yaml-collapsed .yaml-chevron { transform: none; }
+button.yaml-toggle:hover .yaml-chevron,
+button.yaml-toggle:focus-visible .yaml-chevron {
   background: var(--bg-hover);
-  border: 1px solid var(--border-md);
-  border-radius: 12px;
-  padding: 4px 10px;
-  font-size: 0.8rem;
-  display: flex;
-  gap: 6px;
+  color: var(--text);
 }
-.yaml-key { color: var(--text-muted); }
-.yaml-value { color: var(--text); }
+button.yaml-toggle:focus-visible { outline: none; }
+.yaml-count { display: none; font-variant-numeric: tabular-nums; opacity: 0.8; }
+.yaml-collapsed .yaml-count { display: inline; }
+.yaml-rows {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 0;
+}
+.yaml-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 28%) minmax(0, 1fr);
+  gap: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.yaml-row:hover { background: var(--bg-hover); }
+.yaml-key {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.yaml-value { min-width: 0; overflow-wrap: anywhere; }
+.yaml-text { white-space: pre-wrap; }
+.yaml-chip {
+  display: inline-block;
+  margin: 1px 4px 1px 0;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-hover);
+  font-size: 0.92em;
+  line-height: 1.5;
+}
+.yaml-sub { display: block; }
+.yaml-subkey { color: var(--text-muted); margin-right: 8px; }
+.yaml-empty { color: var(--text-dim); }
+/* A row a YAML parser reads differently from how it shows (the traps in
+   markdown_editor_yaml.js): a marker whose tooltip says how. */
+.yaml-warn {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--accent, var(--text-muted));
+  font-size: 0.95em;
+  line-height: 1;
+  cursor: help;
+}
 
 /* ── Scrollbars ── */
 #editor::-webkit-scrollbar, #preview::-webkit-scrollbar { width: 4px; }
@@ -1089,16 +1157,6 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   }
 }
 
-
-/* ── Interactive YAML Pills ── */
-.yaml-pill {
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-.yaml-pill:hover {
-  background: rgba(128, 128, 128, 0.1);
-  border-color: var(--accent);
-}
 
 /* ── Desktop: mobile-view simulation ── */
 #preview-pane.mobile-preview {
@@ -2446,8 +2504,8 @@ body.live-preview-active #editor-pane {
   opacity: 0.6;
 }
 
-/* YAML frontmatter: protected raw region, dimmed mono — the preview's
-   pill rendering stays a preview-pane feature. */
+/* YAML frontmatter being edited: its raw lines, dimmed mono. Elsewhere
+   it renders as the Properties sheet (.lp-yaml, below). */
 .cm-line.lp-frontmatter {
   font-family: var(--font-mono, monospace);
   font-size: 0.85em;
@@ -2464,7 +2522,7 @@ body.live-preview-active #editor-pane {
    markers hung inside that indent so wrapped rows start where rendered
    text does; paragraph justification. Values mirror the heading scale
    near the top of this file and the prose-lg rules (em of the text size,
-   or of --lp-prose-size, the prose-lg base set in menus.js). The live
+   or of --prose-base-size, the prose-lg base set in menus.js). The live
    preview E2E asserts raw == rendered height for each kind.           */
 body.live-preview-active #editor .cm-line.lp-raw-h1 { font-size: calc(var(--text-body) * 2.6);  line-height: 1; }
 body.live-preview-active #editor .cm-line.lp-raw-h2 { font-size: calc(var(--text-body) * 2);    line-height: 1.3333333; }
@@ -2480,7 +2538,7 @@ body.center-headers-active.live-preview-active #editor .cm-line:is(.lp-raw-h1, .
 }
 body.live-preview-active #editor .cm-line.lp-raw-p { text-align: justify; }
 body.live-preview-active #editor .cm-line.lp-raw-quote {
-  --lp-hang: var(--lp-prose-size, 1.125rem);
+  --lp-hang: var(--prose-base-size, 1.125rem);
   position: relative;
   padding-left: calc(0.25rem + var(--lp-hang)); /* bar + the blockquote's indent */
   font-style: italic;
@@ -2687,9 +2745,8 @@ body.live-preview-active #editor .lp-raw-hang {
   font-style: italic;
 }
 
-/* Live preview YAML pill box (same .yaml-render skin as the preview). */
+/* Live preview Properties sheet (same .yaml-render skin as the preview). */
 .lp-yaml {
-  cursor: pointer;
   white-space: normal;
   display: flow-root; /* contain child margins — see .lp-render */
 }
