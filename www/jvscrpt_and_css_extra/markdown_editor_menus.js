@@ -17,7 +17,7 @@ let mobileView = false;
 let readerMode = false;
 let outlineVisible = false; // Outline navigation panel (toggled via Settings)
 let themeMode = 'system'; // 'system', 'light', 'dark', 'paper', 'forest', 'custom'
-let customTheme = null;   // last SAVED custom palette {base, hue, tint, accent} (markdown_editor_theme.js)
+let customTheme = null;   // last SAVED custom palette {base, textHue, textSat, bgHue, bgSat, vividText} (markdown_editor_theme.js)
 
 let uiSize  = 140; // UI menu font scale in %, applied to <html> (90–200 in 10% steps)
 let editorTextSize = 150; // Editor textarea font scale in %
@@ -1470,14 +1470,15 @@ window.openAdvancedOptions = openAdvancedOptions;
 
 /* ── Custom theme dialog ──────────────────────────────────────────────────
    Controls that markdown_editor_theme.js turns into a full palette, each
-   slider changing only what it names: base (light/dark); text color and
+   control changing only what it names: base (light/dark); text color and
    text saturation — the text color colors every text in the UI and the
-   document, and the highlight and click flash follow it; background color
-   and background saturation. The generator fixes every lightness, so no
-   position can make text unreadable (test/custom_theme.test.js checks
-   every combination). Changes preview on the whole app (see apply()) — the
-   overlay is transparent and the dialog sits top-right so the editor and
-   preview stay visible. Save keeps the theme; Cancel, Escape or a click
+   document, and the highlight and click flash follow it; Vivid text —
+   lets the DOCUMENT text leave the UI text's fixed lightness for a truer,
+   more saturated shade (menus keep theirs); background color and
+   background saturation. The generator keeps every position readable
+   (test/custom_theme.test.js checks every combination). Changes preview
+   on the whole app (see apply()) — the overlay is transparent and the
+   dialog sits top-right so the editor and preview stay visible. Save keeps the theme; Cancel, Escape or a click
    outside restore the theme that was active before opening. */
 function openCustomThemeDialog() {
   const RT = window.ReveryTheme;
@@ -1549,16 +1550,29 @@ function openCustomThemeDialog() {
   };
   addSlider('Text color', 'textHue', 0, 359);
   addSlider('Text saturation', 'textSat', 0, 100);
+
+  /* Vivid text: one on/off button, marked like the base buttons. */
+  const vividWrap = document.createElement('div');
+  vividWrap.className = 'ct-base';
+  const vividBtn = document.createElement('button');
+  vividBtn.type = 'button';
+  vividBtn.className = 'modal-btn ct-vivid';
+  vividBtn.title = window.t('Truer, more saturated colors for the document text. Menus keep the regular text color.');
+  vividBtn.addEventListener('click', () => { params.vividText = !params.vividText; update(); });
+  vividWrap.appendChild(vividBtn);
+  addRow('Vivid text', vividWrap);
+
   addSlider('Background color', 'bgHue', 0, 359);
   addSlider('Background saturation', 'bgSat', 0, 100);
 
   /* Slider tracks show what each position gives. The text tracks are
-     painted with RT.textColor — the generator's own function — so they
-     show the exact text colors this base offers: every hue at full
-     saturation, and gray → the chosen hue. The real backgrounds are too
-     near black/white to show a hue, so their tracks use one fixed, clearly
-     visible lightness: every hue, and gray → the chosen hue. */
-  const text = (h, vivid) => RT.hex(RT.textColor(params.base, 'text', h, vivid));
+     painted with RT.docTextColor — the generator's own function — so they
+     show the exact document text colors this base (and Vivid text) offers:
+     every hue at full saturation, and gray → the chosen hue. The real
+     backgrounds are too near black/white to show a hue, so their tracks
+     use one fixed, clearly visible lightness: every hue, and gray → the
+     chosen hue. */
+  const text = (h, sat) => RT.hex(RT.docTextColor(params.base, h, sat, params.vividText));
   const show = (h, chroma) => RT.hex(RT.oklch(0.7, chroma, h));
   const track = (colors) => 'linear-gradient(90deg, ' + colors.join(', ') + ')';
   const paintControls = () => {
@@ -1567,6 +1581,8 @@ function openCustomThemeDialog() {
       btn.textContent = (on ? '■ ' : '□ ') + window.t(btn.dataset.base === 'light' ? 'Light' : 'Dark');
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    vividBtn.textContent = (params.vividText ? '■ ' : '□ ') + window.t(params.vividText ? 'On' : 'Off');
+    vividBtn.setAttribute('aria-pressed', params.vividText ? 'true' : 'false');
     for (const key of Object.keys(sliders)) sliders[key].value = String(params[key]);
     const textHues = [], textSats = [], bgHues = [];
     for (let h = 0; h <= 360; h += 30) {
@@ -1645,7 +1661,7 @@ function openCustomThemeDialog() {
 }
 window.openCustomThemeDialog = openCustomThemeDialog;
 
-/* Apply editor background: gradient (default) or solid (uses --editor-bg-start) */
+/* Apply editor background: gradient (--editor-bg-start → --editor-bg-end) or solid (--bg) */
 function applyEditorBgStyle() {
   if (editorBgGradient) {
     document.documentElement.classList.remove('editor-bg-solid');

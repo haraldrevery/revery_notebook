@@ -86,16 +86,29 @@
     const previewFlash = rgbOf(getComputedStyle(p).backgroundColor);
     p.style.animation = '';
 
-    /* One text color: every text the prose stylesheet used to force to
-       black/white follows --text (or --text-muted for list numbers). */
+    /* One text color: every document text the prose stylesheet used to
+       force to black/white follows --doc-text (or --text-muted for list
+       numbers), and the UI follows --text. The two differ only with
+       Vivid text on. */
     const same = (c, v) => over(c, cssVar('--bg')).join(',') === over(cssVar(v), cssVar('--bg')).join(',');
     const code = pv.querySelector('p code');
-    const oneTextColor = !!(sup && li && code)
-      && same(getComputedStyle(sup).color, '--text')
-      && same(getComputedStyle(li).color, '--text')
-      && same(getComputedStyle(code).color, '--text')
+    const menuItem = document.querySelector('#settings-dropdown .menu-item');
+    const oneTextColor = !!(sup && li && code && menuItem)
+      && same(getComputedStyle(p).color, '--doc-text')
+      && same(getComputedStyle(sup).color, '--doc-text')
+      && same(getComputedStyle(li).color, '--doc-text')
+      && same(getComputedStyle(code).color, '--doc-text')
       && same(getComputedStyle(li, '::marker').color, '--text-muted')
-      && spans.every((sp) => same(getComputedStyle(sp).color, '--text'));
+      && spans.every((sp) => same(getComputedStyle(sp).color, '--doc-text'))
+      && same(getComputedStyle(menuItem).color, '--text');
+
+    /* The solid editor background is the page background (a custom dark
+       gradient starts lighter than --bg). */
+    const pane = document.getElementById('editor-pane');
+    const wasSolid = root.classList.contains('editor-bg-solid');
+    root.classList.add('editor-bg-solid');
+    const solidEditorIsBg = over(getComputedStyle(pane).backgroundColor, '#808080').join(',') === bg.join(',');
+    root.classList.toggle('editor-bg-solid', wasSolid);
 
     return {
       dataTheme: root.getAttribute('data-theme'),
@@ -112,6 +125,8 @@
       editorFlash,
       previewFlash,
       oneTextColor,
+      solidEditorIsBg,
+      vividDoc: cssVar('--doc-text') !== cssVar('--text'),
     };
   };
 
@@ -134,6 +149,8 @@
     'light gray': { base: 'light', textHue: 0, textSat: 0, bgHue: 0, bgSat: 0 },
     'light vivid yellow on full tint': { base: 'light', textHue: 100, textSat: 100, bgHue: 100, bgSat: 100 },
     'light navy on warm': { base: 'light', textHue: 250, textSat: 60, bgHue: 100, bgSat: 40 },
+    'dark vivid text red on same hue': { base: 'dark', textHue: 29, textSat: 100, bgHue: 29, bgSat: 100, vividText: true },
+    'light vivid text blue on full tint': { base: 'light', textHue: 262, textSat: 100, bgHue: 262, bgSat: 100, vividText: true },
   };
   for (const [name, params] of Object.entries(CUSTOMS)) {
     window.setThemeMode('custom', params);
@@ -147,7 +164,8 @@
   const realPrint = window.print;
   window.print = () => {};
   const printThemes = { light: ['light'], dark: ['dark'], forest: ['forest'],
-    'custom dark': ['custom', CUSTOMS['dark vivid blue on full opposite tint']] };
+    'custom dark': ['custom', CUSTOMS['dark vivid blue on full opposite tint']],
+    'custom dark, vivid text': ['custom', CUSTOMS['dark vivid text red on same hue']] };
   for (const [name, args] of Object.entries(printThemes)) {
     window.setThemeMode(...args);
     await sleep(80);
@@ -176,10 +194,15 @@
   const menuItem = (label) => Array.from(document.querySelectorAll('#settings-dropdown button.menu-item'))
     .find((b) => b.textContent.replace(/^[■\u00a0 ]+/, '') === label);
   const openFromMenu = async () => { menuItem('Custom theme…').click(); await sleep(80); };
-  /* The sliders in dialog order, keyed like the stored parameters. */
+  /* The sliders in dialog order, keyed like the stored parameters, and
+     the Vivid text switch. */
   const SLIDERS = ['textHue', 'textSat', 'bgHue', 'bgSat'];
   const range = (key) => modal().querySelectorAll('input.ct-range')[SLIDERS.indexOf(key)];
-  const controls = () => Object.fromEntries(SLIDERS.map((k) => [k, Number(range(k).value)]));
+  const vividBtn = () => modal().querySelector('button.ct-vivid');
+  const controls = () => ({
+    ...Object.fromEntries(SLIDERS.map((k) => [k, Number(range(k).value)])),
+    vividText: vividBtn().getAttribute('aria-pressed') === 'true',
+  });
   const slide = async (key, value) => {
     const input = range(key);
     input.value = String(value);
@@ -233,11 +256,19 @@
   /* Save: switch base to dark, set every control, keep. */
   await openFromMenu();
   button('Dark').click();
-  await slide('textHue', 200);
+  await slide('textHue', 20); // red: vivid differs most (cyan is already vivid on dark)
   await slide('textSat', 70);
   await slide('bgHue', 110);
   await slide('bgSat', 70);
-  const want = { base: 'dark', textHue: 200, textSat: 70, bgHue: 110, bgSat: 70 };
+  /* Vivid text changes the document text only; the menus keep --text. */
+  const uiText = cssVar('--text'), docText = cssVar('--doc-text'), bgNow = cssVar('--bg');
+  vividBtn().click();
+  await sleep(40);
+  D.vividDocOnly = vividBtn().getAttribute('aria-pressed') === 'true'
+    && cssVar('--doc-text') !== docText && docText === uiText
+    && cssVar('--text') === uiText && cssVar('--bg') === bgNow
+    && cssVar('--doc-text') === RT.hex(RT.docTextColor('dark', 20, 70, true));
+  const want = { base: 'dark', textHue: 20, textSat: 70, bgHue: 110, bgSat: 70, vividText: true };
   button('Save').click();
   await sleep(50);
   const saved = settings();
@@ -265,7 +296,7 @@
   await sleep(50);
   const def = RT.DEFAULT_CUSTOM;
   D.resetKeepsBase = JSON.stringify(controls())
-      === JSON.stringify({ textHue: def.textHue, textSat: def.textSat, bgHue: def.bgHue, bgSat: def.bgSat })
+      === JSON.stringify({ textHue: def.textHue, textSat: def.textSat, bgHue: def.bgHue, bgSat: def.bgSat, vividText: false })
     && root.getAttribute('data-theme') === 'dark';
   button('Cancel').click();
   await sleep(50);

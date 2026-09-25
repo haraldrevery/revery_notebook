@@ -5,8 +5,8 @@
 
    The dialog's controls produce integers — base light/dark, text color
    (textHue 0–359) and text saturation (textSat 0–100), background color
-   (bgHue 0–359) and background saturation (bgSat 0–100) — and stored
-   values are normalized into those same ranges,
+   (bgHue 0–359) and background saturation (bgSat 0–100) — plus the Vivid
+   text switch, and stored values are normalized into those same ranges,
    so the contrast checks below cover EVERY palette a user can produce.
    The point: a borderless window with unreadable menus cannot be
    escaped, so no control position may break readability. */
@@ -87,9 +87,13 @@ describe('custom theme generator', () => {
 
   test('normalizes stored values into the control ranges and rejects garbage', () => {
     assert.deepEqual(plain(api.normalizeCustom({ base: 'dark', textHue: 400.4, textSat: 150, bgHue: -30, bgSat: -5 })),
-      { base: 'dark', textHue: 40, textSat: 100, bgHue: 330, bgSat: 0 });
-    assert.deepEqual(plain(api.normalizeCustom({ base: 'light', textHue: '12', textSat: '7.6', bgHue: 359.6, bgSat: 101 })),
-      { base: 'light', textHue: 12, textSat: 8, bgHue: 0, bgSat: 100 });
+      { base: 'dark', textHue: 40, textSat: 100, bgHue: 330, bgSat: 0, vividText: false });
+    assert.deepEqual(plain(api.normalizeCustom({ base: 'light', textHue: '12', textSat: '7.6', bgHue: 359.6, bgSat: 101, vividText: true })),
+      { base: 'light', textHue: 12, textSat: 8, bgHue: 0, bgSat: 100, vividText: true });
+    for (const notTrue of ['true', 1, 'yes', null]) {
+      assert.equal(api.normalizeCustom({ base: 'dark', textHue: 1, textSat: 1, bgHue: 1, bgSat: 1, vividText: notTrue }).vividText, false,
+        `vividText ${JSON.stringify(notTrue)} is off`);
+    }
     const ok = { base: 'dark', textHue: 1, textSat: 1, bgHue: 1, bgSat: 1 };
     for (const bad of [null, 'dark', {}, { ...ok, base: 'sepia' }, { ...ok, textHue: 'x' }, { ...ok, textSat: NaN },
       { ...ok, bgHue: Infinity }, { ...ok, bgSat: undefined },
@@ -100,10 +104,11 @@ describe('custom theme generator', () => {
   });
 
   test('a theme saved with the earlier offset layout {hue, vivid, split, tint} keeps its colors', () => {
+    /* Its numeric `vivid` was the text saturation, not the Vivid text switch. */
     assert.deepEqual(plain(api.normalizeCustom({ base: 'dark', hue: 75, vivid: 40, split: 180, tint: 35 })),
-      { base: 'dark', textHue: 75, textSat: 40, bgHue: 255, bgSat: 35 });
+      { base: 'dark', textHue: 75, textSat: 40, bgHue: 255, bgSat: 35, vividText: false });
     assert.deepEqual(plain(api.normalizeCustom({ base: 'light', hue: 30, vivid: 60, split: -90, tint: 50 })),
-      { base: 'light', textHue: 30, textSat: 60, bgHue: 300, bgSat: 50 });
+      { base: 'light', textHue: 30, textSat: 60, bgHue: 300, bgSat: 50, vividText: false });
   });
 
   test('saturation 0 gives neutral gray, whatever the hues', () => {
@@ -111,37 +116,77 @@ describe('custom theme generator', () => {
     for (const base of ['light', 'dark']) {
       for (let textHue = 0; textHue < 360; textHue += 15) {
         for (const bgHue of [0, 90, 200, 300]) {
-          const p = api.buildCustomPalette({ base, textHue, textSat: 0, bgHue, bgSat: 0 });
-          for (const [name, c] of Object.entries(p.colors)) {
-            assert.ok(neutral(c), `${base} text hue ${textHue} background hue ${bgHue}: ${name} is tinted`);
+          for (const vividText of [false, true]) {
+            const p = api.buildCustomPalette({ base, textHue, textSat: 0, bgHue, bgSat: 0, vividText });
+            for (const [name, c] of Object.entries(p.colors)) {
+              assert.ok(neutral(c), `${base} text hue ${textHue} background hue ${bgHue} vivid ${vividText}: ${name} is tinted`);
+            }
           }
         }
       }
     }
   });
 
-  /* The dialog names four sliders by what they change; each must change
-     only that. (An earlier "Text color" slider also turned the background.) */
-  test('each slider changes only what it names', () => {
-    const TEXT = ['--text', '--text-muted', '--text-dim', '--accent', '--border', '--border-md',
+  /* The dialog names each control by what it changes; each must change
+     only that. (An earlier "Text color" slider also turned the background.)
+     Vivid text changes the document text and nothing else — in particular
+     no background position may move it (its floor is against them all). */
+  test('each control changes only what it names', () => {
+    const TEXT = ['--text', '--doc-text', '--text-muted', '--text-dim', '--accent', '--border', '--border-md',
       '--scrollbar', '--selection', '--flash-rgb'];
     const BACKGROUND = ['--bg', '--bg-rgb', '--bg-panel-rgb', '--editor-bg-start', '--editor-bg-end', '--bg-panel',
       '--bg-hover', '--theme-divider', '--theme-divider-hover', '--menu-bg'];
-    assert.deepEqual([...TEXT, ...BACKGROUND].sort(), [...api.CUSTOM_VARS].sort(), 'every variable is text or background');
-    const start = { textHue: 75, textSat: 40, bgHue: 255, bgSat: 35 };
+    const ALL = [...TEXT, ...BACKGROUND];
+    assert.deepEqual([...ALL].sort(), [...api.CUSTOM_VARS].sort(), 'every variable is text or background');
     const moves = { textHue: [0, 140, 300], textSat: [0, 90], bgHue: [0, 75, 180], bgSat: [0, 100] };
-    for (const base of ['light', 'dark']) {
-      const p0 = api.buildCustomPalette({ base, ...start }).vars;
-      for (const [key, values] of Object.entries(moves)) {
-        const own = key.startsWith('text') ? TEXT : BACKGROUND;
-        const other = key.startsWith('text') ? BACKGROUND : TEXT;
-        for (const v of values) {
-          const p = api.buildCustomPalette({ base, ...start, [key]: v }).vars;
-          for (const name of other) assert.equal(p[name], p0[name], `${base} ${key} → ${v} changed ${name}`);
-          assert.ok(own.some((name) => p[name] !== p0[name]), `${base} ${key} → ${v} changed nothing it names`);
+    for (const vividText of [false, true]) {
+      const start = { textHue: 75, textSat: 40, bgHue: 255, bgSat: 35, vividText };
+      for (const base of ['light', 'dark']) {
+        const p0 = api.buildCustomPalette({ base, ...start }).vars;
+        const cases = Object.entries(moves).map(([key, values]) => [key, values, key.startsWith('text') ? TEXT : BACKGROUND]);
+        cases.push(['vividText', [!vividText], ['--doc-text']]);
+        for (const [key, values, own] of cases) {
+          const other = ALL.filter((name) => !own.includes(name));
+          for (const v of values) {
+            const p = api.buildCustomPalette({ base, ...start, [key]: v }).vars;
+            for (const name of other) assert.equal(p[name], p0[name], `${base} vivid ${vividText}: ${key} → ${v} changed ${name}`);
+            assert.ok(own.some((name) => p[name] !== p0[name]), `${base} vivid ${vividText}: ${key} → ${v} changed nothing it names`);
+          }
         }
       }
     }
+  });
+
+  /* The saturation scale is the chroma sRGB can show at each hue, so no
+     part of the slider is flat (it used to stop changing above ~40% for
+     dark reds and blues), and full saturation is as strong as before. */
+  test('every part of the Text saturation slider changes the color', () => {
+    for (const base of ['light', 'dark']) {
+      for (let hue = 0; hue < 360; hue += 5) {
+        for (const role of ['text', 'muted', 'accent']) {
+          const at = (sat) => api.hex(api.textColor(base, role, hue, sat));
+          assert.notEqual(at(80), at(100), `${base} ${role} hue ${hue}: 80% and 100% look the same`);
+        }
+      }
+    }
+    assert.equal(api.hex(api.textColor('dark', 'text', 29, 100)), '#ffc8c0', 'full saturation keeps its old color');
+    assert.equal(api.hex(api.textColor('light', 'text', 29, 100)), '#6a0001', 'full saturation keeps its old color');
+  });
+
+  /* The reported case: red never got past pale pink on a dark base. */
+  test('Vivid text gives the document a saturated shade the fixed lightness cannot', () => {
+    const chroma = ([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b); // enough to compare shades of one hue
+    for (const base of ['light', 'dark']) {
+      for (let hue = 0; hue < 360; hue += 5) {
+        const plainText = api.textColor(base, 'text', hue, 100);
+        const vivid = api.docTextColor(base, hue, 100, true);
+        assert.ok(chroma(vivid) >= chroma(plainText), `${base} hue ${hue}: vivid is duller than the plain text`);
+        assert.deepEqual(plain(api.docTextColor(base, hue, 60, false)), plain(api.textColor(base, 'text', hue, 60)),
+          'off, the document text is the UI text');
+      }
+    }
+    const [r, g, b] = api.docTextColor('dark', 29, 100, true);
+    assert.ok(r === 255 && g < 60 && b < 60, `dark red is red, not pink: ${api.hex([r, g, b])}`);
   });
 
   /* Text colors come from (base, textHue, textSat) and surfaces from
@@ -152,7 +197,8 @@ describe('custom theme generator', () => {
   test('every control combination stays readable', () => {
     const failures = [];
     const need = (what, value, min) => { if (!(value >= min)) failures.push(`${what}: ${value.toFixed(2)} < ${min}`); };
-    const SURFACES = ['bg', 'end', 'panel', 'menu', 'hover'];
+    const SURFACES = ['bg', 'start', 'end', 'panel', 'menu', 'hover'];
+    const DOC_SURFACES = ['bg', 'start', 'end']; // where the document text sits
     for (const base of ['light', 'dark']) {
       const dark = base === 'dark';
       /* Extreme luminance per text role over every text color + saturation. */
@@ -168,6 +214,18 @@ describe('custom theme generator', () => {
         }
         roleY[role] = { lo, hi };
       }
+      /* Vivid document text, same way. */
+      {
+        let lo = Infinity, hi = -Infinity;
+        for (let hue = 0; hue < 360; hue++) {
+          for (let sat = 0; sat <= 100; sat++) {
+            const y = lum(api.docTextColor(base, hue, sat, true));
+            if (y < lo) lo = y;
+            if (y > hi) hi = y;
+          }
+        }
+        roleY.vivid = { lo, hi };
+      }
       /* Extreme luminance per surface over every background color and saturation,
          plus the checks that involve surfaces only. */
       const surfY = Object.fromEntries(SURFACES.map((n) => [n, { lo: Infinity, hi: -Infinity }]));
@@ -182,15 +240,18 @@ describe('custom theme generator', () => {
             if (y < surfY[n].lo) surfY[n].lo = y;
             if (y > surfY[n].hi) surfY[n].hi = y;
           }
-          /* Editor gradient: darker toward the bottom, visible but gentle. */
-          assert.ok(lum(c.end) < lum(c.bg), `${where}: gradient end must be darker than its start`);
-          const g = contrast(c.bg, c.end);
-          if (g < 1.03 || g > 1.35) failures.push(`${where}: gradient contrast ${g.toFixed(3)} outside 1.03–1.35`);
+          /* Editor gradient: darker toward the bottom, visible but gentle.
+             Near black a small step reads as flat (built-in Dark is
+             1.06:1), so dark bases are held to a stronger minimum. */
+          assert.ok(lum(c.end) < lum(c.start), `${where}: gradient end must be darker than its start`);
+          const g = contrast(c.start, c.end), gMin = dark ? 1.12 : 1.03;
+          if (g < gMin || g > 1.35) failures.push(`${where}: gradient contrast ${g.toFixed(3)} outside ${gMin}–1.35`);
+          if (!dark) assert.deepEqual(c.start, c.bg, `${where}: a light gradient starts at the page background`);
         }
       }
-      /* Every text role sits on one side of every surface … */
+      /* Every text role sits on one side of every surface it meets … */
       for (const role of Object.keys(roleY)) {
-        for (const n of SURFACES) {
+        for (const n of (role === 'vivid' ? DOC_SURFACES : SURFACES)) {
           if (dark) assert.ok(roleY[role].lo > surfY[n].hi, `${base}: some ${role} color is darker than some ${n}`);
           else assert.ok(roleY[role].hi < surfY[n].lo, `${base}: some ${role} color is lighter than some ${n}`);
         }
@@ -203,6 +264,8 @@ describe('custom theme generator', () => {
         need(`${base} muted text on ${n}`, worst('muted', n), hover ? 4 : 4.5);
         need(`${base} highlight on ${n}`, worst('accent', n), hover ? 3 : 4.5);
       }
+      /* Vivid text is document-only: the editor and preview surfaces. */
+      for (const n of DOC_SURFACES) need(`${base} vivid document text on ${n}`, worst('vivid', n), api.DOC_FLOOR);
       /* Selection band (text color at a fixed alpha): must stay visible.
          Translucent, so checked on a dense grid rather than by bounds. */
       const a = api.buildCustomPalette({ base, textHue: 0, textSat: 0, bgHue: 0, bgSat: 0 }).alpha.selection;
@@ -210,7 +273,8 @@ describe('custom theme generator', () => {
       for (let bgHue = 0; bgHue < 360; bgHue += 10) {
         for (let bgSat = 0; bgSat <= 100; bgSat += 10) {
           const c = api.buildCustomPalette({ base, textHue: 0, textSat: 0, bgHue, bgSat }).colors;
-          grounds.push([c.bg, `${bgHue}/${bgSat}`], [c.end, `${bgHue}/${bgSat} gradient end`]);
+          grounds.push([c.bg, `${bgHue}/${bgSat}`], [c.start, `${bgHue}/${bgSat} gradient start`],
+            [c.end, `${bgHue}/${bgSat} gradient end`]);
         }
       }
       let selMin = Infinity, selWhere = '';
@@ -231,10 +295,13 @@ describe('custom theme generator', () => {
   test('the dialog text tracks paint with the generator: the color shown is the color applied', () => {
     for (const base of ['light', 'dark']) {
       for (const [textHue, textSat] of [[0, 0], [75, 40], [250, 100], [359, 63]]) {
-        const p = api.buildCustomPalette({ base, textHue, textSat, bgHue: 123, bgSat: 50 });
-        assert.deepEqual(plain(p.colors.text), plain(api.textColor(base, 'text', textHue, textSat)));
-        assert.equal(p.vars['--text'], api.hex(api.textColor(base, 'text', textHue, textSat)));
-        assert.equal(p.vars['--flash-rgb'], p.colors.accent.join(', '), 'the click flash follows the highlight');
+        for (const vividText of [false, true]) {
+          const p = api.buildCustomPalette({ base, textHue, textSat, bgHue: 123, bgSat: 50, vividText });
+          assert.deepEqual(plain(p.colors.text), plain(api.textColor(base, 'text', textHue, textSat)));
+          assert.equal(p.vars['--text'], api.hex(api.textColor(base, 'text', textHue, textSat)));
+          assert.equal(p.vars['--doc-text'], api.hex(api.docTextColor(base, textHue, textSat, vividText)));
+          assert.equal(p.vars['--flash-rgb'], p.colors.accent.join(', '), 'the click flash follows the highlight');
+        }
       }
     }
   });

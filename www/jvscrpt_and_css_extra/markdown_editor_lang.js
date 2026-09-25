@@ -86,6 +86,10 @@ window.uiTranslations = {
   "Text saturation": { "Swedish": "Textmättnad" },
   "Background color": { "Swedish": "Bakgrundsfärg" },
   "Background saturation": { "Swedish": "Bakgrundsmättnad" },
+  "Vivid text": { "Swedish": "Livfull text" },
+  "On": { "Swedish": "På" },
+  "Off": { "Swedish": "Av" },
+  "Truer, more saturated colors for the document text. Menus keep the regular text color.": { "Swedish": "Klarare, mer mättade färger i dokumentets text. Menyerna behåller den vanliga textfärgen." },
   "Reset": { "Swedish": "Återställ" },
 
   // Background submenu (Settings)

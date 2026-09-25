@@ -42,17 +42,21 @@ async function runDriver(colorScheme) {
   return JSON.parse(line.slice('E2E-RESULT: '.length));
 }
 
-/* Readability floor shared by every palette, built-in or custom. */
+/* Readability floor shared by every palette, built-in or custom. Vivid
+   text (custom themes, document only) trades body contrast down to WCAG
+   AA for a truer color; the menus keep the 7:1 text. */
 function assertReadable(name, m) {
   assert.equal(m.darkClass, m.bgIsDark,
     `${name}: html.dark must match the palette's actual background lightness`);
-  assert.ok(m.body >= 7, `${name}: body text contrast ${m.body} < 7`);
+  const bodyFloor = m.vividDoc ? 4.5 : 7;
+  assert.ok(m.body >= bodyFloor, `${name}: body text contrast ${m.body} < ${bodyFloor}`);
   assert.ok(m.footnoteRef >= 4.5, `${name}: footnote reference contrast ${m.footnoteRef} < 4.5`);
   assert.ok(m.footnoteText >= 4.5, `${name}: footnote text contrast ${m.footnoteText} < 4.5`);
   assert.ok(m.footnoteMarker >= 3, `${name}: footnote number contrast ${m.footnoteMarker} < 3`);
   assert.ok(m.selection >= 1.3, `${name}: editor selection is invisible (${m.selection}:1 against the background)`);
   assert.ok(m.editorCodeMin >= 4.5, `${name}: lowest editor code-token contrast ${m.editorCodeMin} < 4.5`);
   assert.equal(m.overlayMatchesBg, true, `${name}: background-image overlay must be tinted with the palette's --bg`);
+  assert.equal(m.solidEditorIsBg, true, `${name}: the solid editor background must be the page background`);
 }
 
 for (const scheme of ['light', 'dark']) {
@@ -63,6 +67,7 @@ for (const scheme of ['light', 'dark']) {
       for (const [name, m] of Object.entries(r.builtIn)) {
         assert.equal(m.dataTheme, name);
         assertReadable(name, m);
+        assert.equal(m.vividDoc, false, `${name}: a built-in theme's document text is its UI text`);
         assert.equal(m.editorFlash, '255,200,60', `${name}: the editor click flash stays yellow`);
         assert.equal(m.previewFlash, '255,200,60', `${name}: the preview click flash stays yellow`);
       }
@@ -71,6 +76,7 @@ for (const scheme of ['light', 'dark']) {
       for (const [name, m] of Object.entries(r.custom)) {
         assertReadable(`custom ${name}`, m);
         assert.equal(m.oneTextColor, true, `custom ${name}: every text must use the picked text color`);
+        assert.equal(m.vividDoc, /vivid text/.test(name), `custom ${name}: only Vivid text sets a separate document color`);
         assert.notEqual(m.flashVar, '255,200,60');
         assert.equal(m.editorFlash, m.flashVar, `custom ${name}: the editor click flash follows the highlight`);
         assert.equal(m.previewFlash, m.flashVar, `custom ${name}: the preview click flash follows the highlight`);
@@ -90,6 +96,7 @@ for (const scheme of ['light', 'dark']) {
         bgSlidersApply: true,
         escapeRestores: true,
         outsideClickRestores: true,
+        vividDocOnly: true,
         saves: true,
         menuMarksCustom: true,
         opacityIndependent: true,

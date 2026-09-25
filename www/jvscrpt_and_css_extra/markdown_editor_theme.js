@@ -17,25 +17,26 @@
   var DARK_PALETTES = { dark: true, forest: true };
 
   /* ── Custom palette generator ─────────────────────────────────────────
-     Inputs are what the dialog's sliders produce, each changing only what
+     Inputs are what the dialog's controls produce, each changing only what
      it names: base 'light'|'dark'; textHue 0–359 and textSat 0–100 (the
      text color; 0 = gray); bgHue 0–359 and bgSat 0–100 (the backgrounds;
-     0 = gray). Muted text, the highlight (--accent), the selection and the
-     click flash derive from the text color, so it colors the whole UI.
-     Lightness per role is FIXED per base — text roles on one side of every
-     surface — so no combination can make text unreadable; only hue and
-     chroma move. Colors are built in OKLCH (perceptually even lightness
-     across hues) and chroma is reduced until the color fits sRGB.
+     0 = gray); vividText (the document text only, see docTextColor). Muted
+     text, the highlight (--accent), the selection and the click flash
+     derive from the text color, so it colors the whole UI.
+     Lightness per UI text role is FIXED per base — text roles on one side
+     of every surface — so no combination can make the menus unreadable;
+     only hue and chroma move. Colors are built in OKLCH (perceptually even
+     lightness across hues) and chroma is reduced until the color fits sRGB.
      test/custom_theme.test.js checks the contrast of EVERY input
      combination, so change the numbers below only with that test green. */
-  var DEFAULT_CUSTOM = { base: 'dark', textHue: 75, textSat: 40, bgHue: 255, bgSat: 35 };
+  var DEFAULT_CUSTOM = { base: 'dark', textHue: 75, textSat: 40, bgHue: 255, bgSat: 35, vividText: false };
 
   /* The custom properties a palette defines (all but --bg_oacity, which
      the base block keeps so the Background opacity override still works). */
   var CUSTOM_VARS = [
     '--bg', '--bg-rgb', '--bg-panel-rgb', '--editor-bg-start', '--editor-bg-end',
     '--bg-panel', '--bg-hover', '--border', '--border-md', '--theme-divider',
-    '--theme-divider-hover', '--text', '--text-muted', '--text-dim', '--accent',
+    '--theme-divider-hover', '--text', '--doc-text', '--text-muted', '--text-dim', '--accent',
     '--scrollbar', '--menu-bg', '--selection', '--flash-rgb'
   ];
 
@@ -57,7 +58,8 @@
       textHue: wrapHue(n.textHue),
       textSat: clampInt(n.textSat, 0, 100),
       bgHue: wrapHue(n.bgHue),
-      bgSat: clampInt(n.bgSat, 0, 100)
+      bgSat: clampInt(n.bgSat, 0, 100),
+      vividText: x.vividText === true
     };
   }
   function oklabToLinearRgb(L, C, h) {
@@ -81,19 +83,32 @@
     v = v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
     return Math.round(v * 255);
   }
+  /* The largest chroma up to `cap` that sRGB can show at lightness L and
+     hue h (along one hue, the colors sRGB can show run from gray out to a
+     single edge, so bisection finds it). */
+  function maxChroma(L, h, cap) {
+    if (inGamut(oklabToLinearRgb(L, cap, h))) return cap;
+    var lo = 0, hi = cap;
+    for (var i = 0; i < 24; i++) {
+      var mid = (lo + hi) / 2;
+      if (inGamut(oklabToLinearRgb(L, mid, h))) lo = mid; else hi = mid;
+    }
+    return lo;
+  }
   /* OKLCH → [r, g, b] 0–255, keeping L and h and shrinking C to fit sRGB. */
   function oklch(L, C, h) {
     L = Math.min(1, Math.max(0, L));
-    var lin = oklabToLinearRgb(L, C, h);
-    if (!inGamut(lin)) {
-      var lo = 0, hi = C;
-      for (var i = 0; i < 24; i++) {
-        var mid = (lo + hi) / 2;
-        if (inGamut(oklabToLinearRgb(L, mid, h))) lo = mid; else hi = mid;
-      }
-      lin = oklabToLinearRgb(L, lo, h);
-    }
+    var lin = oklabToLinearRgb(L, maxChroma(L, h, C), h);
     return [encode(lin[0]), encode(lin[1]), encode(lin[2])];
+  }
+  /* WCAG relative luminance of an encoded [r, g, b]. */
+  function luminance(c) {
+    var y = [0, 0, 0];
+    for (var i = 0; i < 3; i++) {
+      var v = c[i] / 255;
+      y[i] = v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    }
+    return 0.2126 * y[0] + 0.7152 * y[1] + 0.0722 * y[2];
   }
 
   function hex(c) {
@@ -102,13 +117,16 @@
   function rgba(c, a) { return 'rgba(' + c[0] + ', ' + c[1] + ', ' + c[2] + ', ' + a + ')'; }
 
   /* Surfaces (bgHue): lightness L = l0 + l1·k and chroma C = c1·k,
-     k = bgSat/100. The bgSat-0 ends match the built-in Light and Dark
-     palettes. Text roles (textHue): fixed lightness, chroma =
-     textSat/100 · C. */
+     k = bgSat/100. At bgSat 0, bg and the light gradient match the
+     built-in Light and Dark palettes; the dark editor gradient is stronger
+     than built-in Dark's (1.06:1, near black reads as flat), so its top is
+     lighter than bg. Text roles (textHue): fixed lightness, chroma =
+     textSat/100 of the most sRGB can show there, up to C. */
   var SPEC = {
     light: {
       surface: {
         bg:    [0.975, -0.025, 0.040],
+        start: [0.975, -0.025, 0.040],  // editor gradient start (= bg)
         end:   [0.915, -0.025, 0.055],  // editor gradient end
         panel: [0.990, -0.070, 0.030],
         menu:  [0.990, -0.070, 0.030],
@@ -124,7 +142,8 @@
     dark: {
       surface: {
         bg:    [0.145, 0.055, 0.030],
-        end:   [0.085, 0.055, 0.040],   // editor gradient end
+        start: [0.200, 0.008, 0.030],   // editor gradient start, ~1.15:1 to end
+        end:   [0.085, 0.020, 0.040],   // editor gradient end
         panel: [0.235, 0.000, 0.025],
         menu:  [0.240, 0.025, 0.033],
         hover: [0.293, 0.000, 0.030],
@@ -138,12 +157,71 @@
     }
   };
 
-  /* One text-family color (role 'text' | 'muted' | 'accent'). The dialog's
-     text slider tracks are painted with this too, so the color shown is
-     the color applied. */
+  /* One text-family color (role 'text' | 'muted' | 'accent'). Saturation
+     scales the chroma sRGB can actually show at this hue and lightness, so
+     every step of the slider changes the color (a fixed scale went flat
+     above ~40% for dark reds and blues). 100 = the most the role allows. */
   function textColor(base, role, hue, sat) {
     var t = SPEC[base][role];
-    return oklch(t.L, t.C * sat / 100, hue);
+    return oklch(t.L, maxChroma(t.L, hue, t.C) * sat / 100, hue);
+  }
+
+  /* ── Vivid document text ─────────────────────────────────────────────
+     The UI text's fixed lightness leaves little room for some hues: dark
+     red at full saturation is pale pink (#ffc8c0), because sRGB has no
+     saturated red that light. With vividText the DOCUMENT text (editor,
+     preview, live preview; --doc-text) may move its lightness toward the
+     hue's most saturated shade, down to 4.5:1 (WCAG AA) against the
+     document's own surfaces — bg and the editor gradient — for any
+     background the sliders allow, so the background sliders still never
+     change it. Menus and dialogs keep the fixed-lightness --text, so the
+     UI stays readable enough to find the way out. Saturation walks from
+     the gray of the UI text (0) to that most saturated shade (100). */
+  var DOC_FLOOR = 4.5;
+  var DOC_SURFACES = ['bg', 'start', 'end'];
+  var docLimitY = {};
+  var vividCache = { light: {}, dark: {} };
+
+  /* The document-surface luminance hardest for text on this base: the
+     lightest on dark, the darkest on light, over every background. The
+     surfaces change steadily with bgSat, so a coarse grid finds it; the
+     1% margin covers the grid, and the unit test checks every value. */
+  function docSurfaceLimit(base) {
+    if (base in docLimitY) return docLimitY[base];
+    var dark = base === 'dark', y = dark ? 0 : 1;
+    for (var h = 0; h < 360; h++) {
+      for (var k = 0; k <= 1; k += 0.25) {
+        for (var i = 0; i < DOC_SURFACES.length; i++) {
+          var t = SPEC[base].surface[DOC_SURFACES[i]];
+          var s = luminance(oklch(t[0] + t[1] * k, t[2] * k, h));
+          y = dark ? Math.max(y, s) : Math.min(y, s);
+        }
+      }
+    }
+    return (docLimitY[base] = y);
+  }
+
+  /* The most saturated color of this hue that keeps DOC_FLOOR against the
+     document surfaces: { L, C }. Cached per base and hue. */
+  function vividTarget(base, hue) {
+    if (vividCache[base][hue]) return vividCache[base][hue];
+    var dark = base === 'dark', ys = docSurfaceLimit(base), floor = DOC_FLOOR * 1.01;
+    var need = dark ? floor * (ys + 0.05) - 0.05 : (ys + 0.05) / floor - 0.05;
+    var best = { L: SPEC[base].text.L, C: 0 };
+    for (var L = 0.01; L < 1; L += 0.0025) {
+      var C = maxChroma(L, hue, 0.4);
+      var y = luminance(oklch(L, C, hue));
+      if ((dark ? y >= need : y <= need) && C > best.C) best = { L: L, C: C };
+    }
+    return (vividCache[base][hue] = best);
+  }
+
+  /* Document text color: the UI text color, or with vividText the walk
+     from its gray toward the hue's vivid target. */
+  function docTextColor(base, hue, sat, vivid) {
+    if (!vivid) return textColor(base, 'text', hue, sat);
+    var v = vividTarget(base, hue), L0 = SPEC[base].text.L, f = sat / 100;
+    return oklch(L0 + (v.L - L0) * f, v.C * f, hue);
   }
 
   /* params → { dark, colors: {token: [r,g,b]}, alpha, vars: {--name: css} } */
@@ -157,6 +235,7 @@
       c[name] = oklch(t[0] + t[1] * k, t[2] * k, p.bgHue);
     }
     c.text = textColor(p.base, 'text', p.textHue, p.textSat);
+    c.doc = docTextColor(p.base, p.textHue, p.textSat, p.vividText);
     c.muted = textColor(p.base, 'muted', p.textHue, p.textSat);
     c.accent = textColor(p.base, 'accent', p.textHue, p.textSat);
     var a = spec.alpha;
@@ -168,7 +247,7 @@
         '--bg': hex(c.bg),
         '--bg-rgb': c.bg.join(', '),
         '--bg-panel-rgb': c.panel.join(', '),
-        '--editor-bg-start': hex(c.bg),
+        '--editor-bg-start': hex(c.start),
         '--editor-bg-end': hex(c.end),
         '--bg-panel': hex(c.panel),
         '--bg-hover': hex(c.hover),
@@ -177,6 +256,7 @@
         '--theme-divider': hex(c.div),
         '--theme-divider-hover': hex(c.divH),
         '--text': hex(c.text),
+        '--doc-text': hex(c.doc),
         '--text-muted': hex(c.muted),
         '--text-dim': rgba(c.text, a.dim),
         '--accent': hex(c.accent),
@@ -257,6 +337,8 @@
     normalizeCustom: normalizeCustom,
     buildCustomPalette: buildCustomPalette,
     textColor: textColor,
+    docTextColor: docTextColor,
+    DOC_FLOOR: DOC_FLOOR,
     oklch: oklch,
     hex: hex,
     /* The palette in effect now — the dialog's starting point. */

@@ -162,7 +162,9 @@ html :is(#preview, .lp-render) .prose b {
    (set by markdown_editor_theme.js for every dark palette), never on a
    theme name, so a new palette only has to define these variables.
    --bg-rgb / --bg-panel-rgb repeat --bg / --bg-panel as r, g, b so the
-   background-image overlays below can add alpha to them. The custom theme
+   background-image overlays below can add alpha to them. --doc-text is
+   the document's text (editor, preview, live preview) and --text the UI's;
+   they differ only in a custom theme with Vivid text on. The custom theme
    (markdown_editor_theme.js) sets every one of these variables inline.  */
 [data-theme="dark"] {
   --bg: #0a0a0a;
@@ -177,6 +179,7 @@ html :is(#preview, .lp-render) .prose b {
   --theme-divider: rgb(30, 30, 30);
   --theme-divider-hover: rgb(42, 42, 42);
   --text:       #f5f5f5;
+  --doc-text:   var(--text);   /* document text (a custom theme may make it vivid) */
   --text-muted: rgba(255, 255, 255, 0.46);
   --text-dim:   rgba(255,255,255,0.18);
   --accent:     rgba(255,255,255,0.58);
@@ -199,6 +202,7 @@ html :is(#preview, .lp-render) .prose b {
   --theme-divider: rgb(232, 232, 232);
   --theme-divider-hover: rgb(211, 211, 211);
   --text:       #171717;
+  --doc-text:   var(--text);   /* document text (a custom theme may make it vivid) */
   --text-muted: rgba(0, 0, 0, 0.632);
   --text-dim:   rgba(0,0,0,0.18);
   --accent:     rgba(0,0,0,0.58);
@@ -222,6 +226,7 @@ html :is(#preview, .lp-render) .prose b {
   --theme-divider:       rgb(208, 196, 176);
   --theme-divider-hover: rgb(188, 174, 150);
   --text:                #2f2820;
+  --doc-text:            var(--text);
   --text-muted:          rgba(55, 38, 18, 0.536);
   --text-dim:            rgba(55, 38, 18, 0.22);
   --accent:              rgba(176, 95, 51, 0.55);
@@ -244,6 +249,7 @@ html :is(#preview, .lp-render) .prose b {
   --theme-divider:       rgb(24, 40, 28);
   --theme-divider-hover: rgb(36, 58, 40);
   --text:                #cfe8c8;
+  --doc-text:            var(--text);
   --text-muted:          rgba(170, 215, 158, 0.50);
   --text-dim:            rgba(170, 215, 158, 0.20);
   --accent:              rgba(130, 195, 118, 0.65);
@@ -539,9 +545,11 @@ body:has(.menu-container.show) #outline-divider::after {
   width: 33.33%;
   min-width: 200px;
 }
-/* Solid editor background — toggled by .editor-bg-solid on <html> */
+/* Solid editor background — toggled by .editor-bg-solid on <html>. The
+   page background, not the gradient's start: a custom dark theme starts
+   its gradient lighter than --bg. */
 .editor-bg-solid #editor-pane {
-  background: var(--editor-bg-start);
+  background: var(--bg);
 }
 .pane-label {
   font-family: var(--font-mono);
@@ -610,30 +618,30 @@ body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
 
 /* ── Force Preview Prose to follow Editor Theme (Overrides Tailwind OS Media Queries) ── */
 :is(#preview, .lp-render) .prose {
-  --tw-prose-body: var(--text);
-  --tw-prose-headings: var(--text);
+  --tw-prose-body: var(--doc-text);
+  --tw-prose-headings: var(--doc-text);
   --tw-prose-lead: var(--text-muted);
-  --tw-prose-links: var(--text);
-  --tw-prose-bold: var(--text);
+  --tw-prose-links: var(--doc-text);
+  --tw-prose-bold: var(--doc-text);
   --tw-prose-counters: var(--text-muted);
   --tw-prose-bullets: var(--text-muted);
   --tw-prose-hr: var(--border-md);
-  --tw-prose-quotes: var(--text);
+  --tw-prose-quotes: var(--doc-text);
   --tw-prose-quote-borders: var(--border-md);
   --tw-prose-captions: var(--text-muted);
-  --tw-prose-code: var(--text);
-  --tw-prose-pre-code: var(--text);
+  --tw-prose-code: var(--doc-text);
+  --tw-prose-pre-code: var(--doc-text);
   --tw-prose-pre-bg: var(--bg-panel);
   --tw-prose-th-borders: var(--border-md);
   --tw-prose-td-borders: var(--border);
-  color: var(--text);
+  color: var(--doc-text);
 }
 /* A custom theme has ONE picked text color. The prose stylesheet still
    forces black/white on a few elements for the built-in palettes; route
    those to the palette instead. Scoped to the on-screen preview so the
    in-app PDF print (export.js, no .prose wrapper) keeps its own colors. */
-[data-custom-theme] :is(#preview, .lp-render) .prose :is(code, .footnotes, figcaption) { color: var(--text); }
-[data-custom-theme] :is(#preview, .lp-render) .prose sup a { color: var(--text) !important; }
+[data-custom-theme] :is(#preview, .lp-render) .prose :is(code, .footnotes, figcaption) { color: var(--doc-text); }
+[data-custom-theme] :is(#preview, .lp-render) .prose sup a { color: var(--doc-text) !important; }
 [data-custom-theme] :is(#preview, .lp-render) .prose .footnotes ol li::marker { color: var(--text-muted) !important; }
 [data-custom-theme] :is(#preview, .lp-render) .prose thead th { border-bottom-color: var(--text-muted); }
 [data-custom-theme] :is(#preview, .lp-render) .prose .footnotes hr { border-color: var(--border-md); opacity: 1; }
@@ -1278,6 +1286,7 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
 .custom-theme-content { max-width: 380px; }
 .ct-base { display: flex; gap: 6px; }
 .ct-base .modal-btn[aria-pressed="true"] { border-color: var(--accent); }
+.ct-base .ct-vivid { min-width: 5em; text-align: left; }
 .ct-buttons { margin-top: 14px; }
 .ct-spacer { flex: 1; }
 /* Range with the track painted inline (hue / tint gradients). */
@@ -1942,8 +1951,8 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   font-size:      inherit;       /* inherits the JS-set size from #editor        */
   line-height:    inherit;
   letter-spacing: inherit;
-  caret-color:    var(--text);
-  color:          var(--text);
+  caret-color:    var(--doc-text);
+  color:          var(--doc-text);
   tab-size:       2;
   min-height:     100%;
 }
@@ -1976,7 +1985,7 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
 
 /* 5. Cursor and selection */
 #editor .cm-cursor,
-#editor .cm-dropCursor { border-left-color: var(--text); }
+#editor .cm-dropCursor { border-left-color: var(--doc-text); }
 
 #editor .cm-selectionBackground {
   background: var(--selection);

@@ -188,14 +188,14 @@ const lineNumbersCompartment = new Compartment();
       padding: 'var(--editor-padding, 24px 28px)',
       lineHeight: '1.7',
       letterSpacing: '0.01em',
-      caretColor: 'var(--text)',
+      caretColor: 'var(--doc-text)',
       minHeight: '100%',
       fontFamily: 'inherit',
       tabSize: '2',
     },
     // Cursor
     '.cm-cursor, .cm-dropCursor': {
-      borderLeftColor: 'var(--text)',
+      borderLeftColor: 'var(--doc-text)',
     },
 
 // Selection (drawSelection uses this class) — the palette's own tint.
@@ -208,16 +208,17 @@ const lineNumbersCompartment = new Compartment();
     },
     // Fix unreadable syntax highlighting colors in dark palettes (the
     // defaultHighlightStyle colors are made for light backgrounds) and keep
-    // a custom theme's ONE picked text color (html[data-custom-theme]).
+    // a custom theme's ONE picked text color (html[data-custom-theme]) —
+    // the document's (--doc-text), which Vivid text may make stronger.
     // Live-preview widget content (.lp-render/.lp-yaml) is EXCLUDED: it
     // carries its own colors — hljs token classes in code fences, KaTeX,
     // YAML pill tints — which this blanket !important used to silently
     // flatten to --text.
     '.dark & .cm-content span:not(.cm-placeholder):not(.lp-render *):not(.lp-yaml *)': {
-      color: 'var(--text) !important',
+      color: 'var(--doc-text) !important',
     },
     '[data-custom-theme] & .cm-content span:not(.cm-placeholder):not(.lp-render *):not(.lp-yaml *)': {
-      color: 'var(--text) !important',
+      color: 'var(--doc-text) !important',
     },
     // Strip bold, font-size changes, and underlines that defaultHighlightStyle applies
     // to heading, strong, link, and url tokens — the editor renders as plain text.
