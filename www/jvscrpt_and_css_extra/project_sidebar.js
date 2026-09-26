@@ -88,9 +88,12 @@
         border-radius: 4px;
       }
 
-      /* \u2500\u2500 Multi-select \u2500\u2500 */
+      /* \u2500\u2500 Multi-select \u2500\u2500
+         Marked items are TEAL; the current file (the open note, the
+         previewed image) stays indigo \u2014 a separate hue, not just a
+         different strength of the same one. Same pair in card view. */
       .sidebar-item.multi-selected {
-        background: rgba(74,95,193,0.28);
+        background: rgba(20,184,166,0.24);
         border-radius: 4px;
       }
       /* Prevent child text/icons from stealing the drag target */
@@ -251,7 +254,9 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 4px 2px 6px;
+        /* 8px + the buttons' own 4-5px: the path text starts where the
+           card titles do (12px in), not against the panel's edge */
+        padding: 4px 8px 6px;
         flex-shrink: 0;
       }
       .sidebar-card-back {
@@ -355,9 +360,9 @@
         background: rgba(74, 95, 193, 0.12);
       }
       .sidebar-card.sidebar-card-selected {
-        outline: 2px solid var(--accent, #4a5fc1);
+        outline: 2px solid rgba(20,184,166,0.85);
         outline-offset: -2px;
-        background: rgba(74, 95, 193, 0.18);
+        background: rgba(20,184,166,0.16);
       }
       .sidebar-card.drop-target {
         outline: 2px solid var(--accent, #4a5fc1);
