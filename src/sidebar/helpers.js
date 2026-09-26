@@ -3,7 +3,7 @@
    paths.js; this file adds the pieces that need sidebar state or the
    filesystem. */
 import { pendingNoteDir } from './state.js';
-import { mediaLinkMarkdown, baseNameOf, uniqueName } from './paths.js';
+import { mediaLinkMarkdown, baseNameOf, uniqueName, joinPath, TEXT_EXTS, MEDIA_EXTS } from './paths.js';
 import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
 
   /* File bytes → base64 in 32 KB chunks (fromCharCode arg-count limits).
@@ -42,18 +42,12 @@ import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
      text    → editable in the editor (.md, .txt)
      media   → images; click previews, drop/drag inserts a markdown link
      other   → all remaining types; shown in orange, cannot be opened   */
-  const SUPPORTED_TEXT  = new Set(['.md', '.txt']);
-  const SUPPORTED_MEDIA = new Set([
-    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
-    '.bmp', '.ico', '.tiff', '.tif', '.avif',
-  ]);
-
   function getFileCategory(name) {
     const dot = name.lastIndexOf('.');
     if (dot < 0) return 'other';
     const ext = name.substring(dot).toLowerCase();
-    if (SUPPORTED_TEXT.has(ext))  return 'text';
-    if (SUPPORTED_MEDIA.has(ext)) return 'media';
+    if (TEXT_EXTS.has(ext))  return 'text';
+    if (MEDIA_EXTS.has(ext)) return 'media';
     return 'other';
   }
 
@@ -97,20 +91,19 @@ import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
    * Appends _2, _3, … to the base name until no collision is found.
    */
   async function uniqueDestPath(targetDir, name, type) {
-    const sep = (targetDir.endsWith('/') || targetDir.endsWith('\\')) ? '' : '/';
     let existingNames;
     try {
       const entries = await window.NativeAPI.readDirectory(targetDir);
       existingNames = entries.map(e => e.name);
     } catch {
-      return `${targetDir}${sep}${name}`;
+      return joinPath(targetDir, name);
     }
 
     const lastDot = name.lastIndexOf('.');
     const hasExt  = (type === 'file') && (lastDot > 0);
     const base    = hasExt ? name.substring(0, lastDot) : name;
     const ext     = hasExt ? name.substring(lastDot)    : '';
-    return `${targetDir}${sep}${uniqueName(existingNames, base, ext)}`;
+    return joinPath(targetDir, uniqueName(existingNames, base, ext));
   }
 
   /**
@@ -124,8 +117,6 @@ import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
    * "notes.md".
    */
   async function uniquePath(dir, baseName, ext, ignoreName = null) {
-    const sep = (dir.endsWith('/') || dir.endsWith('\\')) ? '' : '/';
-
     let names;
     try {
       const entries = await window.NativeAPI.readDirectory(dir);
@@ -133,9 +124,9 @@ import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
     } catch {
       /* Can't list the directory — return plain candidate and let
          createFile surface a useful OS error on collision. */
-      return `${dir}${sep}${baseName}.${ext}`;
+      return joinPath(dir, `${baseName}.${ext}`);
     }
-    return `${dir}${sep}${uniqueName(names, baseName, '.' + ext, ignoreName)}`;
+    return joinPath(dir, uniqueName(names, baseName, '.' + ext, ignoreName));
   }
 
 

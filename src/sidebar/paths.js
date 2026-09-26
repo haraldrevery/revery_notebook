@@ -113,6 +113,145 @@ export function isInsideRoot(absPath, rootPath) {
   return A.startsWith(R === '/' ? '/' : R + '/');
 }
 
+/** Do two paths name the same location? Windows spellings compare
+    case-insensitively (as that filesystem does), POSIX ones exactly.
+    Every "is this the same file/folder?" question in the file operations
+    goes through here or isInsideRoot — never through a raw `===`. */
+export function samePath(a, b) {
+  const x = pathKey(a);
+  return !!x && x === pathKey(b);
+}
+
+/** A comparison key for a path: normalised, lower-cased for Windows
+    spellings. Two paths are the same location iff their keys are equal. */
+export function pathKey(p) {
+  const n = normalizePath(p);
+  return isWindowsPath(n) ? n.toLowerCase() : n;
+}
+
+/* ── Building paths in the listing's own spelling ─────────────────────
+   Folder listings hand out native spellings (backslashes on Windows).
+   A child path built with '/' ("C:\p\sub/x.md") names the same file but
+   no longer equals the listing's string, and state compared with the
+   tree by plain equality drifted apart. These keep the separator style
+   of the path they start from. */
+function sepOf(p) {
+  const s = String(p);
+  return (s.includes('\\') && !s.includes('/')) ? '\\' : '/';
+}
+
+/** `dir` + `name`, joined with dir's own separator (never doubled). */
+export function joinPath(dir, name) {
+  const d = String(dir);
+  if (d.endsWith('/') || d.endsWith('\\')) return d + name;
+  return d + sepOf(d) + name;
+}
+
+/** The parent folder of `p`, sliced from p's own spelling ('/' for a
+    POSIX root child, "C:\" for a drive-root child). */
+export function parentPathOf(p) {
+  const s = String(p || '');
+  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  if (i < 0) return '';
+  if (i === 0) return s[0];
+  const head = s.slice(0, i);
+  return /^[A-Za-z]:$/.test(head) ? head + s[i] : head;
+}
+
+/** Map `p` through a rename/move of `from` → `to`: `to` when p IS from,
+    `to` + the rest when p lies inside `from`, otherwise null. The rest is
+    re-spelled with to's separator. */
+export function remapUnder(p, from, to) {
+  if (!p || !from || !to) return null;
+  if (samePath(p, from)) return to;
+  if (!isInsideRoot(p, from)) return null;
+  const rest = normalizePath(p).slice(normalizePath(from).length); // starts with '/'
+  const sep = sepOf(to);
+  return String(to).replace(/[/\\]$/, '') + (sep === '/' ? rest : rest.replace(/\//g, sep));
+}
+
+/* ── File kinds by extension ──────────────────────────────────────────
+   text  → opens in the editor; media → images (preview, link insertion).
+   Shared by helpers.getFileCategory and the rename rule below. */
+export const TEXT_EXTS  = new Set(['.md', '.txt']);
+export const MEDIA_EXTS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+  '.bmp', '.ico', '.tiff', '.tif', '.avif',
+]);
+
+/** '.md' for "a.md", '' for "README" and for dot-names like ".md". */
+export function extOf(name) {
+  const n = String(name || '');
+  const i = n.lastIndexOf('.');
+  return i > 0 ? n.slice(i) : '';
+}
+
+function extGroup(ext) {
+  const e = String(ext).toLowerCase();
+  if (TEXT_EXTS.has(e))  return 'text';
+  if (MEDIA_EXTS.has(e)) return 'media';
+  return null;
+}
+
+/* ── Names the app will give a file or folder ─────────────────────────
+   ONE rule for every name the user types (sidebar rename, multi-rename,
+   title-bar rename, new folder, import). The backends enforce the same
+   rule (fs_core.checkEntryName / main.rs check_entry_name), so a name the
+   renderer lets through by mistake is still refused on disk.
+   Refused, with the reason key returned:
+     empty    — nothing left after trimming
+     invalid  — '.', '..', path separators, control characters
+     hidden   — a leading dot hides the item from the sidebar
+     edge     — a trailing dot or space (Windows silently drops them, so
+                the file on disk would not have the name we asked for)
+     device   — a Windows device name (CON, NUL, COM1, …), with or
+                without an extension: such a file cannot be opened or
+                synced on Windows
+     internal — the endings of Revery's own safety files (.revery_tmp,
+                .revery_bak): the app would report them as leftovers
+     long     — over 255 bytes, the common filesystem limit
+   Characters Windows forbids (\ / ? % * : | " < >) are replaced with '_'
+   by sanitizeEntryName before the check, as before. */
+const NAME_FORBIDDEN_RE = /[/\\?%*:|"<>]/g;
+const WIN_DEVICE_RE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\..*)?$/i;
+
+export function sanitizeEntryName(raw) {
+  return String(raw == null ? '' : raw).trim().replace(NAME_FORBIDDEN_RE, '_');
+}
+
+export function checkEntryName(name) {
+  const n = String(name == null ? '' : name);
+  if (!n.trim()) return 'empty';
+  if (n === '.' || n === '..') return 'invalid';
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f/\\]/.test(n)) return 'invalid';
+  if (n.startsWith('.')) return 'hidden';
+  if (/[. ]$/.test(n) || n.startsWith(' ')) return 'edge';
+  if (WIN_DEVICE_RE.test(n)) return 'device';
+  if (/\.revery_(tmp|bak)$/i.test(n)) return 'internal';
+  if (new TextEncoder().encode(n).length > 255) return 'long';
+  return null;
+}
+
+/** The name a FILE ends up with when the user types `typed` to rename
+    `oldName`. The extension decides whether the app can open the file, so
+    it is kept unless the user typed that same extension, or another one
+    of the same kind (a note stays a note: .md ↔ .txt; an image stays an
+    image). Everything else gets the old extension appended:
+    "Meeting 26.09.2026" → "Meeting 26.09.2026.md". A file without an
+    extension keeps exactly what was typed. */
+export function renamedFileName(oldName, typed) {
+  const oldExt = extOf(oldName);
+  if (!oldExt) return typed;
+  const newExt = extOf(typed);
+  if (newExt) {
+    if (newExt.toLowerCase() === oldExt.toLowerCase()) return typed;
+    const g = extGroup(newExt);
+    if (g && g === extGroup(oldExt)) return typed;
+  }
+  return typed + oldExt;
+}
+
 /** A file or folder name not yet taken in a folder listing: `stem+suffix`,
     else `stem_2+suffix`, `stem_3+suffix`, … Comparison IGNORES CASE: on
     Windows and macOS "Notes.md" and "notes.md" are one file, so a

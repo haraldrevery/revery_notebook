@@ -135,7 +135,7 @@ const ENV        = isTauri ? 'tauri' : isElectron ? 'electron' : 'web';
 
 | Group | Methods |
 |---|---|
-| Filesystem | `openFolderDialog`, `setRootPath`, `readDirectory`, `readFile`, `writeFile` (atomic), `createFile`, `createDirectory`, `renameNode`, `deleteNode`, `copyFileIntoFolder`/`copyIntoFolder`, `copyPathIntoFolder` |
+| Filesystem | `openFolderDialog`, `setRootPath` (resolves to the root's canonical spelling), `readDirectory`, `readFile`, `writeFile` (atomic), `createFile`, `createDirectory`, `renameNode`, `deleteNode`, `canonicalEntryPath`, `copyFileIntoFolder`/`copyIntoFolder`, `copyPathIntoFolder` |
 | Crash backup | `setVolatileContent`, `getVolatileContent`, `deleteVolatileContent`, `getVolatileStatus`, `listVolatileBackups`, `checkVolatileStartup` |
 | Watching | `watchFile`, `unwatchFile` (per-path serialized so watch/unwatch can never race) |
 | Dialogs / window | `showMessageBox` (multi-button routed through an in-page HTML dialog on Tauri), `onWindowClose`, `confirmClose`, `minimizeWindow`, `toggleMaximizeWindow`, `closeWindow`, `setFullscreen`, `showInExplorer` |
@@ -152,10 +152,16 @@ path (web). New platform-specific features must follow this pattern.
 ```ts
 interface DirEntry {
   name: string;           // "notes.md"
-  path: string;           // "/Users/alice/Projects/notes.md"
-  type: 'file' | 'dir';
+  path: string;           // "/Users/alice/Projects/notes.md" — canonical spelling
+  type: 'file' | 'dir';   // a link (to a file OR a folder) is 'file'
+  link?: boolean;         // symbolic link / junction (desktop backends)
+  mtime?: number; ctime?: number;
 }
 ```
+`path` is the folder's realpath plus the entry's own name — the same
+spelling `setRootPath` returns for the root and `canonicalEntryPath`
+returns for any entry. A link is never walked into (it is listed as a
+file), and moving, renaming or deleting it acts on the link itself.
 
 ### Web Fallback Behaviour
 | Method | Web behaviour |
@@ -232,17 +238,30 @@ The `●` marker indicates the currently active file (`.active` CSS class).
   (shown dimmed/orange, not openable)
 - A card view (with text/image previews) can replace the tree; drag-and-drop
   moves files/folders; multi-select supports bulk rename/delete/move
+- Card view navigation: a path bar (project root › … › current folder) when
+  it fits the panel's width, else "← Back" + the current folder's name
+  (re-checked when the panel is resized). Every ancestor segment and the
+  Back button are drop targets: dropping cards there moves them up. Nothing
+  above the project root is ever offered (`cards.js` NAVIGATION BAR)
+- Links (symlinks/junctions) show the link glyph and are never walked into
 
 ### Context Menu Actions (translated EN/SV)
 
 | Target | Actions |
 |---|---|
-| Text file | Open, Rename, Show in Explorer, Delete |
-| Media file | Preview, Rename, Show in Explorer, Delete |
-| Other file | Rename, Show in Explorer, Delete |
-| Folder | New File Here, New Folder Here, Rename, Show in Explorer, Delete |
-| Multi-selection | Rename N items…, Delete N items |
+| Text file | Open, Rename, Move to…, (Move up one level), Show in Explorer, Delete |
+| Media file | Preview, Rename, Move to…, (Move up one level), Show in Explorer, Delete |
+| Other file | Rename, Move to…, (Move up one level), Show in Explorer, Delete |
+| Link | Rename, Move to…, (Move up one level), Show in Explorer, Delete (the link only) |
+| Folder | New File Here, New Folder Here, Rename, Move to…, (Move up one level), Show in Explorer, Delete |
+| Multi-selection | Rename N items…, Move to…, (Move up one level), Delete N items |
 | Empty space | New File, New Folder |
+
+"Move up one level" appears only when the items share one folder below the
+project root. "Move to…" opens a folder picker (filterable, ↑/↓/Enter/Esc;
+never the moved folder or anything below it; the current folder shown
+disabled; links and dot-folders never offered; capped at 3000 folders with
+a note). Both end in the same `moveNodes` as a drag-and-drop.
 
 ### Links Follow Renames
 
@@ -322,6 +341,58 @@ One ingest, one path module, one drop transport per platform:
   realpath. `test/media_e2e.test.js` drives the whole flow in the real
   Electron main (preload + IPC) on a temporary project.
 
+### Moving, renaming and deleting — the rules
+
+Every move, rename, undo and delete (sidebar, card view, "Move to…", the
+title bar) follows the same rules; the backends enforce them again
+(`fs_core.renameEntry` / `trashableEntry`, Rust `rename_entry_blocking` /
+`delete_node_blocking`, unit-tested on both sides):
+
+- **Entries, never link targets.** The parent folder is resolved, the
+  entry's own name is not (`validateEntryInside` / `safe_entry_inside`).
+  Moving a link moves the link; deleting it trashes the link. A RELATIVE
+  link is never moved to another folder (it would point somewhere else);
+  renaming it in place is fine. The project root is never an entry.
+- **Never overwrite, never copy-then-delete.** An existing destination
+  (a dangling link included) is refused, except the same entry under a
+  case-only different spelling. A move to another drive/volume is refused
+  with a message — there is no copy fallback any more (it could leave a
+  half-emptied original; in Tauri it could also merge into an existing
+  folder because errno 17 was taken for "cross-device" on Unix, where it
+  is EEXIST). A folder never moves into itself.
+- **Windows transient locks** (antivirus, indexer, a watcher being closed)
+  are retried up to three times (0.1/0.2/0.4 s), re-checking the
+  destination each time; a rename happens completely or not at all.
+- **One name rule** (`paths.checkEntryName`, mirrored by
+  `fs_core.checkEntryName` and Rust `check_entry_name`): no empty names,
+  separators or control characters, no leading dot (it would hide the
+  item), no leading space or trailing dot/space, no Windows device names
+  (CON, NUL, COM1, … also with an extension), not ending like Revery's
+  safety files, at most 255 bytes. Applied to every NEW name (rename,
+  multi-rename, title rename, new file/folder, import); a pure move keeps
+  its name. A file keeps its extension unless the user typed the same one
+  or another one of the same kind (`paths.renamedFileName`: "Meeting
+  26.09.2026" stays a note). New folder refuses a name that exists.
+- **Path identity.** The renderer adopts the canonical root
+  (`setRootPath`'s answer) and canonical note paths (`openFile`, boot,
+  Save As via `canonicalEntryPath`); "same location?" questions go through
+  `paths.samePath` / `isInsideRoot`, and child paths are built in the
+  listing's own separator style (`joinPath`, `parentPathOf`,
+  `remapUnder`). A root opened through a link used to make a file dropped
+  on its own folder become name_2.
+- **State follows.** `remapPathState` moves the selected folder, the card
+  view's folder, expanded folders, the previewed image and the selection
+  anchor along with every record; `forgetDeletedPathState` falls back to
+  the parent after a delete.
+- **One operation at a time** (`S._operationLock`); a second one shows
+  "Busy — try again in a moment." instead of vanishing.
+- **Undo** (moves/renames, 30 deep) runs from Ctrl+Z only while the user
+  works in the file panel (`save.js sidebarUndoAllowed`: not in the editor,
+  not in any text field, no dialog open, last press/focus in the panel)
+  and says what it undid; the stack is cleared when the project changes.
+- **Failures are reported** (move/rename/delete/undo dialogs list each
+  item and the reason); the multi-delete question says "Move … to Trash".
+
 ### Switching files, renaming and moving the open note
 
 There is no "save first?" dialog: opening another file, previewing an
@@ -332,6 +403,19 @@ no save can land on the old name), then hands over to the ONE retarget
 function (`retargetActiveFile`, save.js): the path, watcher, crash backups
 and any auto-save hold follow the file, and the dirty flag is left as it is
 — a path change never marks unsaved edits as saved.
+
+The file-system part of every move, rename (title bar included), undo and
+delete runs INSIDE the save engine's disk lock (`fileops.inDiskLock`,
+`save._enqueueDiskOp`): a save already queued lands before it, and a save
+that captured the old path but runs after it is skipped
+(`_goneActivePaths` → `'deferred-gone'`) and rescheduled for wherever the
+note is now — it used to recreate the note at its old place, or resurrect
+a deleted one (in Tauri, commands are not ordered, so even an explicit
+write could land after the rename). When the open note is involved, its
+watcher is stopped first and awaited (on Windows an open handle inside a
+folder can block renaming it) and started again afterwards. Deleting the
+open note closes it (the user confirmed the delete). Never put a dialog
+inside the disk lock: saves would wait on it.
 
 Typing with no note open creates one ("scratchpad", save.js). If the user
 loads another document before that file exists, the typed text still goes
@@ -393,7 +477,7 @@ watcher cannot start, a status message says so.
 
 | Group | Channels |
 |---|---|
-| FS | `fs:read-directory`, `fs:read-file` (20 MB cap), `fs:write-file` (atomic via `fs_core.atomicWriteFile`), `fs:create-file`, `fs:create-directory`, `fs:rename-node`, `fs:delete-node` (→ trash), `fs:copy-into-folder`, `fs:set-root-path` (trustedRoots-verified) |
+| FS | `fs:read-directory`, `fs:read-file` (20 MB cap), `fs:write-file` (atomic via `fs_core.atomicWriteFile`), `fs:create-file`, `fs:create-directory` (name rule), `fs:rename-node` (`fs_core.renameEntry`), `fs:delete-node` (→ trash, the entry itself), `fs:canonical-entry`, `fs:copy-into-folder`, `fs:set-root-path` (trustedRoots-verified on the real folder; returns the canonical root) |
 | Crash backup | `fs:set/get/delete-volatile-content`, `fs:get-volatile-status`, `fs:list-volatile-backups` |
 | Watch | `fs:watch-file`, `fs:unwatch-file` |
 | Dialogs | `dialog:open-folder`, `dialog:save-file`, `dialog:show-message-box` |
@@ -477,7 +561,7 @@ collision.
 
 | Group | Commands |
 |---|---|
-| FS | `open_folder_dialog`, `set_root_path`, `read_directory`, `read_file` (20 MB guard), `write_file` (atomic), `create_file`, `create_directory`, `rename_node`, `delete_node` (→ system trash via `trash` crate), `copy_into_folder`, `copy_path_into_folder`, `save_file` |
+| FS | `open_folder_dialog`, `set_root_path` (returns the canonical root), `read_directory`, `read_file` (20 MB guard), `write_file` (atomic), `create_file`, `create_directory` (name rule), `rename_node` (`rename_entry_blocking`), `delete_node` (→ system trash via `trash` crate, the entry itself), `canonical_entry_path`, `copy_into_folder`, `copy_path_into_folder`, `save_file` |
 | Crash backup | `set_volatile_content`, `get_volatile_content`, `delete_volatile_content`, `get_volatile_status`, `list_volatile_backups` |
 | Watch | `watch_file` / `unwatch_file` (`notify` crate → `file-changed` events) |
 | Export | `export_project_zip` (no renderer args; `zip` crate, atomic write), `export_latex_zip` (per-image root validation + allowlisted `bundle_fonts` via `include_bytes!`) |
@@ -888,6 +972,9 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup |
 | `test/fs_core.read.test.js` | Strict UTF-8 reads: valid UTF-8 / BOM / CRLF round-trip byte for byte; Windows-1252 and UTF-16 are refused and left untouched |
 | `test/fs_core.rename.test.js` | The only rename-over-existing exception (case-only alias of the SAME file); two different files differing only in case are never treated as one |
+| `test/fs_core.entry.test.js` | Entry operations (`validateEntryInside`, `renameEntry`, `trashableEntry`): a link is the link, never its target (also one pointing outside); nothing behind an outside link is reachable; a symlinked root resolves to the real spelling; never overwrites (a dangling link included); absolute links move as links, relative ones are refused across folders; into-itself / root / bad names refused, a pure move keeps a legacy name; EXDEV refused with nothing changed; EBUSY is never a copy; the Windows retry, and a destination appearing during it is never overwritten; `checkEntryName` agrees with the renderer's |
+| `test/entry_names.test.js` | The one name rule (`checkEntryName` reasons, Windows device names, byte length), `sanitizeEntryName`, the rename extension rule (`renamedFileName`: "Meeting 26.09.2026" keeps ".md", note ↔ note and image ↔ image only, extensionless names kept), `samePath` / `pathKey`, `joinPath` / `parentPathOf` / `remapUnder` in the listing's own spelling |
+| `test/file_ops_e2e.test.js` | Boots the REAL Electron app twice on a temp project (a recorder replaces the system trash): card-view path bar and its root-segment drop, the narrow-panel "← Back" drop target, nothing above the root; "Move to…" (picker rules, the link update still runs) and "Move up one level"; Ctrl+Z in the title never undoes a file move, after working in the panel it does (with a status message); links moved as links, a relative link not moved away, deleting a link trashes the link; rename rules and refusals; the open note's folder moved while a save is queued (save lands first, later typing saved at the new place, old folder never recreated); the open note deleted with a save in flight (the save lands first, never resurrected); multi-delete wording. Second run with the project opened through a symlink: canonical root and note, no name_2 on a drop into the own folder, no escape above the root |
 | `test/eol.test.js` | Line-ending rules: which files keep CRLF, normalisation, byte-exact round-trip |
 | `test/unique_name.test.js` | New/renamed/imported/moved names: case-insensitive collisions, trailing `_2024` kept, the renamed file does not block its own spelling |
 | `test/data_safety_e2e.test.js` | Boots the REAL desktop app on a temp project: Replace after edits / file switch / regex context; scratchpad race; sidebar Ctrl+Z; rename during a "Keep my version" hold; open-note links follow a rename; CRLF kept; external write right after an autosave detected; a note moved away by another program not recreated |
@@ -905,7 +992,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/livepreview_e2e.test.js` | Boots the REAL app in Electron (web mode, via the generic `test/helpers/web_e2e_main.js` + `lp_e2e_driver.js`) and drives the live preview with DOM mouse events: a click on rendered text lands on THAT word of the source (paragraph, list item, code line, table cell, lower row of a wrapped paragraph) the layout never changes while the button is down (a click's block reveals on release, and a few px of pointer jitter during a click selects nothing), CodeMirror's height map matches the screen below lists/quotes/code/tables, a click on the blank line at a block's edge reveals nothing and never scrolls, a click beside a block lands on the row at that height, a click that changes a block's height moves the side with less visible text (low on the screen it changes downward, high on the screen upward, a block taller than the screen keeps the clicked row under the pointer; also when the previously edited block re-renders above — on screen or scrolled out of view), typing and arrow keys keep the caret's line in place when blocks switch (a lazy-continuation merge, leaving a revealed block, ArrowUp into a tall paragraph without a jump), the block being edited keeps its rendered height (headings, a tight and a nested list, a quote, a wrapped paragraph — at two text sizes), images and `$$` math stay rendered under their source while edited, undrawn blocks keep their measured heights, a drag started on a rendered block selects text, a drag into a rendered block extends character by character with the covered rendered text painted (CSS Custom Highlight) while the block stays rendered, a block the range spans is marked as a unit, heads stay stable over widgets, double-click selects the word, shift-click extends, right-click places the cursor without dragging, select-all keeps spanned blocks rendered, Shift+Arrow into a rendered block paints exactly the selected characters and typing replaces them in the source, arrow keys still reveal, checkboxes and YAML pills keep their behaviour |
 | `test/custom_theme.test.js` | The custom theme generator (theme.js in a vm): it sets exactly the variables every palette block defines; stored values are normalized or rejected (the earlier offset layout is converted); saturation 0 is neutral gray; each control changes only what it names (text sliders never touch a background variable and vice versa; Vivid text changes only `--doc-text`); no part of the Text saturation slider is flat; Vivid text makes dark red red; for every control combination (exact, via the extreme text and surface luminances, since any text color can meet any surface): text ≥ 7:1, muted text ≥ 4.5:1 (4:1 on hover), highlight ≥ 4.5:1 (3:1 on hover), vivid document text ≥ 4.5:1 on bg and both gradient ends, editor gradient visible but gentle (≥ 1.12:1 on dark bases); selection tint visible on a dense grid; the text-slider tracks paint with the generator; boot and live switching never leave an empty palette |
 | `test/theme_e2e.test.js` | Boots the REAL app (web mode) once with the OS in light mode and once in dark: every built-in palette and six custom ones are measured on screen (html.dark matches the actual background, body/footnote/editor-code contrast, visible selection, background-image overlay tinted with the palette's own `--bg`, click flashes yellow in built-ins and the highlight color in custom themes, one text color everywhere in a custom theme — the document on `--doc-text`, menus on `--text`, separate only with Vivid text — and the solid editor background equals `--bg`), identical under both OS settings; in-app PDF print stays dark-on-white under every palette, Vivid text included; plus the custom theme dialog through the real menu: the text sliders apply the generator's color without moving the background and the background sliders leave the text alone, Vivid text changes only the document text, live preview, Escape/outside click/Cancel restore, Save stores the base + custom values, Reset, the Background opacity override stays independent |
-| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
+| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `safe_entry_inside` (links as links, symlinked root), `rename_entry_blocking` (no overwrite, dangling link kept, relative link refused, into-itself/bad names), `case_only_alias_in_listing`, `classify_rename_error` (pins errno 17 = EEXIST on Unix), `check_entry_name` (same table as the renderer), `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side
 atomic-write strategy — both `fs:write-file` and `dialog:save-file` call
@@ -1188,6 +1275,28 @@ hit that.
    acknowledge a close). The E2E delivers the event rather than crashing.
 
 10. **Case-only renames** (Windows/macOS) are allowed only when the backend
-   proves both spellings are the same file; not exercisable on the Linux
-   test machine (case-sensitive), where the guard's refusal is tested
-   instead.
+   proves both spellings are the same entry (Electron: same device + file
+   ID via lstat; Tauri: the folder listing holds one entry, not two);
+   not exercisable on the Linux test machine (case-sensitive), where the
+   guard's refusal and the pure listing decision are tested instead.
+
+11. **Check-then-rename window.** Both backends check that a destination
+   is free and then rename; `rename` itself replaces an existing FILE on
+   every OS, so another program creating that exact name in the
+   microseconds between would be overwritten. Closing it needs a
+   no-replace rename (renameat2/renamex_np/MoveFileEx without
+   REPLACE_EXISTING), which Node does not expose and which could not be
+   built and tested for Windows/macOS here. Folders are not at risk
+   (renaming onto a non-empty folder fails).
+
+12. **Relative links INSIDE a moved folder** that point outside it break,
+   as in every file manager (a relative link moved on its own is refused).
+   No data is touched; undo moves the folder back.
+
+13. **Moves to another drive/volume are refused** (no copy fallback).
+   Inside one project this needs a mount point in the project tree.
+
+14. **Windows behaviour still to confirm on a real Windows machine**: that
+   moving the folder of the open note now succeeds in both wrappers (the
+   watcher is stopped first; transient locks are retried), and the
+   "Delete" of a junction removes only the junction.

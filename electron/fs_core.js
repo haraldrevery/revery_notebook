@@ -229,13 +229,154 @@ function isCaseOnlyAliasOfSameFile(a, b) {
   try {
     if (path.dirname(a) !== path.dirname(b)) return false;
     if (path.basename(a).toLowerCase() !== path.basename(b).toLowerCase()) return false;
-    const sa = fs.statSync(a, { bigint: true });
-    const sb = fs.statSync(b, { bigint: true });
+    /* lstat: the ENTRY itself. Two different links "Link" and "link" to
+       one target must not look like one file (stat would follow both). */
+    const sa = fs.lstatSync(a, { bigint: true });
+    const sb = fs.lstatSync(b, { bigint: true });
     if (sa.ino === 0n || sb.ino === 0n) return false;
     return sa.dev === sb.dev && sa.ino === sb.ino;
   } catch {
     return false;
   }
+}
+
+/* ── Directory ENTRIES (rename / move / delete) ─────────────────────────
+   validatePathInside resolves the whole path, the last component
+   included — right for reading and writing CONTENT, wrong for acting on
+   an entry: for a symbolic link it named the link's TARGET, so moving a
+   link moved the folder it pointed to and deleting it trashed that
+   folder. An entry is resolved like this instead: its PARENT folder
+   through realpath (it must lie inside the project), then its own name
+   appended untouched. The result names the link itself, never what it
+   points to, and is also the canonical spelling of any entry the folder
+   listing returns (fs:read-directory joins names onto the realpath of the
+   folder). The project root itself is never an entry. */
+function validateEntryInside(raw, rootPath) {
+  const resolved = validatePath(raw);
+  const name = path.basename(resolved);
+  const parent = path.dirname(resolved);
+  if (!name || name === '.' || name === '..' || parent === resolved) {
+    throw new Error(`Security Error: Not a file or folder inside the project: ${resolved}`);
+  }
+  const root = fs.realpathSync(path.resolve(rootPath));
+  const entry = path.join(validatePathInside(parent, root), name);
+  const rel = path.relative(root, entry);
+  if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
+    throw new Error(`Security Error: Path escapes project root: ${resolved}`);
+  }
+  return entry;
+}
+
+/* Does the entry exist? lstat: a dangling link exists too (existsSync
+   follows links and answered "no" — a rename would then have replaced
+   the link). */
+function lexists(p) {
+  try { fs.lstatSync(p); return true; } catch (_) { return false; }
+}
+
+/* The one rule for names the app gives a file or folder. MIRROR of
+   checkEntryName in src/sidebar/paths.js (the renderer's copy, which
+   produces the friendly messages) — test/fs_core.entry.test.js checks
+   both agree. Returns null when the name is fine, else the reason key. */
+const WIN_DEVICE_RE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\..*)?$/i;
+function checkEntryName(name) {
+  const n = String(name == null ? '' : name);
+  if (!n.trim()) return 'empty';
+  if (n === '.' || n === '..') return 'invalid';
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f/\\]/.test(n)) return 'invalid';
+  if (n.startsWith('.')) return 'hidden';
+  if (/[. ]$/.test(n) || n.startsWith(' ')) return 'edge';
+  if (WIN_DEVICE_RE.test(n)) return 'device';
+  if (/\.revery_(tmp|bak)$/i.test(n)) return 'internal';
+  if (Buffer.byteLength(n, 'utf8') > 255) return 'long';
+  return null;
+}
+
+function assertEntryName(name) {
+  const why = checkEntryName(name);
+  if (why) throw new Error(`Invalid name "${name}" (${why}).`);
+}
+
+/* Would moving the link `src` to `dest` change what it points to? Only a
+   RELATIVE link moved to another folder: its target is resolved from the
+   folder it sits in. Such a move is refused — it would silently turn the
+   link into a pointer to something else (or to nothing). */
+function linkMoveChangesTarget(src, dest) {
+  let st;
+  try { st = fs.lstatSync(src); } catch (_) { return false; }
+  if (!st.isSymbolicLink()) return false;
+  const target = fs.readlinkSync(src);
+  if (path.isAbsolute(target)) return false;
+  return path.resolve(path.dirname(src), target) !== path.resolve(path.dirname(dest), target);
+}
+
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* Rename or move one entry inside the project. Never overwrites, never
+   copies, never deletes:
+     • both paths are ENTRIES (validateEntryInside): a link is moved as a
+       link, its target is never touched;
+     • an existing destination is refused — except the same entry under a
+       case-only different spelling (isCaseOnlyAliasOfSameFile);
+     • a new name must pass checkEntryName (a pure move keeps its name);
+     • a folder is never moved into itself;
+     • a relative link is not moved to another folder (see above);
+     • another drive or volume (EXDEV) is REFUSED. There used to be a
+       copy-then-delete fallback (also for EBUSY): if deleting the
+       original failed half way it left a partly emptied original. Inside
+       one project that situation is rare; refusing is the only answer
+       that can never lose or duplicate data;
+     • Windows only: a rename refused because something briefly holds a
+       handle (antivirus, the indexer, a watcher being closed) is retried
+       a few times. A rename either happens completely or not at all, so
+       retrying cannot leave a partial state.
+   `opts.platform` / `opts.sleep` exist for the unit tests. */
+async function renameEntry(oldRaw, newRaw, rootPath, opts = {}) {
+  const platform = opts.platform || process.platform;
+  const sleep = opts.sleep || sleepMs;
+  const safeOld = validateEntryInside(oldRaw, rootPath);
+  const safeNew = validateEntryInside(newRaw, rootPath);
+
+  if (!lexists(safeOld)) throw new Error(`Source not found: ${safeOld}`);
+  if (path.basename(safeNew) !== path.basename(safeOld)) assertEntryName(path.basename(safeNew));
+
+  const inner = path.relative(safeOld, safeNew);
+  if (inner && inner !== '..' && !inner.startsWith('..' + path.sep) && !path.isAbsolute(inner)) {
+    throw new Error(`Cannot move "${path.basename(safeOld)}" into itself.`);
+  }
+
+  const destinationTaken = () => lexists(safeNew) && !isCaseOnlyAliasOfSameFile(safeOld, safeNew);
+  if (destinationTaken()) throw new Error(`Destination already exists: ${safeNew}`);
+  if (safeNew === safeOld) return; // same entry, same spelling: nothing to do
+
+  if (linkMoveChangesTarget(safeOld, safeNew)) {
+    throw new Error(`"${path.basename(safeOld)}" is a relative link. Moving it to another folder would change what it points to, so it was not moved.`);
+  }
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.promises.rename(safeOld, safeNew);
+      return;
+    } catch (err) {
+      if (err && err.code === 'EXDEV') {
+        throw new Error(`"${path.basename(safeOld)}" cannot be moved to another drive or volume from Revery (nothing was changed). Use your file manager for that move.`);
+      }
+      const transient = platform === 'win32'
+        && err && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES');
+      if (!transient || attempt >= 3) throw err;
+      await sleep(100 * 2 ** attempt);
+      if (!lexists(safeOld)) throw new Error(`Source not found: ${safeOld}`);
+      if (destinationTaken()) throw new Error(`Destination already exists: ${safeNew}`);
+    }
+  }
+}
+
+/* The entry "Move to Trash" acts on, or null when it is already gone.
+   The ENTRY (a link is trashed as a link, never its target). */
+function trashableEntry(raw, rootPath) {
+  const safe = validateEntryInside(raw, rootPath);
+  return lexists(safe) ? safe : null;
 }
 
 /* Reduce a dropped file's name to a safe basename inside the target dir. */
@@ -607,6 +748,13 @@ module.exports = {
   NOT_UTF8_MESSAGE,
   validatePath,
   validatePathInside,
+  validateEntryInside,
+  lexists,
+  checkEntryName,
+  assertEntryName,
+  linkMoveChangesTarget,
+  renameEntry,
+  trashableEntry,
   isCaseOnlyAliasOfSameFile,
   sanitizeDropFilename,
   ensureVolatileDir,

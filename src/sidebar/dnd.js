@@ -8,6 +8,7 @@ import { updateMultiSelectHighlight } from './tree.js';
 import { copyIntoFolder, ingestMediaAtDrop, filesToSources, pathsToSources, dropTargetAt } from './media_ingest.js';
 import { fileDropTransport, isOsFileDrop } from './drop_transport.js';
 import { moveNodes } from './fileops.js';
+import { isInsideRoot } from './paths.js';
 
   /* ══════════════════════════════════════════════════════════════════
      DRAG DROP TARGET HELPER
@@ -30,6 +31,15 @@ import { moveNodes } from './fileops.js';
    * .sidebar-children containers to find the logical parent folder.
    */
 function getDropTargetDir(eventTarget) {
+    /* Case 0: the card view's navigation bar — "← Back" (the parent
+       folder) or a path-bar segment (that folder). Only a folder inside
+       the project is ever a target; anything else accepts nothing. */
+    const navTarget = eventTarget.closest && eventTarget.closest('[data-drop-dir]');
+    if (navTarget) {
+      const dir = navTarget.dataset.dropDir;
+      return (dir && S.rootPath && isInsideRoot(dir, S.rootPath)) ? dir : null;
+    }
+
     /* Case 1.5: cursor is directly on a folder card */
     const dirCard = eventTarget.closest('.sidebar-card-dir');
     if (dirCard && !selectedItems.has(dirCard.dataset.path)) {
@@ -65,6 +75,9 @@ function getDropTargetDir(eventTarget) {
    * drop target, or null if it's the tree root.
    */
   function getDropTargetEl(eventTarget) {
+    const navTarget = eventTarget.closest && eventTarget.closest('[data-drop-dir]');
+    if (navTarget) return getDropTargetDir(eventTarget) ? navTarget : null;
+
     const dirPath = getDropTargetDir(eventTarget);
     if (!dirPath || dirPath === S.rootPath || (S.sidebarViewMode === 'card' && dirPath === S.cardViewDir)) return null;
 
@@ -118,6 +131,7 @@ export function initDnd() {
 
     const targetDir = getDropTargetDir(e.target);
     clearDropHighlights();
+    if (!targetDir) { S._dragItems = []; return; }
 
     /* ── Internal move (items dragged within the tree) ── */
     if (S._dragItems.length) {

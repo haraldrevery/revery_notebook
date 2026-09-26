@@ -353,6 +353,9 @@ struct DirEntry {
     path: String,
     #[serde(rename = "type")]
     entry_type: String, // "file" | "dir"
+    /// A symbolic link (or junction), listed as "file" so it is never walked
+    /// into; moving or deleting it acts on the link itself.
+    link: bool,
     mtime: f64,         // ms since epoch (modification time)
     ctime: f64,         // ms since epoch (creation/birth time; falls back to mtime on Linux)
 }
@@ -620,7 +623,7 @@ async fn open_folder_dialog(
     path: String,
     root_state: State<'_, RootPath>,
     lock: State<'_, SettingsLock>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let p = safe_path(&path)?;
     let canonical = p.canonicalize()
         .map_err(|e| format!("Cannot resolve root path: {e}"))?;
@@ -652,7 +655,12 @@ let is_trusted = settings["trustedRoots"]
 
     let _ = app.asset_protocol_scope().allow_directory(&canonical, true);
     *root_state.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(canonical.to_string_lossy().into_owned());
-    Ok(())
+    // The renderer adopts this CANONICAL spelling as its project root: every
+    // entry read_directory returns is spelled that way, and a root opened
+    // through a symlink, junction or mapped drive spelled differently made
+    // its "same folder?" checks fail (a file dropped into its own folder
+    // was renamed to name_2). Mirrors fs:set-root-path (Electron).
+    Ok(frontend_path(&canonical))
 }
 
 
@@ -688,6 +696,7 @@ fn read_directory_blocking(path: String, root: PathBuf) -> Result<Vec<DirEntry>,
         .map(|e| {
             let file_type = e.file_type().ok();
             let is_dir    = file_type.map_or(false, |t| t.is_dir());
+            let is_link   = file_type.map_or(false, |t| t.is_symlink());
 
             /* Fetch timestamps — failures produce 0 (graceful degradation) */
             let meta  = e.metadata().ok();
@@ -709,6 +718,7 @@ fn read_directory_blocking(path: String, root: PathBuf) -> Result<Vec<DirEntry>,
                 // paths — on Windows \\?\-prefixed. See frontend_path.
                 path: frontend_path(&e.path()),
                 entry_type: if is_dir { "dir".into() } else { "file".into() },
+                link: is_link,
                 mtime,
                 ctime,
             }
@@ -1216,11 +1226,22 @@ atomic_write_file(&tmp, &p, content.as_bytes())
     .map_err(|e| format!("Background write task failed: {e}"))?
 }
 
+/// The last component of a path the app is about to create must pass the
+/// one name rule (check_entry_name).
+fn check_new_name(p: &Path) -> Result<(), String> {
+    let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    match check_entry_name(&name) {
+        Some(why) => Err(format!("Invalid name \"{name}\" ({why}).")),
+        None => Ok(()),
+    }
+}
+
 /// Create an empty file (errors if it already exists).
 #[tauri::command]
 fn create_file(path: String, root_state: State<'_, RootPath>) -> Result<(), String> {
     let root = get_root(&root_state)?;
     let p = safe_path_inside(&path, &root)?;
+    check_new_name(&p)?;
     // create_new(true) = O_EXCL: existence check and creation are one atomic
     // OS operation. The previous exists() → File::create pair had a TOCTOU
     // gap in which File::create silently truncated a file created in between.
@@ -1246,6 +1267,7 @@ fn create_file(path: String, root_state: State<'_, RootPath>) -> Result<(), Stri
  fn create_directory(path: String, root_state: State<'_, RootPath>) -> Result<(), String> {
     let root = get_root(&root_state)?;
     let p = safe_path_inside(&path, &root)?;
+    check_new_name(&p)?;
 
     fs::create_dir_all(&p).map_err(|e| format!("mkdir failed: {e}"))
 }
@@ -1253,218 +1275,272 @@ fn create_file(path: String, root_state: State<'_, RootPath>) -> Result<(), Stri
 
 
 
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        // file_type() on a DirEntry does NOT follow symlinks — safe to use here.
-        let file_type = entry.file_type()?;
-        let dst_path = dst.join(entry.file_name());
-
-        if file_type.is_symlink() {
-            // Read the raw link target without following it, then recreate the
-            // symlink at the destination. This preserves the symlink structure
-            // without ever reading the target's contents.
-            let link_target = fs::read_link(entry.path())?;
-
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&link_target, &dst_path)?;
-
-            #[cfg(windows)]
-            {
-                // Windows needs separate calls for file vs. directory symlinks.
-                // link_target.is_dir() follows the target, but only to determine
-                // the symlink *type* — no content is copied regardless.
-                if link_target.is_dir() {
-                    std::os::windows::fs::symlink_dir(&link_target, &dst_path)?;
-                } else {
-                    std::os::windows::fs::symlink_file(&link_target, &dst_path)?;
-                }
-            }
-        } else if file_type.is_dir() {
-            copy_dir_all(&entry.path(), &dst_path)?;
-        } else {
-            fs::copy(entry.path(), &dst_path)?;
-        }
+/* ══════════════════════════════════════════════════════════════════════════
+   DIRECTORY ENTRIES — what rename, move and "Move to Trash" act on
+   safe_path_inside canonicalizes the WHOLE path, the last component
+   included: right for reading and writing content, wrong for acting on an
+   entry. For a symbolic link (or junction) it named the link's TARGET, so
+   moving a link moved the folder it pointed to and deleting it trashed
+   that folder. An entry is resolved like this instead: its PARENT folder
+   canonicalized (it must lie inside the project), its own name appended
+   untouched. The result is the link itself, and it is the same spelling
+   read_directory hands out for every entry. Mirrors
+   fs_core.validateEntryInside (Electron).
+   ══════════════════════════════════════════════════════════════════════════ */
+fn safe_entry_inside(raw: &str, root: &Path) -> Result<PathBuf, String> {
+    let p = safe_path(raw)?;
+    let not_entry = || format!("Security Error: Not a file or folder inside the project: {raw}");
+    let name = p.file_name().ok_or_else(not_entry)?.to_owned();
+    let parent = p.parent().filter(|q| !q.as_os_str().is_empty()).ok_or_else(not_entry)?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve root: {e}"))?;
+    let real_parent = safe_path_inside(&parent.to_string_lossy(), root)?;
+    let entry = real_parent.join(&name);
+    if entry == canonical_root || !entry.starts_with(&canonical_root) {
+        return Err(format!("Security Error: Path escapes project root: {}", p.display()));
     }
-    Ok(())
+    Ok(entry)
 }
 
+/// Does the entry exist? symlink_metadata: a dangling link exists too
+/// (`Path::exists` follows links and answered "no" — a rename would then
+/// have replaced the link).
+fn lexists(p: &Path) -> bool {
+    fs::symlink_metadata(p).is_ok()
+}
 
+/// The one rule for names the app gives a file or folder. MIRROR of
+/// checkEntryName in src/sidebar/paths.js and fs_core.js: None when the
+/// name is fine, else the reason key (see paths.js for what each means).
+fn check_entry_name(name: &str) -> Option<&'static str> {
+    if name.trim().is_empty() {
+        return Some("empty");
+    }
+    if name == "." || name == ".." {
+        return Some("invalid");
+    }
+    if name.chars().any(|c| (c as u32) < 0x20 || c == '\u{7f}' || c == '/' || c == '\\') {
+        return Some("invalid");
+    }
+    if name.starts_with('.') {
+        return Some("hidden");
+    }
+    if name.ends_with('.') || name.ends_with(' ') || name.starts_with(' ') {
+        return Some("edge");
+    }
+    if is_windows_device_name(name) {
+        return Some("device");
+    }
+    let lower = name.to_lowercase();
+    if lower.ends_with(".revery_tmp") || lower.ends_with(".revery_bak") {
+        return Some("internal");
+    }
+    if name.len() > 255 {
+        return Some("long");
+    }
+    None
+}
 
-/// Where a rename of `old` to `new` (both as returned by safe_path_inside,
-/// i.e. canonical when they exist) must go, given the renderer's requested
-/// `new_path` spelling.
-///
-/// An existing destination is refused — EXCEPT when it is the very same
-/// file under a spelling that differs only in letter case (a case-only
-/// rename on a case-insensitive filesystem: Windows, macOS). Then both
-/// canonical paths are identical (one directory entry), and the target is
-/// the requested spelling in the same folder. Equal canonical paths are
-/// the guard: two DIFFERENT files — e.g. "Note.md" and "note.md" on a
-/// case-sensitive share — canonicalize differently and are never
-/// overwritten. Returns Ok(None) when there is nothing to change.
-fn resolve_rename_target(old: &Path, new: &Path, new_path: &str) -> Result<Option<PathBuf>, String> {
-    if !new.exists() {
+/// CON, PRN, AUX, NUL, COM0-9/¹²³, LPT0-9/¹²³, CONIN$, CONOUT$ — the part
+/// before the first dot, any case ("nul.md" is reserved too).
+fn is_windows_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").to_lowercase();
+    if matches!(stem.as_str(), "con" | "prn" | "aux" | "nul" | "conin$" | "conout$") {
+        return true;
+    }
+    let chars: Vec<char> = stem.chars().collect();
+    if chars.len() != 4 {
+        return false;
+    }
+    let prefix: String = chars[..3].iter().collect();
+    (prefix == "com" || prefix == "lpt")
+        && (chars[3].is_ascii_digit() || matches!(chars[3], '\u{b9}' | '\u{b2}' | '\u{b3}'))
+}
+
+/// Case-only alias decision from the folder listing: renaming `old_name`
+/// to `new_name` (equal ignoring case) targets the SAME entry unless the
+/// folder holds two distinct entries spelled exactly like each — then the
+/// filesystem is case-sensitive and `new_name` is another item that must
+/// never be overwritten. Pure, so it is testable on any filesystem.
+fn case_only_alias_in_listing(old_name: &str, new_name: &str, listing: &[String]) -> bool {
+    if old_name == new_name || old_name.to_lowercase() != new_name.to_lowercase() {
+        return false;
+    }
+    let exact_old = listing.iter().any(|n| n == old_name);
+    let exact_new = listing.iter().any(|n| n == new_name);
+    !(exact_old && exact_new)
+}
+
+fn is_case_only_alias(old: &Path, new: &Path) -> bool {
+    let (Some(op), Some(np)) = (old.parent(), new.parent()) else { return false };
+    if op != np {
+        return false;
+    }
+    let (Some(on), Some(nn)) = (old.file_name(), new.file_name()) else { return false };
+    let Ok(rd) = fs::read_dir(op) else { return false };
+    let listing: Vec<String> = rd
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    case_only_alias_in_listing(&on.to_string_lossy(), &nn.to_string_lossy(), &listing)
+}
+
+/// Where a rename of the entry `old` to the entry `new` goes: Ok(Some(new)),
+/// Ok(None) when there is nothing to do (same entry, same spelling), Err
+/// when `new` is taken by a DIFFERENT entry — never overwritten.
+fn resolve_rename_target(old: &Path, new: &Path) -> Result<Option<PathBuf>, String> {
+    if old == new {
+        return Ok(None);
+    }
+    if !lexists(new) || is_case_only_alias(old, new) {
         return Ok(Some(new.to_path_buf()));
     }
-    let requested = Path::new(new_path)
-        .file_name()
-        .ok_or_else(|| "Invalid destination name".to_string())?;
-    let old_name = old.file_name().unwrap_or_default();
-    let case_only = requested.to_string_lossy().to_lowercase() == old_name.to_string_lossy().to_lowercase();
-    if new != old || !case_only {
-        return Err(format!("Destination already exists: {}", new.display()));
+    Err(format!("Destination already exists: {}", new.display()))
+}
+
+/// '..' / '.' resolved lexically, like Node's path.resolve.
+fn lexical_join(base: &Path, rel: &Path) -> PathBuf {
+    let mut out = base.to_path_buf();
+    for c in rel.components() {
+        match c {
+            std::path::Component::ParentDir => { out.pop(); }
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(s) => out.push(s),
+            _ => {}
+        }
     }
-    let parent = old.parent().ok_or_else(|| "Invalid source path".to_string())?;
-    let target = parent.join(requested);
-    Ok(if target == old { None } else { Some(target) })
+    out
+}
+
+/// Would moving the link `src` to `dest` change what it points to? Only a
+/// RELATIVE link moved to another folder (its target is resolved from the
+/// folder it sits in). Such a move is refused. A link whose target cannot
+/// be read is treated as "would change" — when unsure, do not move it.
+fn link_move_changes_target(src: &Path, dest: &Path) -> bool {
+    let Ok(md) = fs::symlink_metadata(src) else { return false };
+    if !md.file_type().is_symlink() {
+        return false;
+    }
+    let Ok(target) = fs::read_link(src) else { return true };
+    if target.is_absolute() {
+        return false;
+    }
+    match (src.parent(), dest.parent()) {
+        (Some(a), Some(b)) => lexical_join(a, &target) != lexical_join(b, &target),
+        _ => true,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum RenameErrorKind {
+    CrossDevice,
+    TransientLock,
+    Other,
+}
+
+/// Classify a failed rename by its raw OS error. Cross-device is EXDEV (18)
+/// on Linux/macOS but ERROR_NOT_SAME_DEVICE (17) on Windows — 17 on Unix is
+/// EEXIST, which the old code mistook for "cross-device" and answered by
+/// copying INTO an existing folder (overwriting same-named files) and then
+/// deleting the original. Transient locks (Windows only): ACCESS_DENIED 5,
+/// SHARING_VIOLATION 32, LOCK_VIOLATION 33.
+fn classify_rename_error(raw: Option<i32>, windows: bool) -> RenameErrorKind {
+    match (raw, windows) {
+        (Some(17), true) | (Some(18), false) => RenameErrorKind::CrossDevice,
+        (Some(5) | Some(32) | Some(33), true) => RenameErrorKind::TransientLock,
+        _ => RenameErrorKind::Other,
+    }
+}
+
+/// Rename or move one entry inside the project. Never overwrites, never
+/// copies, never deletes (mirror of fs_core.renameEntry):
+///   • both paths are ENTRIES: a link moves as a link, its target untouched;
+///   • an existing destination is refused, except the same entry under a
+///     case-only different spelling;
+///   • a new name must pass check_entry_name (a pure move keeps its name);
+///   • a folder never moves into itself; a relative link never moves to
+///     another folder;
+///   • another drive or volume is REFUSED. The old copy-then-delete
+///     fallback could leave a half-emptied original, and (see
+///     classify_rename_error) could merge into an existing folder;
+///   • Windows: a transient lock is retried a few times — a rename happens
+///     completely or not at all, so a retry cannot leave a partial state.
+fn rename_entry_blocking(old_path: &str, new_path: &str, root: &Path) -> Result<(), String> {
+    let old = safe_entry_inside(old_path, root)?;
+    let new = safe_entry_inside(new_path, root)?;
+    let shown = old.file_name().unwrap_or_default().to_string_lossy().into_owned();
+
+    if !lexists(&old) {
+        return Err(format!("Source not found: {}", old.display()));
+    }
+    if old.file_name() != new.file_name() {
+        let name = new.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        if let Some(why) = check_entry_name(&name) {
+            return Err(format!("Invalid name \"{name}\" ({why})."));
+        }
+    }
+    if new != old && new.starts_with(&old) {
+        return Err(format!("Cannot move \"{shown}\" into itself."));
+    }
+    let target = match resolve_rename_target(&old, &new)? {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+    if link_move_changes_target(&old, &target) {
+        return Err(format!(
+            "\"{shown}\" is a relative link. Moving it to another folder would change what it points to, so it was not moved."
+        ));
+    }
+
+    let mut attempt: u32 = 0;
+    loop {
+        match fs::rename(&old, &target) {
+            Ok(()) => return Ok(()),
+            Err(err) => match classify_rename_error(err.raw_os_error(), cfg!(windows)) {
+                RenameErrorKind::CrossDevice => {
+                    return Err(format!(
+                        "\"{shown}\" cannot be moved to another drive or volume from Revery (nothing was changed). Use your file manager for that move."
+                    ));
+                }
+                RenameErrorKind::TransientLock if attempt < 3 => {
+                    std::thread::sleep(std::time::Duration::from_millis(100u64 << attempt));
+                    attempt += 1;
+                    if !lexists(&old) {
+                        return Err(format!("Source not found: {}", old.display()));
+                    }
+                    if lexists(&target) && !is_case_only_alias(&old, &target) {
+                        return Err(format!("Destination already exists: {}", target.display()));
+                    }
+                }
+                _ => return Err(format!("Rename failed: {err}")),
+            },
+        }
+    }
 }
 
 #[tauri::command]
 async fn rename_node(old_path: String, new_path: String, root_state: State<'_, RootPath>) -> Result<(), String> {
     let root = get_root(&root_state)?;
-    let old = safe_path_inside(&old_path, &root)?;
-    let new = safe_path_inside(&new_path, &root)?;
+    // Heavy I/O off the UI thread (see "Off the UI thread").
+    tokio::task::spawn_blocking(move || rename_entry_blocking(&old_path, &new_path, &root))
+        .await
+        .map_err(|e| format!("Thread pool error: {}", e))?
+}
 
-    let canonical_root = root.canonicalize().map_err(|e| format!("Cannot resolve root: {e}"))?;
-    if old == canonical_root {
-        return Err("Security Error: Cannot move or rename the project root folder.".into());
-    }
-
-    if !old.exists() {
-        return Err(format!("Source not found: {}", old.display()));
-    }
-    let new = match resolve_rename_target(&old, &new, &new_path)? {
-        Some(target) => target,
-        None => return Ok(()), // same file, same spelling: nothing to do
-    };
-
-    // Wrap the heavy synchronous I/O in a blocking task so the event loop stays free
-    tokio::task::spawn_blocking(move || {
-        match fs::rename(&old, &new) {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                let is_cross_device = err.raw_os_error() == Some(18) // EXDEV (Unix)
-                    || err.raw_os_error() == Some(17);               // rare EEXDEV alias
-
-                if is_cross_device {
-                    if old.is_dir() {
-                        // ── Step 1: Copy ─────────────────────────────────────────
-                        if let Err(e) = copy_dir_all(&old, &new) {
-                            let _ = fs::remove_dir_all(&new);
-                            return Err(format!("Cross-device folder move failed during copy: {}", e));
-                        }
-
-                        // Post-copy sanity check
-                        if !new.is_dir() {
-                            let _ = fs::remove_dir_all(&new);
-                            return Err(format!(
-                                "Cross-device copy reported success but destination \"{}\" does not \
-                                exist. The original at \"{}\" has not been modified.",
-                                new.display(), old.display()
-                            ));
-                        }
-
-                        // ── Step 2: Delete original ───────────────────────────────
-                        if let Err(rm_err) = fs::remove_dir_all(&old) {
-                            if old.exists() {
-                                return Err(format!(
-                                    "Move incomplete: the folder was copied to \"{}\" but the \
-                                     original at \"{}\" could not be fully deleted (it may be \
-                                     locked). Both locations contain your data. Please verify \
-                                     both paths and remove the duplicate manually. Details: {}",
-                                    new.display(), old.display(), rm_err
-                                ));
-                            }
-
-                            match copy_dir_all(&new, &old) {
-                                Ok(_) => {
-                                    let _ = fs::remove_dir_all(&new);
-                                    return Err(format!(
-                                        "Move failed and was rolled back: the original folder at \
-                                         \"{}\" was temporarily deleted but has been restored from \
-                                         the copy. No data was lost. Please try again. Details: {}",
-                                        old.display(), rm_err
-                                    ));
-                                }
-                                Err(rollback_err) => {
-                                    return Err(format!(
-                                        "Move partially failed: your folder was copied to \"{}\" \
-                                         but the original could not be deleted and automatic \
-                                         recovery also failed. \"{}\" is your only complete copy — \
-                                         please move it manually to the intended location. \
-                                         Delete error: {} | Recovery error: {}",
-                                        new.display(), new.display(), rm_err, rollback_err
-                                    ));
-                                }
-                            }
-                        }
-                        Ok(())
-                    } else {
-                        // ── File path ───────────────────────────────────────────
-
-                        if let Err(e) = fs::copy(&old, &new) {
-                            let _ = fs::remove_file(&new);
-                            return Err(format!("Cross-device file move failed during copy: {}", e));
-                        }
-
-                        if !new.is_file() {
-                            let _ = fs::remove_file(&new);
-                            return Err(format!(
-                                "Cross-device copy reported success but destination \"{}\" does not \
-                                exist. The original at \"{}\" has not been modified.",
-                                new.display(), old.display()
-                            ));
-                        }
-
-                        if let Err(rm_err) = fs::remove_file(&old) {
-                            if old.exists() {
-                                return Err(format!(
-                                    "Move incomplete: the file was copied to \"{}\" but the \
-                                     original at \"{}\" could not be deleted (it may be locked). \
-                                     Both locations contain your data. Please remove the duplicate \
-                                     manually. Details: {}",
-                                    new.display(), old.display(), rm_err
-                                ));
-                            }
-
-                            match fs::copy(&new, &old) {
-                                Ok(_) => {
-                                    let _ = fs::remove_file(&new);
-                                    return Err(format!(
-                                        "Move failed and was rolled back: the original file at \
-                                         \"{}\" was temporarily deleted but has been restored. \
-                                         No data was lost. Please try again. Details: {}",
-                                        old.display(), rm_err
-                                    ));
-                                }
-                                Err(rollback_err) => {
-                                    return Err(format!(
-                                        "Move partially failed: your file was copied to \"{}\" \
-                                         but the original could not be deleted and automatic \
-                                         recovery also failed. \"{}\" is your only complete copy — \
-                                         please move it manually to the intended location. \
-                                         Delete error: {} | Recovery error: {}",
-                                        new.display(), new.display(), rm_err, rollback_err
-                                    ));
-                                }
-                            }
-                        }
-                        Ok(())
-                    }
-                } else {
-                    Err(format!("Rename failed: {}", err))
-                }
-            }
-        }
-    })
-    .await
-    .map_err(|e| format!("Thread pool error: {}", e))? // Handle internal Tokio thread panics
+/// The canonical spelling of an entry inside the project (see
+/// safe_entry_inside) — the renderer normalises paths that did not come
+/// from a folder listing (the restored last file, Save As).
+#[tauri::command]
+async fn canonical_entry_path(path: String, root_state: State<'_, RootPath>) -> Result<String, String> {
+    let root = get_root(&root_state)?;
+    tokio::task::spawn_blocking(move || safe_entry_inside(&path, &root).map(|p| frontend_path(&p)))
+        .await
+        .map_err(|e| format!("Thread pool error: {}", e))?
 }
 
 
-/// Move a file or directory to the OS trash (Recycle Bin on Windows,
+/// Move a file, folder or link to the OS trash (Recycle Bin on Windows,
 /// Trash on macOS, XDG Trash on Linux). Recursive for directories.
 /// The user can restore the item from their system trash UI.
 #[tauri::command]
@@ -1476,17 +1552,14 @@ async fn delete_node(path: String, root_state: State<'_, RootPath>) -> Result<()
 }
 
 fn delete_node_blocking(path: String, root: PathBuf) -> Result<(), String> {
-    let p = safe_path_inside(&path, &root)?;
+    // The ENTRY: deleting a link trashes the link, never its target (the
+    // trash crate itself canonicalizes only the parent folder). The project
+    // root is never an entry.
+    let p = safe_entry_inside(&path, &root)?;
 
-    let canonical_root = root.canonicalize().map_err(|e| format!("Cannot resolve root: {e}"))?;
-    if p == canonical_root {
-        return Err("Security Error: Cannot delete the project root folder.".into());
-    }
-
-    if !p.exists() {
+    if !lexists(&p) {
         return Ok(()); // Already gone — preserve idempotency
     }
-
 
     trash::delete(&p).map_err(|e| format!("Move to trash failed: {e}"))
 }
@@ -3224,6 +3297,7 @@ tauri::Builder::default()
             create_file,
             create_directory,
             rename_node,
+            canonical_entry_path,
             delete_node,
             copy_into_folder,
             copy_path_into_folder,
@@ -3695,53 +3769,157 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    /* ── rename target (case-only renames) ─────────────────────────── */
+    /* ── entries: rename / move / trash (safe_entry_inside & co.) ───── */
+
+    /// A project under a fresh temp dir: root/real/inside.md, root/sub,
+    /// root/a.md and base/outside/secret.md. Returns (base, canonical root).
+    fn entry_fixture(label: &str) -> (PathBuf, PathBuf) {
+        let base = test_dir(label).canonicalize().unwrap();
+        let root = base.join("proj");
+        fs::create_dir_all(root.join("real").join("deep")).unwrap();
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("real").join("inside.md"), "inside").unwrap();
+        fs::write(root.join("a.md"), "a").unwrap();
+        fs::create_dir_all(base.join("outside")).unwrap();
+        fs::write(base.join("outside").join("secret.md"), "secret").unwrap();
+        (base, root)
+    }
+    fn s(p: &Path) -> String { p.to_string_lossy().into_owned() }
 
     #[test]
-    fn rename_to_a_free_name_goes_where_asked() {
-        let dir = test_dir("rename-free");
-        fs::write(dir.join("a.md"), "A").unwrap();
-        let old = dir.join("a.md").canonicalize().unwrap();
-        let new = dir.canonicalize().unwrap().join("b.md");
-        let got = resolve_rename_target(&old, &new, &new.to_string_lossy()).unwrap();
-        assert_eq!(got, Some(new));
-        fs::remove_dir_all(&dir).ok();
+    fn rename_target_free_taken_and_same() {
+        let (base, root) = entry_fixture("rt");
+        let a = root.join("a.md");
+        assert_eq!(resolve_rename_target(&a, &root.join("b.md")).unwrap(), Some(root.join("b.md")));
+        assert_eq!(resolve_rename_target(&a, &a).unwrap(), None);
+        fs::write(root.join("b.md"), "b").unwrap();
+        assert!(resolve_rename_target(&a, &root.join("b.md")).is_err());
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn case_only_alias_is_decided_from_the_listing() {
+        // Case-insensitive disk: one entry, any spelling → the same entry.
+        assert!(case_only_alias_in_listing("notes.md", "Notes.md", &["notes.md".into()]));
+        // Case-sensitive disk with two items → never the same, never overwritten.
+        assert!(!case_only_alias_in_listing("Note.md", "note.md", &["Note.md".into(), "note.md".into()]));
+        // Not a case-only change, or no change at all.
+        assert!(!case_only_alias_in_listing("a.md", "b.md", &["a.md".into()]));
+        assert!(!case_only_alias_in_listing("a.md", "a.md", &["a.md".into()]));
     }
 
     #[test]
     fn rename_never_targets_a_different_existing_file() {
-        // On this (case-sensitive) filesystem "Note.md" and "note.md" are
-        // two files: the second must never be overwritten.
-        let dir = test_dir("rename-clash");
-        fs::write(dir.join("Note.md"), "one").unwrap();
-        fs::write(dir.join("note.md"), "two").unwrap();
-        let old = dir.join("Note.md").canonicalize().unwrap();
-        let new = dir.join("note.md").canonicalize().unwrap();
-        assert!(resolve_rename_target(&old, &new, &new.to_string_lossy()).is_err());
-        // Nor any other existing file.
-        fs::write(dir.join("other.md"), "three").unwrap();
-        let other = dir.join("other.md").canonicalize().unwrap();
-        assert!(resolve_rename_target(&old, &other, &other.to_string_lossy()).is_err());
-        assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), "two");
-        fs::remove_dir_all(&dir).ok();
+        let (base, root) = entry_fixture("rt-clash");
+        fs::write(root.join("Note.md"), "one").unwrap();
+        fs::write(root.join("note.md"), "two").unwrap();
+        let err = rename_entry_blocking(&s(&root.join("Note.md")), &s(&root.join("note.md")), &root);
+        assert!(err.is_err());
+        assert_eq!(fs::read_to_string(root.join("note.md")).unwrap(), "two");
+        assert_eq!(fs::read_to_string(root.join("Note.md")).unwrap(), "one");
+        fs::remove_dir_all(&base).ok();
     }
 
     #[test]
-    fn case_only_rename_of_the_same_file_targets_the_requested_spelling() {
-        // Simulates what a case-insensitive filesystem reports: the
-        // destination resolves to the SAME canonical path as the source.
-        let dir = test_dir("rename-case");
-        fs::write(dir.join("notes.md"), "x").unwrap();
-        let old = dir.join("notes.md").canonicalize().unwrap();
-        let requested = dir.canonicalize().unwrap().join("Notes.md");
-        let got = resolve_rename_target(&old, &old, &requested.to_string_lossy()).unwrap();
-        assert_eq!(got, Some(requested));
-        // Identical spelling: nothing to do.
-        assert_eq!(resolve_rename_target(&old, &old, &old.to_string_lossy()).unwrap(), None);
-        // Same file but a DIFFERENT name (not case-only): refused.
-        let elsewhere = dir.canonicalize().unwrap().join("renamed.md");
-        assert!(resolve_rename_target(&old, &old, &elsewhere.to_string_lossy()).is_err());
-        fs::remove_dir_all(&dir).ok();
+    fn classify_rename_error_pins_the_errno_17_bug() {
+        // Unix 17 is EEXIST — NOT cross-device (the old code copied into the
+        // existing folder, then deleted the original).
+        assert_eq!(classify_rename_error(Some(17), false), RenameErrorKind::Other);
+        assert_eq!(classify_rename_error(Some(18), false), RenameErrorKind::CrossDevice);
+        assert_eq!(classify_rename_error(Some(17), true), RenameErrorKind::CrossDevice);
+        assert_eq!(classify_rename_error(Some(18), true), RenameErrorKind::Other);
+        assert_eq!(classify_rename_error(Some(32), true), RenameErrorKind::TransientLock);
+        assert_eq!(classify_rename_error(Some(5), true), RenameErrorKind::TransientLock);
+        assert_eq!(classify_rename_error(Some(32), false), RenameErrorKind::Other);
+        assert_eq!(classify_rename_error(None, false), RenameErrorKind::Other);
+        #[cfg(unix)]
+        {
+            assert_eq!(libc::EXDEV, 18);
+            assert_eq!(libc::EEXIST, 17);
+        }
+    }
+
+    #[test]
+    fn check_entry_name_matches_the_renderer_rule() {
+        for ok in ["notes.md", "Meeting 26.09.2026.md", "README", "con-notes.md", "Ärende.md"] {
+            assert_eq!(check_entry_name(ok), None, "{ok}");
+        }
+        let cases: &[(&str, &str)] = &[
+            ("", "empty"), ("  ", "empty"), (".", "invalid"), ("..", "invalid"), ("a/b", "invalid"),
+            ("a\\b", "invalid"), ("x\u{1}", "invalid"), (".hidden", "hidden"), ("notes.", "edge"),
+            ("notes ", "edge"), (" x", "edge"), ("CON", "device"), ("aux.md", "device"),
+            ("com\u{b9}", "device"), ("conout$", "device"), ("nul.tar.gz", "device"), ("lpt9", "device"),
+            ("x.revery_tmp", "internal"), ("x.REVERY_BAK", "internal"),
+        ];
+        for (name, why) in cases {
+            assert_eq!(check_entry_name(name), Some(*why), "{name:?}");
+        }
+        assert_eq!(check_entry_name(&"a".repeat(255)), None);
+        assert_eq!(check_entry_name(&"a".repeat(256)), Some("long"));
+        assert_eq!(check_entry_name(&"å".repeat(128)), Some("long"));
+    }
+
+    #[test]
+    fn root_and_outside_are_never_entries() {
+        let (base, root) = entry_fixture("entry-root");
+        assert!(safe_entry_inside(&s(&root), &root).is_err());
+        assert!(safe_entry_inside(&s(&base.join("outside").join("secret.md")), &root).is_err());
+        assert_eq!(safe_entry_inside(&s(&root.join("a.md")), &root).unwrap(), root.join("a.md"));
+        assert_eq!(safe_entry_inside(&s(&root.join("sub").join("new.md")), &root).unwrap(), root.join("sub").join("new.md"));
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn rename_moves_a_file_and_refuses_bad_names_and_self_moves() {
+        let (base, root) = entry_fixture("rn-basic");
+        rename_entry_blocking(&s(&root.join("a.md")), &s(&root.join("sub").join("a.md")), &root).unwrap();
+        assert_eq!(fs::read_to_string(root.join("sub").join("a.md")).unwrap(), "a");
+        assert!(rename_entry_blocking(&s(&root.join("real")), &s(&root.join("real").join("deep").join("real")), &root).is_err());
+        assert!(rename_entry_blocking(&s(&root.join("sub").join("a.md")), &s(&root.join("sub").join(".a.md")), &root).is_err());
+        assert!(rename_entry_blocking(&s(&root.join("sub").join("a.md")), &s(&root.join("sub").join("nul.md")), &root).is_err());
+        assert!(rename_entry_blocking(&s(&root), &s(&root.join("sub").join("x")), &root).is_err());
+        assert_eq!(fs::read_to_string(root.join("real").join("inside.md")).unwrap(), "inside");
+        // A pure move keeps an existing name the rule would refuse today.
+        fs::write(root.join("aux.md"), "legacy").unwrap();
+        rename_entry_blocking(&s(&root.join("aux.md")), &s(&root.join("sub").join("aux.md")), &root).unwrap();
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_are_moved_and_resolved_as_links_never_their_targets() {
+        use std::os::unix::fs::symlink;
+        let (base, root) = entry_fixture("rn-links");
+        symlink("real", root.join("rel")).unwrap();
+        symlink(root.join("real"), root.join("abs")).unwrap();
+        symlink(base.join("outside"), root.join("out")).unwrap();
+        symlink("missing", root.join("sub").join("dangling.md")).unwrap();
+
+        // The entry is the link itself, even when it points outside.
+        assert_eq!(safe_entry_inside(&s(&root.join("rel")), &root).unwrap(), root.join("rel"));
+        assert_eq!(safe_entry_inside(&s(&root.join("out")), &root).unwrap(), root.join("out"));
+        assert!(safe_entry_inside(&s(&root.join("out").join("secret.md")), &root).is_err());
+
+        // Absolute link: moves as a link; the target folder stays put.
+        rename_entry_blocking(&s(&root.join("abs")), &s(&root.join("sub").join("abs")), &root).unwrap();
+        assert!(fs::symlink_metadata(root.join("sub").join("abs")).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(root.join("real").join("inside.md")).unwrap(), "inside");
+
+        // Relative link: renamed in place yes, moved to another folder no.
+        assert!(rename_entry_blocking(&s(&root.join("rel")), &s(&root.join("sub").join("rel")), &root).is_err());
+        assert!(fs::symlink_metadata(root.join("rel")).unwrap().file_type().is_symlink());
+        rename_entry_blocking(&s(&root.join("rel")), &s(&root.join("rel2")), &root).unwrap();
+        assert_eq!(fs::read_to_string(root.join("rel2").join("inside.md")).unwrap(), "inside");
+
+        // A dangling link at the destination is never replaced.
+        assert!(rename_entry_blocking(&s(&root.join("a.md")), &s(&root.join("sub").join("dangling.md")), &root).is_err());
+        assert!(fs::symlink_metadata(root.join("sub").join("dangling.md")).unwrap().file_type().is_symlink());
+
+        // A root opened through a symlink resolves to the real spelling.
+        let alias = base.join("alias");
+        symlink(&root, &alias).unwrap();
+        assert_eq!(safe_entry_inside(&s(&alias.join("a.md")), &alias).unwrap(), root.join("a.md"));
+        fs::remove_dir_all(&base).ok();
     }
 
     /* ── backup purge keep list ────────────────────────────────────── */

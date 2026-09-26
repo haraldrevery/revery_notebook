@@ -2,16 +2,157 @@
    switching, the undo stack, and multi-select bulk operations. */
 import { S, treeEl, docTitleEl, folderNameEl, btnOpenFolder, btnNewFile, btnNewFolder,
          expandedDirs, selectedItems, _previewCache } from './state.js';
-import { showInputDialog, showConfirmDialog } from './dialogs.js';
+import { showInputDialog, showConfirmDialog, showFolderPickerDialog } from './dialogs.js';
 import { getFileCategory, mediaMarkdown, uniquePath, uniqueDestPath } from './helpers.js';
-import { saveActiveFile, markClean, scheduleAutoSave,
-         retargetActiveFile, waitForSaveChainIdle, rememberDiskContent } from './save.js';
+import { saveActiveFile, markClean, scheduleAutoSave, cancelPendingAutoSave,
+         retargetActiveFile, waitForSaveChainIdle, rememberDiskContent,
+         _enqueueDiskOp, markActivePathGone, forgetGonePath } from './save.js';
 import { renderTree, updateMultiSelectHighlight, updateSelectedDirHighlight, highlightActiveFile } from './tree.js';
 import { openSidebar, switchFromMobileSidebar } from './panel.js';
-import { startWatchingFile } from './watcher.js';
+import { startWatchingFile, stopWatchingFile, watchedPath } from './watcher.js';
 import { recordProjectOpen } from './projects.js';
 import { rewriteLinksInText, buildAbsMapper, invertRecords } from './link_rewrite.js';
 import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
+import { samePath, isInsideRoot, baseNameOf, dirOf, joinPath, parentPathOf, remapUnder,
+         sanitizeEntryName, checkEntryName, renamedFileName } from './paths.js';
+
+  /* ══════════════════════════════════════════════════════════════════
+     SHARED PIECES OF EVERY FILE OPERATION
+  ══════════════════════════════════════════════════════════════════ */
+
+  /* Backend errors arrive wrapped ("Error invoking remote method
+     'fs:rename-node': Error: …" on Electron); the user sees the message. */
+  function errText(err) {
+    return String((err && err.message) || err)
+      .replace(/^Error invoking remote method '[^']*': /, '')
+      .replace(/^Error: /, '');
+  }
+
+  /* One file operation at a time (S._operationLock). A second one used to
+     be dropped without a word — now the user is told. */
+  function reportBusy() {
+    if (typeof window.showStatusWarning === 'function') {
+      window.showStatusWarning('fs-busy', window.t('Busy — try again in a moment.'), { priority: 5, ttl: 2500 });
+    }
+  }
+
+  /* The reason keys of paths.checkEntryName, in words. */
+  function nameProblemText(reason, name) {
+    switch (reason) {
+      case 'empty':    return window.t('Please enter a name.');
+      case 'hidden':   return window.t('A name that starts with a dot would hide the item from the file panel. Please choose another name.');
+      case 'edge':     return window.t('A name cannot start with a space or end with a dot or a space. Please choose another name.');
+      case 'device':   return window.t('"{name}" is a reserved name on Windows. Please choose another name.').replace('{name}', name);
+      case 'internal': return window.t('This name ends like one of Revery\'s own safety files. Please choose another name.');
+      case 'long':     return window.t('This name is too long. Please choose a shorter name.');
+      default:         return window.t('This name cannot be used. Please choose another name.');
+    }
+  }
+
+  async function showNameProblem(reason, name) {
+    try {
+      await window.NativeAPI.showMessageBox({
+        type: 'warning', title: window.t('Invalid Name'),
+        message: nameProblemText(reason, name), buttons: [window.t('OK')],
+      });
+    } catch (_) { /* dialog unavailable — the name was still refused */ }
+  }
+
+  /** Is the open note one of `paths`, or inside one of them? */
+  function activeAffectedBy(paths) {
+    if (!S.activeFilePath) return false;
+    return paths.some((p) => isInsideRoot(S.activeFilePath, p));
+  }
+
+  /* Run the file-system part of an operation INSIDE the save engine's
+     disk lock, so no write of the open note can interleave with it: a
+     save queued before lands first, one queued after sees where the note
+     is now (save.js _goneActivePaths). When the open note is involved,
+     its watcher lets go of the folder first (on Windows an open handle
+     can block renaming a folder) and watches again afterwards — the new
+     path, or the old one when the operation failed. Never put a dialog in
+     `fn`: while it runs, saves wait. */
+  async function inDiskLock(involvesActive, fn) {
+    return _enqueueDiskOp(async () => {
+      if (involvesActive) await stopWatchingFile();
+      try {
+        return await fn();
+      } finally {
+        if (involvesActive && S.activeFilePath && !samePath(watchedPath(), S.activeFilePath)) {
+          startWatchingFile(S.activeFilePath);
+        }
+      }
+    });
+  }
+
+  /* Everything that remembers a path follows a rename/move record: the
+     selected folder, the folder shown in card view, expanded folders, the
+     previewed image, the selection anchor. (The open note follows through
+     followActiveFile → save.retargetActiveFile.) Before this, each
+     operation updated its own subset — the card view kept showing a
+     folder that had moved, and undo followed the selected folder only on
+     an exact match. */
+  function remapPathState(records) {
+    for (const { oldPath, newPath } of records) {
+      const f = (p) => remapUnder(p, oldPath, newPath) || p;
+      if (S.selectedDirPath)  S.selectedDirPath  = f(S.selectedDirPath);
+      if (S.cardViewDir)      S.cardViewDir      = f(S.cardViewDir);
+      if (S.previewMediaPath) S.previewMediaPath = f(S.previewMediaPath);
+      if (S.selectionAnchor)  S.selectionAnchor  = f(S.selectionAnchor);
+      const dirs = [...expandedDirs];
+      expandedDirs.clear();
+      for (const d of dirs) expandedDirs.add(f(d));
+    }
+  }
+
+  /* …and forget what a delete took away: the view and the selected folder
+     fall back to the deleted item's parent folder. */
+  function forgetDeletedPathState(p) {
+    const parent = parentPathOf(p);
+    const hit = (q) => q && isInsideRoot(q, p);
+    if (hit(S.selectedDirPath)) S.selectedDirPath = parent;
+    if (hit(S.cardViewDir))     S.cardViewDir     = parent;
+    if (hit(S.selectionAnchor)) S.selectionAnchor = null;
+    forgetPreviewIfDeleted(p);
+    for (const d of [...expandedDirs]) if (hit(d)) expandedDirs.delete(d);
+  }
+
+  /* The open note was deleted (it, or a folder around it). Inside the
+     disk lock: saves queued before have landed; later ones see the path
+     as gone. The buffer is cleared — the user confirmed the delete. */
+  async function closeDeletedActiveFile() {
+    markActivePathGone(S.activeFilePath);
+    cancelPendingAutoSave();
+    S.activeFilePath = null;
+    markClean();
+    await window.NativeAPI.clearLastOpenedFile().catch(() => {});
+    if (typeof window.replaceEditorContent === 'function') {
+      window.replaceEditorContent('');
+    } else {
+      editor.value = '';
+      if (typeof render     === 'function') render();
+      if (typeof countWords === 'function') countWords();
+    }
+  }
+
+  /* Items of which another item in the list is an ancestor travel with
+     that ancestor — acting on them separately only produced "not found"
+     errors. */
+  function withoutNested(items) {
+    return items.filter((it) => !items.some((o) => o !== it
+      && !samePath(o.path, it.path) && isInsideRoot(it.path, o.path)));
+  }
+
+  /* The type ('file' | 'dir') and link flag of a path as the tree or the
+     card view shows it. */
+  function itemInfo(p) {
+    const el = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(p)}"], .sidebar-card[data-path="${CSS.escape(p)}"]`);
+    return {
+      type: el ? el.dataset.type : 'file',
+      link: !!(el && el.dataset.link === '1'),
+      known: !!el,
+    };
+  }
 
   /* ── Undo stack (moves + renames only — deletes are irreversible) ── */
   const MAX_UNDO  = 30;
@@ -176,13 +317,6 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
 
   /* ── The active file vs. rename/move operations ────────────────────── */
 
-  /** Is the active file one of `paths`, or inside one of them (folders)? */
-  function activeAffectedBy(paths) {
-    if (!S.activeFilePath) return false;
-    const a = _n(S.activeFilePath);
-    return paths.some((p) => { const n = _n(p); return a === n || a.startsWith(n + '/'); });
-  }
-
   /** Before renaming/moving `paths`: when that includes the active file, let
       its pending edits reach disk and any in-flight save finish first, so no
       save can land on the OLD path after the rename (which recreated a file
@@ -201,50 +335,67 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       or lived inside it, hand over to the save engine's single retarget. */
   async function followActiveFile(from, to) {
     if (!S.activeFilePath) return;
-    const a = _n(S.activeFilePath);
-    const f = _n(from);
-    if (a === f) await retargetActiveFile(S.activeFilePath, to);
-    else if (a.startsWith(f + '/')) await retargetActiveFile(S.activeFilePath, _n(to) + a.substring(f.length));
+    const next = remapUnder(S.activeFilePath, from, to);
+    if (next && next !== S.activeFilePath) await retargetActiveFile(S.activeFilePath, next);
+  }
+
+  /** File undo never reaches into another project (openFolder, Save As). */
+  function clearUndoStack() {
+    undoStack.length = 0;
   }
 
   /**
    * Reverse the most recent move or rename operation.
-   * Works by calling renameNode in reverse order for each record.
-   * Only fires when the editor textarea does NOT have focus, so it
-   * never conflicts with the editor's own text-undo (Ctrl+Z).
+   * Works by renaming each record back, in reverse order. The keyboard
+   * shortcut only reaches here while the user works in the file panel
+   * (save.js sidebarUndoAllowed); a status message says what was undone.
    */
   async function undoLastOperation() {
-    if (S._operationLock || undoStack.length === 0) return;
+    if (undoStack.length === 0) return;
+    if (S._operationLock) { reportBusy(); return; }
     S._operationLock = true;
     try {
       const op = undoStack.pop();
       const errors = [];
+      const undone = [];
+      const currentPaths = op.records.map((r) => r.newPath);
 
-      if (!(await settleActiveFileBefore(op.records.map((r) => r.newPath)))) {
+      if (!(await settleActiveFileBefore(currentPaths))) {
         undoStack.push(op); // the flush failed — keep the operation undoable
         return;
       }
 
       /* Reverse in reverse order so a multi-rename undoes cleanly */
-      for (const { oldPath, newPath } of [...op.records].reverse()) {
-        try {
-          await window.NativeAPI.renameNode(newPath, oldPath);
-
-          /* Keep internal state in sync */
-          await followActiveFile(newPath, oldPath);
-          if (S.selectedDirPath && S.selectedDirPath.replace(/\\/g, '/') === newPath.replace(/\\/g, '/')) {
-            S.selectedDirPath = oldPath;
+      await inDiskLock(activeAffectedBy(currentPaths), async () => {
+        for (const { oldPath, newPath } of [...op.records].reverse()) {
+          try {
+            await window.NativeAPI.renameNode(newPath, oldPath);
+          } catch (err) {
+            errors.push(`${baseNameOf(newPath)}: ${errText(err)}`);
+            continue;
           }
-        } catch (err) {
-          errors.push(`${newPath.replace(/\\/g, '/').split('/').pop()}: ${err.message}`);
+          const back = { oldPath: newPath, newPath: oldPath };
+          undone.push(back);
+          await followActiveFile(newPath, oldPath);
+          remapPathState([back]);
         }
-      }
+      });
 
       selectedItems.clear(); S.selectionAnchor = null;
       await renderTree();
       /* Reverse the link rewrites too — silently: undoing the rename means
-         restoring the links, no second confirmation needed. */
-      await updateLinksAfterPathChange(invertRecords(op.records), { confirm: false });
+         restoring the links, no second confirmation needed. Only for what
+         actually moved back. */
+      if (undone.length) await updateLinksAfterPathChange(undone, { confirm: false });
+
+      if (undone.length && typeof window.showStatusWarning === 'function') {
+        const msg = op.type === 'rename'
+          ? window.t('Undone: rename of "{name}".')
+          : window.t('Undone: move of {n} item(s).');
+        window.showStatusWarning('fs-undo',
+          msg.replace('{name}', baseNameOf(undone[0].newPath)).replace('{n}', undone.length),
+          { priority: 20, ttl: 5000 });
+      }
 
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
@@ -259,64 +410,57 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
   }
 
   /**
-   * Safely move an array of {path, type} items into targetDir.
+   * Move an array of {path, type} items into targetDir.
    *
-   * Safety guarantees:
-   *  1. Saves the active file first (no dirty data loss).
-   *  2. Skips moves that would place a folder inside itself or a descendant.
-   *  3. Skips no-ops (item already in targetDir).
-   *  4. Skips attempting to move S.rootPath.
-   *  5. Deduplicates destination names to avoid clobbering existing files.
-   *  6. Updates S.activeFilePath / S.selectedDirPath if they live inside a moved item.
-   *  7. S._operationLock prevents concurrent FS mutations.
+   *  1. Only inside the project; never the root, never into itself or a
+   *     descendant, never where it already is (all compared as locations,
+   *     not strings — a root opened through a link used to rename a file
+   *     dropped into its own folder to name_2).
+   *  2. Items inside another moved item travel with it.
+   *  3. The open note's edits reach disk first; the renames run inside the
+   *     disk lock (inDiskLock), and the note, its crash backup, its
+   *     watcher and every remembered path follow.
+   *  4. Destination names never clobber (uniqueDestPath; the backend
+   *     refuses an existing destination anyway).
+   *  5. S._operationLock: one file operation at a time.
    */
   async function moveNodes(items, targetDir) {
-    if (S._operationLock || !items.length || !targetDir) return;
+    if (!items.length || !targetDir) return;
+    if (S._operationLock) { reportBusy(); return; }
+    if (!S.rootPath || !isInsideRoot(targetDir, S.rootPath)) return;
     S._operationLock = true;
     try {
-      if (!(await settleActiveFileBefore(items.map((it) => it.path)))) {
+      const plan = withoutNested(items).filter(({ path: src }) =>
+        !samePath(src, S.rootPath)                 // never the root
+        && !isInsideRoot(targetDir, src)           // not into itself / a descendant
+        && !samePath(dirOf(src), targetDir));      // already there
+      if (!plan.length) return;
+
+      const srcPaths = plan.map((it) => it.path);
+      if (!(await settleActiveFileBefore(srcPaths))) {
         return; // Save failed — abort move to protect data
       }
 
-      const normalTarget = targetDir.replace(/\\/g, '/');
-      const normalRoot   = (S.rootPath || '').replace(/\\/g, '/');
-      const errors       = [];
+      const errors = [];
       const movedRecords = []; // for undo
-
-      for (const { path: srcPath, type } of items) {
-        const normalSrc    = srcPath.replace(/\\/g, '/');
-        const srcParentNorm = normalSrc.substring(0, normalSrc.lastIndexOf('/'));
-
-        /* ── Guards ── */
-        if (normalSrc === normalRoot)  continue; // never move root
-        if (normalTarget === normalSrc || normalTarget.startsWith(normalSrc + '/')) continue; // circular
-        if (srcParentNorm === normalTarget) continue; // already in target (no-op)
-
-        const name     = normalSrc.split('/').pop();
-        const destPath = await uniqueDestPath(targetDir, name, type);
-
-        try {
-          await window.NativeAPI.renameNode(srcPath, destPath);
-          movedRecords.push({ oldPath: srcPath, newPath: destPath }); // record for undo
-        } catch (err) {
-          errors.push(`${name}: ${err.message}`);
-          continue;
-        }
-
-        /* ── Update internal state if the active file was moved ── */
-        await followActiveFile(srcPath, destPath);
-
-        /* ── Update S.selectedDirPath if it was inside the moved item ── */
-        if (S.selectedDirPath) {
-          const normalSel = S.selectedDirPath.replace(/\\/g, '/');
-          if (normalSel === normalSrc || normalSel.startsWith(normalSrc + '/')) {
-            S.selectedDirPath = targetDir;
+      await inDiskLock(activeAffectedBy(srcPaths), async () => {
+        for (const { path: srcPath, type } of plan) {
+          const name = baseNameOf(srcPath);
+          const destPath = await uniqueDestPath(targetDir, name, type);
+          try {
+            await window.NativeAPI.renameNode(srcPath, destPath);
+          } catch (err) {
+            errors.push(`${name}: ${errText(err)}`);
+            continue;
           }
+          const rec = { oldPath: srcPath, newPath: destPath };
+          movedRecords.push(rec);
+          await followActiveFile(srcPath, destPath);
+          remapPathState([rec]);
         }
+      });
 
-        expandedDirs.add(targetDir); // Expand destination so moved items are visible
-      }
-
+      if (movedRecords.length) expandedDirs.add(targetDir); // show what arrived
       selectedItems.clear();
       S.selectionAnchor = null;
       if (movedRecords.length) pushUndo({ type: 'move', records: movedRecords });
@@ -335,13 +479,81 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
     }
   }
 
+  /* ── "Move to…" and "Move up one level" (context menu, both views) ── */
+
+  /** The folder one level above the items' common folder, or null when
+      they do not share one folder or it already is the project root. */
+  function moveUpTarget(paths) {
+    if (!paths.length || !S.rootPath) return null;
+    const parent = parentPathOf(paths[0]);
+    if (!paths.every((p) => samePath(parentPathOf(p), parent))) return null;
+    if (samePath(parent, S.rootPath) || !isInsideRoot(parent, S.rootPath)) return null;
+    return parentPathOf(parent);
+  }
+
+  async function moveItemsUp(items) {
+    const target = moveUpTarget(items.map((it) => it.path));
+    if (target) await moveNodes(items, target);
+  }
+
+  /* Every folder of the project for the picker (links and dot-folders are
+     never offered). A cap keeps an enormous tree from freezing the UI; the
+     picker says when it applies. */
+  const PICKER_MAX_FOLDERS = 3000;
+  async function listProjectFolders() {
+    const folders = [{ path: S.rootPath, name: baseNameOf(S.rootPath) || S.rootPath, rel: '', depth: 0 }];
+    let truncated = false;
+    const walk = async (dir, rel, depth) => {
+      let entries;
+      try { entries = await window.NativeAPI.readDirectory(dir); } catch (_) { return; }
+      const dirs = entries
+        .filter((e) => e.type === 'dir' && !e.link && !e.name.startsWith('.'))
+        .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+      for (const e of dirs) {
+        if (folders.length >= PICKER_MAX_FOLDERS) { truncated = true; return; }
+        const r = rel ? rel + '/' + e.name : e.name;
+        folders.push({ path: e.path, name: e.name, rel: r, depth });
+        if (depth < 32) await walk(e.path, r, depth + 1);
+      }
+    };
+    await walk(S.rootPath, '', 1);
+    return { folders, truncated };
+  }
+
+  /** "Move to…": pick a folder, then the same moveNodes as a drop. */
+  async function moveItemsTo(items) {
+    if (!items.length || !S.rootPath) return;
+    if (S._operationLock) { reportBusy(); return; }
+    const paths = items.map((it) => it.path);
+    const parent = parentPathOf(paths[0]);
+    const sameParent = paths.every((p) => samePath(parentPathOf(p), parent));
+    const title = items.length === 1
+      ? window.t('Move "{name}" to…').replace('{name}', baseNameOf(paths[0]))
+      : window.t('Move {n} items to…').replace('{n}', items.length);
+    const target = await showFolderPickerDialog({
+      title,
+      okLabel: window.t('Move here'),
+      load: async () => {
+        const { folders, truncated } = await listProjectFolders();
+        return {
+          truncated,
+          folders: folders
+            // never into a moved folder or below it
+            .filter((f) => !paths.some((p) => isInsideRoot(f.path, p)))
+            .map((f) => (sameParent && samePath(f.path, parent))
+              ? { ...f, disabled: true, note: window.t('(current folder)') }
+              : f),
+        };
+      },
+    });
+    if (target) await moveNodes(items, target);
+  }
+
   /* A deleted node (or folder) that held the previewed image ends the
      preview: the highlight target is gone and the next note must not be
      named after — or placed beside — a file that no longer exists. */
-  function forgetPreviewIfDeleted(normalNode) {
-    if (!S.previewMediaPath) return;
-    const normalPrev = S.previewMediaPath.replace(/\\/g, '/');
-    if (normalPrev === normalNode || normalPrev.startsWith(normalNode + '/')) {
+  function forgetPreviewIfDeleted(node) {
+    if (S.previewMediaPath && isInsideRoot(S.previewMediaPath, node)) {
       S.previewMediaPath = null;
     }
   }
@@ -353,17 +565,18 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
   /**
    * Rename all selected items.
    * Single item → delegates to the normal renameNode dialog (unchanged UX).
-   * Multiple items → asks for one base name, assigns it with _2, _3 … suffixes
-   *   to avoid filesystem collisions.
+   * Multiple items → asks for one base name, assigns it with _2, _3 …
+   *   suffixes; every item keeps its own extension. Names go through the
+   *   one name rule; items that cannot be renamed are reported.
    */
   async function renameSelectedNodes() {
-    if (S._operationLock || selectedItems.size === 0) return;
+    if (selectedItems.size === 0) return;
+    if (S._operationLock) { reportBusy(); return; }
 
     if (selectedItems.size === 1) {
       /* Single-item path: delegate to the existing per-item rename */
-      const p  = [...selectedItems][0];
-      const el = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(p)}"]`);
-      await renameNode(p, el ? el.dataset.type : 'file');
+      const p = [...selectedItems][0];
+      await renameNode(p, itemInfo(p).type);
       selectedItems.clear(); S.selectionAnchor = null;
       return;
     }
@@ -371,7 +584,7 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
     S._operationLock = true;
     try {
       const paths     = [...selectedItems];
-      const firstName = paths[0].replace(/\\/g, '/').split('/').pop();
+      const firstName = baseNameOf(paths[0]);
       const defaultBase = firstName.replace(/\.(md|txt)$/, '');
 
       const baseName = await showInputDialog(
@@ -381,123 +594,105 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       );
       if (!baseName) return;
 
-      const safeBase = baseName.trim().replace(/[/\\?%*:|"<>]/g, '_');
-      if (!safeBase) return;
+      const safeBase = sanitizeEntryName(baseName);
+      const baseProblem = checkEntryName(safeBase);
+      if (baseProblem) { await showNameProblem(baseProblem, safeBase); return; }
 
-      if (!(await settleActiveFileBefore(paths))) return;
-
-      const renamedRecords = [];
+      /* Plan every new name first; refuse the whole rename if any of them
+         breaks the name rule, before anything on disk changes. */
+      const plan = [];
       for (let i = 0; i < paths.length; i++) {
         const srcPath = paths[i];
-        const parts   = srcPath.replace(/\\/g, '/').split('/');
-        const oldName = parts[parts.length - 1];
-        const el      = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(srcPath)}"]`);
-        const type    = el ? el.dataset.type : (oldName.lastIndexOf('.') > 0 ? 'file' : 'dir');
-
-        const lastDot = oldName.lastIndexOf('.');
-        const hasExt  = (type === 'file') && (lastDot > 0);
-        const oldExt  = hasExt ? oldName.substring(lastDot) : '';
+        const oldName = baseNameOf(srcPath);
+        const { type, known } = itemInfo(srcPath);
+        const isFile  = known ? type === 'file' : oldName.lastIndexOf('.') > 0;
+        const oldExt  = isFile && oldName.lastIndexOf('.') > 0 ? oldName.substring(oldName.lastIndexOf('.')) : '';
         const newName = i === 0 ? `${safeBase}${oldExt}` : `${safeBase}_${i + 1}${oldExt}`;
-
         if (newName === oldName) continue;
-
-        parts[parts.length - 1] = newName;
-        const newPath = parts.join('/');
-
-        try {
-          await window.NativeAPI.renameNode(srcPath, newPath);
-          renamedRecords.push({ oldPath: srcPath, newPath });
-          
-          /* ── Update active file if it was the renamed item OR inside it ── */
-          await followActiveFile(srcPath, newPath);
-
-          /* ── Update selected target dir if it was inside the renamed item ── */
-          if (S.selectedDirPath) {
-            const normalSel = S.selectedDirPath.replace(/\\/g, '/');
-            const normalSrc = srcPath.replace(/\\/g, '/');
-            const normalNew = newPath.replace(/\\/g, '/');
-            
-            if (normalSel === normalSrc) {
-              S.selectedDirPath = newPath;
-            } else if (normalSel.startsWith(normalSrc + '/')) {
-              const rel = normalSel.substring(normalSrc.length);
-              S.selectedDirPath = normalNew + rel;
-            }
-          }
-        } catch (err) {
-          console.error('[Sidebar] multi-rename failed:', srcPath, err);
-        }
+        const problem = checkEntryName(newName);
+        if (problem) { await showNameProblem(problem, newName); return; }
+        plan.push({ oldPath: srcPath, newPath: joinPath(parentPathOf(srcPath), newName) });
       }
+      if (!plan.length) return;
+
+      if (!(await settleActiveFileBefore(plan.map((r) => r.oldPath)))) return;
+
+      const renamedRecords = [];
+      const errors = [];
+      await inDiskLock(activeAffectedBy(plan.map((r) => r.oldPath)), async () => {
+        for (const rec of plan) {
+          try {
+            await window.NativeAPI.renameNode(rec.oldPath, rec.newPath);
+          } catch (err) {
+            errors.push(`${baseNameOf(rec.oldPath)}: ${errText(err)}`);
+            continue;
+          }
+          renamedRecords.push(rec);
+          await followActiveFile(rec.oldPath, rec.newPath);
+          remapPathState([rec]);
+        }
+      });
 
       selectedItems.clear(); S.selectionAnchor = null;
       if (renamedRecords.length) pushUndo({ type: 'rename', records: renamedRecords });
       await renderTree();
       if (renamedRecords.length) await updateLinksAfterPathChange(renamedRecords);
+      if (errors.length) {
+        await window.NativeAPI.showMessageBox({
+          type: 'warning', title: window.t('Rename Issues'),
+          message: window.t('{n} item(s) could not be renamed:').replace('{n}', errors.length),
+          detail: errors.join('\n'),
+        });
+      }
     } finally {
       S._operationLock = false;
     }
   }
 
-  /** Delete all selected items with a single confirmation dialog. */
+  /** Move all selected items to the trash with a single confirmation. */
   async function deleteSelectedNodes() {
-    if (S._operationLock || selectedItems.size === 0) return;
+    if (selectedItems.size === 0) return;
+    if (S._operationLock) { reportBusy(); return; }
     S._operationLock = true;
     try {
-      const paths = [...selectedItems];
-      const n     = paths.length;
+      const items = withoutNested([...selectedItems].map((p) => ({ path: p })));
+      const n     = selectedItems.size;
+      const anyLink = [...selectedItems].some((p) => itemInfo(p).link);
 
       const result = await window.NativeAPI.showMessageBox({
         type: 'question',
-        buttons: [window.t('Delete'), window.t('Cancel')],
+        buttons: [window.t('Move to Trash'), window.t('Cancel')],
         defaultId: 1,
         title:  window.t('Delete {n} item(s)').replace('{n}', n),
-        message: window.t('Permanently delete {n} item(s)?').replace('{n}', n),
-        detail: window.t('This cannot be undone.'),
+        message: window.t('Move {n} item(s) to Trash?').replace('{n}', n),
+        detail: window.t('You can restore them from your system trash.')
+          + (anyLink ? '\n' + window.t('Links are removed as links; the items they point to are not changed.') : ''),
       });
       if (result.response !== 0) return;
 
-      for (const p of paths) {
-        try {
-          await window.NativeAPI.deleteNode(p);
-
-          /* Same descendant-aware logic as the single-item deleteNode below.
-            Loop ordering is irrelevant: if both a directory and one of its
-            descendants are in `paths`, whichever is processed first clears
-            S.activeFilePath; the other iteration then finds it already null
-            and the block is a no-op. */
-          const normalNode = p.replace(/\\/g, '/');
-          forgetPreviewIfDeleted(normalNode);
-
-          if (S.activeFilePath) {
-            const normalActive = S.activeFilePath.replace(/\\/g, '/');
-            if (normalActive === normalNode || normalActive.startsWith(normalNode + '/')) {
-              S.activeFilePath = null;
-              markClean();
-              await window.NativeAPI.clearLastOpenedFile();
-              /* Same rationale as deleteNode: avoid retriggering scratchpad auto-create. */
-              if (typeof window.replaceEditorContent === 'function') {
-                window.replaceEditorContent('');
-              } else {
-                editor.value = '';
-                if (typeof render     === 'function') render();
-                if (typeof countWords === 'function') countWords();
-              }
-            }
+      const errors = [];
+      await inDiskLock(activeAffectedBy(items.map((it) => it.path)), async () => {
+        for (const { path: p } of items) {
+          try {
+            await window.NativeAPI.deleteNode(p);
+          } catch (err) {
+            errors.push(`${baseNameOf(p)}: ${errText(err)}`);
+            continue;
           }
-
-          if (S.selectedDirPath) {
-            const normalSel = S.selectedDirPath.replace(/\\/g, '/');
-            if (normalSel === normalNode || normalSel.startsWith(normalNode + '/')) {
-              S.selectedDirPath = S.rootPath;
-            }
-          }
-        } catch (err) {
-          console.error('[Sidebar] multi-delete failed:', p, err);
+          if (S.activeFilePath && isInsideRoot(S.activeFilePath, p)) await closeDeletedActiveFile();
+          forgetDeletedPathState(p);
         }
-      }
+      });
 
       selectedItems.clear(); S.selectionAnchor = null;
       await renderTree();
+      if (errors.length) {
+        await window.NativeAPI.showMessageBox({
+          type: 'warning', title: window.t('Delete Issues'),
+          message: window.t('{n} item(s) could not be moved to the trash (nothing else was changed):').replace('{n}', errors.length),
+          detail: errors.join('\n'),
+        });
+      }
     } finally {
       S._operationLock = false;
     }
@@ -616,6 +811,14 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
       if (!saved) return; /* save failed; don't abandon current file */
     }
 
+    /* The open note's identity is the spelling the folder listings use
+       (parent folder resolved, own name untouched): every "is this the
+       open note?" check of the file operations compares against it. */
+    try {
+      const c = await window.NativeAPI.canonicalEntryPath(filePath);
+      if (typeof c === 'string' && c) filePath = c;
+    } catch (_) { /* keep as given — the read below reports real problems */ }
+
     let content;
     try {
       content = await window.NativeAPI.readFile(filePath);
@@ -639,6 +842,7 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
     }
 
     S.activeFilePath = filePath;
+    forgetGonePath(filePath);
     markClean();
     rememberDiskContent(content);
     await window.NativeAPI.setLastOpenedFile(filePath);
@@ -665,6 +869,7 @@ import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
    */
   // AFTER
 async function createNewFile(targetDir) {
+    if (S._operationLock) { reportBusy(); return; }
     /* Auto-save current before switching */
     if (S.isDirty && S.activeFilePath) await saveActiveFile();
 
@@ -718,15 +923,32 @@ async function createNewFile(targetDir) {
   }
 
   async function createNewFolder(targetDir) {
+    if (S._operationLock) { reportBusy(); return; }
     const dir = targetDir || S.selectedDirPath || S.rootPath;
     if (!dir) return;
 
     const name = await showInputDialog(window.t('New folder name:'));
     if (!name || !name.trim()) return;
 
-    const safeName = name.trim().replace(/[/\\?%*:|"<>]/g, '_');
-    const sep      = (dir.endsWith('/') || dir.endsWith('\\')) ? '' : '/';
-    const newPath  = `${dir}${sep}${safeName}`;
+    const safeName = sanitizeEntryName(name);
+    const problem  = checkEntryName(safeName);
+    if (problem) { await showNameProblem(problem, safeName); return; }
+    const newPath  = joinPath(dir, safeName);
+
+    /* An existing name used to "succeed" silently (mkdir of an existing
+       folder does nothing): say so instead. Letter case is ignored, as on
+       Windows and macOS. */
+    try {
+      const entries = await window.NativeAPI.readDirectory(dir);
+      if (entries.some((e) => e.name.toLowerCase() === safeName.toLowerCase())) {
+        await window.NativeAPI.showMessageBox({
+          type: 'info', title: window.t('Name Already Used'),
+          message: window.t('"{name}" already exists in this folder.').replace('{name}', safeName),
+          buttons: [window.t('OK')],
+        }).catch(() => {});
+        return;
+      }
+    } catch (_) { /* listing failed — the create below reports real problems */ }
 
 try {
       await window.NativeAPI.createDirectory(newPath);
@@ -740,9 +962,9 @@ try {
     } catch (err) {
       console.error('[Sidebar] createDirectory failed:', err);
       await window.NativeAPI.showMessageBox({
-        type: 'error', title: 'Could Not Create Folder',
-        message: `Could not create folder "${safeName}".`,
-        detail: String(err),
+        type: 'error', title: window.t('Could Not Create Folder'),
+        message: window.t('Could not create folder "{name}".').replace('{name}', safeName),
+        detail: errText(err),
       });
     }
   }
@@ -751,125 +973,113 @@ try {
      RENAME / DELETE
   ══════════════════════════════════════════════════════════════════ */
 
-// AFTER — only the first line and outer wrapper change; all inner logic is unchanged
+/**
+ * Rename one file, folder or link (context menu).
+ * The one name rule applies (paths.checkEntryName). A file keeps its
+ * extension unless the user typed the same one or another one of the same
+ * kind (paths.renamedFileName: "Meeting 26.09.2026" stays a note — it
+ * used to lose ".md" and become a file the app cannot open). The dialog
+ * preselects the name without its extension.
+ */
 async function renameNode(nodePath, type) {
-    if (S._operationLock) return;
+    if (S._operationLock) { reportBusy(); return; }
     S._operationLock = true;
     try {
-      const parts   = nodePath.replace(/\\/g, '/').split('/');
-      const oldName = parts[parts.length - 1];
+      const oldName = baseNameOf(nodePath);
 
-      const newName = await showInputDialog(window.t('Rename "{name}" to:').replace('{name}', oldName), oldName);
-      if (!newName || newName.trim() === oldName) return;
+      const typed = await showInputDialog(
+        window.t('Rename "{name}" to:').replace('{name}', oldName), oldName,
+        { selectStem: type === 'file' });
+      if (!typed) return;
+      const safeName = sanitizeEntryName(typed);
+      if (safeName === oldName) return;
+      const typedProblem = checkEntryName(safeName);
+      if (typedProblem) { await showNameProblem(typedProblem, safeName); return; }
 
-      const safeName  = newName.trim().replace(/[/\\?%*:|"<>]/g, '_');
-      const finalName = (type === 'file' && !safeName.includes('.'))
-        ? safeName + oldName.substring(oldName.lastIndexOf('.'))
-        : safeName;
+      const finalName = type === 'file' ? renamedFileName(oldName, safeName) : safeName;
+      if (finalName === oldName) return;
+      const finalProblem = checkEntryName(finalName);
+      if (finalProblem) { await showNameProblem(finalProblem, finalName); return; }
 
-      parts[parts.length - 1] = finalName;
-      const newPath = parts.join('/');
-
+      const newPath = joinPath(parentPathOf(nodePath), finalName);
       if (!(await settleActiveFileBefore([nodePath]))) return;
 
+      const rec = { oldPath: nodePath, newPath };
       try {
-        await window.NativeAPI.renameNode(nodePath, newPath);
-        pushUndo({ type: 'rename', records: [{ oldPath: nodePath, newPath }] });
-
-        await followActiveFile(nodePath, newPath);
-
-        if (S.selectedDirPath) {
-          const normalSel = S.selectedDirPath.replace(/\\/g, '/');
-          const normalOld = nodePath.replace(/\\/g, '/');
-          const normalNew = newPath.replace(/\\/g, '/');
-
-          if (normalSel === normalOld) {
-            S.selectedDirPath = newPath;
-          } else if (normalSel.startsWith(normalOld + '/')) {
-            const rel = normalSel.substring(normalOld.length);
-            S.selectedDirPath = normalNew + rel;
-          }
-        }
-
-        await renderTree();
-        await updateLinksAfterPathChange([{ oldPath: nodePath, newPath }]);
+        await inDiskLock(activeAffectedBy([nodePath]), async () => {
+          await window.NativeAPI.renameNode(nodePath, newPath);
+          await followActiveFile(nodePath, newPath);
+          remapPathState([rec]);
+        });
       } catch (err) {
         console.error('[Sidebar] renameNode failed:', err);
         /* Tell the user — a failed rename used to do nothing visible. */
         await window.NativeAPI.showMessageBox({
           type: 'error', title: window.t('Rename Failed'),
           message: window.t('Could not rename file to "{name}".').replace('{name}', finalName),
-          detail: String(err),
+          detail: errText(err),
         }).catch(() => {});
+        return;
       }
+      pushUndo({ type: 'rename', records: [rec] });
+      await renderTree();
+      await updateLinksAfterPathChange([rec]);
     } finally {
       S._operationLock = false;
     }
   }
 
 
-async function deleteNode(nodePath, type) {
-    if (S._operationLock) return;
+/**
+ * Move one file, folder or link to the OS trash. A link is trashed as a
+ * link — the item it points to is not touched (the backends act on the
+ * entry, never its target). The delete runs inside the disk lock: a save
+ * already queued lands first; the open note, when deleted, is closed.
+ */
+async function deleteNode(nodePath, type, isLink = false) {
+    if (S._operationLock) { reportBusy(); return; }
     S._operationLock = true;
     try {
-      const name = nodePath.replace(/\\/g, '/').split('/').pop();
+      const name = baseNameOf(nodePath);
 
       const result = await window.NativeAPI.showMessageBox({
         type: 'question',
         buttons: [window.t('Move to Trash'), window.t('Cancel')],
         defaultId: 1,
-        title: type === 'dir' ? window.t('Delete Folder') : window.t('Delete File'),
-        message: `Move "${name}" to Trash?`,
-        detail: type === 'dir'
-          ? 'The folder and all its contents will be moved to your system trash. You can restore them from there.'
-          : 'The file will be moved to your system trash. You can restore it from there.',
+        title: isLink ? window.t('Delete Link')
+             : type === 'dir' ? window.t('Delete Folder') : window.t('Delete File'),
+        message: (isLink ? window.t('Move the link "{name}" to Trash?') : window.t('Move "{name}" to Trash?'))
+          .replace('{name}', name),
+        detail: isLink
+          ? window.t('Only the link is removed. The item it points to is not changed.')
+          : type === 'dir'
+            ? window.t('The folder and all its contents will be moved to your system trash. You can restore them from there.')
+            : window.t('The file will be moved to your system trash. You can restore it from there.'),
       });
-
-
-
       if (result.response !== 0) return;
 
-      try {
-        await window.NativeAPI.deleteNode(nodePath);
-
-        /* Detect whether the active file / selected dir is the deleted node
-          itself OR a descendant of it. Pattern lifted verbatim from the
-          rename + move handlers above (search for `startsWith(normalSrc + '/')`)
-          so all three operations stay consistent. The trailing '/' on the
-          prefix check prevents "/foo/bar2/x" from being treated as inside
-          "/foo/bar". */
-        const normalNode = nodePath.replace(/\\/g, '/');
-        forgetPreviewIfDeleted(normalNode);
-
-        if (S.activeFilePath) {
-          const normalActive = S.activeFilePath.replace(/\\/g, '/');
-          if (normalActive === normalNode || normalActive.startsWith(normalNode + '/')) {
-            S.activeFilePath = null;
-            markClean();
-            await window.NativeAPI.clearLastOpenedFile();
-            if (typeof window.replaceEditorContent === 'function') {
-              window.replaceEditorContent('');
-            } else {
-              editor.value = '';
-              if (typeof render     === 'function') render();
-              if (typeof countWords === 'function') countWords();
-            }
-          }
+      let failure = null;
+      await inDiskLock(activeAffectedBy([nodePath]), async () => {
+        try {
+          await window.NativeAPI.deleteNode(nodePath);
+        } catch (err) {
+          failure = err;
+          return;
         }
+        if (S.activeFilePath && isInsideRoot(S.activeFilePath, nodePath)) await closeDeletedActiveFile();
+        forgetDeletedPathState(nodePath);
+      });
 
-        if (S.selectedDirPath) {
-          const normalSel = S.selectedDirPath.replace(/\\/g, '/');
-          if (normalSel === normalNode || normalSel.startsWith(normalNode + '/')) {
-            S.selectedDirPath = S.rootPath;
-          }
-        }
-
-        await renderTree();
-      } catch (err) {
-        console.error('[Sidebar] deleteNode failed:', err);
+      if (failure) {
+        console.error('[Sidebar] deleteNode failed:', failure);
+        /* A failed delete used to be silent. */
+        await window.NativeAPI.showMessageBox({
+          type: 'error', title: window.t('Delete Failed'),
+          message: window.t('"{name}" could not be moved to the trash. Nothing was changed.').replace('{name}', name),
+          detail: errText(failure),
+        }).catch(() => {});
       }
-
-
+      await renderTree();
     } finally {
       S._operationLock = false;
     }
@@ -880,10 +1090,17 @@ async function deleteNode(nodePath, type) {
   ══════════════════════════════════════════════════════════════════ */
 
 async function openFolder(folderPath) {
-    S.rootPath = folderPath;
     // Tell the backend what the sandbox root is so all subsequent FS IPC
     // calls are validated against it. Must happen before renderTree().
-    await window.NativeAPI.setRootPath(folderPath);
+    // Only once the backend has accepted the folder does the renderer
+    // switch (it used to switch first, and a refused folder left it
+    // pointing at a root the backend never took). The backend answers
+    // with the root's CANONICAL spelling — the one every folder listing
+    // uses — which the renderer adopts.
+    const canonical = await window.NativeAPI.setRootPath(folderPath);
+    if (typeof canonical === 'string' && canonical) folderPath = canonical;
+    S.rootPath = folderPath;
+    clearUndoStack(); // file undo never reaches into another project
     try { localStorage.setItem('revery_root_path', S.rootPath); } catch (e) {}
     
 // Also persist to native settings file (survives WebView storage clears)
@@ -942,10 +1159,11 @@ async function promptOpenFolder() {
     }
   }
 
-export { pushUndo, hasUndoOperations, undoLastOperation, moveNodes, renameSelectedNodes,
+export { pushUndo, hasUndoOperations, undoLastOperation, clearUndoStack, moveNodes,
+         moveItemsTo, moveItemsUp, moveUpTarget, renameSelectedNodes,
          deleteSelectedNodes, openMediaFile, openUnsupportedFile, openFile,
-         createNewFile, createNewFolder, renameNode, deleteNode,
-         openFolder, promptOpenFolder };
+         createNewFile, createNewFolder, renameNode, deleteNode, itemInfo,
+         showNameProblem, openFolder, promptOpenFolder };
 
 export function initFileOps() {
   if (btnOpenFolder) btnOpenFolder.addEventListener('click', promptOpenFolder);
@@ -991,8 +1209,11 @@ export function initFileOps() {
       reader.onerror = () => alert('An error occurred while reading the file.');
       reader.onload = async (ev) => {
         const content  = ev.target.result;
-        const baseName = file.name.replace(/\.[^/.]+$/, '');
+        let baseName   = sanitizeEntryName(file.name.replace(/\.[^/.]+$/, ''));
         const ext      = file.name.endsWith('.txt') ? 'txt' : 'md';
+        /* A picked file's name the one name rule refuses (".notes.md",
+           "con.md") is imported under a neutral name instead. */
+        if (checkEntryName(baseName) || checkEntryName(`${baseName}.${ext}`)) baseName = 'imported';
         const destPath = await uniquePath(dir, baseName, ext);
         try {
           await window.NativeAPI.createFile(destPath);

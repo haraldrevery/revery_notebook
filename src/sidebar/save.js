@@ -4,13 +4,14 @@
    file. Treat every ordering comment in here as load-bearing. */
 import { S, docTitleEl, folderNameEl, treeEl, expandedDirs, _previewCache,
          SCRATCHPAD_PREFIX, ensureScratchpadVolatileKey,
-         pendingNoteDir } from './state.js';
+         pendingNoteDir, sidebarPanel } from './state.js';
 import { uniquePath, stripMarkdownForPreview } from './helpers.js';
-import { baseNameOf } from './paths.js';
+import { baseNameOf, pathKey, sanitizeEntryName, checkEntryName } from './paths.js';
 import { detectEol, toDiskText } from './eol.js';
 import { renderTree, highlightActiveFile } from './tree.js';
-import { startWatchingFile } from './watcher.js';
-import { pushUndo, hasUndoOperations, undoLastOperation } from './fileops.js';
+import { startWatchingFile, stopWatchingFile } from './watcher.js';
+import { pushUndo, hasUndoOperations, undoLastOperation, clearUndoStack,
+         showNameProblem } from './fileops.js';
 import { recordProjectOpen } from './projects.js';
 
 /* ── Save-engine local state ─────────────────────────────────────── */
@@ -36,6 +37,19 @@ export function _enqueueDiskOp(op) {
   _diskOpsChain = next.then(() => {}, () => {});
   return next;
 }
+
+/* ── Paths the open note has LEFT through our own operations ──────────
+   A move, rename or delete of the open note runs inside the disk lock
+   (_enqueueDiskOp), so every write queued BEFORE it lands first. A save
+   that captured the old path and queued its write AFTER it must not
+   write there: that recreated the note at its old place (a stale twin
+   beside the moved note) or resurrected a deleted one. Such a write is
+   skipped and the buffer stays dirty, so the next autosave writes it to
+   wherever the note is now. A path leaves this set when a note is opened
+   or created there again. */
+const _goneActivePaths = new Set();
+export function markActivePathGone(p) { if (p) _goneActivePaths.add(pathKey(p)); }
+export function forgetGonePath(p)     { if (p) _goneActivePaths.delete(pathKey(p)); }
 
 let _firstDirtyTime          = 0;
 let _autoSaveCooldownUntil   = 0;
@@ -153,6 +167,7 @@ function createNoteFromScratchpad(session, targetDir, baseName) {
 
     /* ATTACHED — bind now: no await between the check above and here. */
     S.activeFilePath   = newPath;
+    forgetGonePath(newPath);
     S.previewMediaPath = null; // the preview became this note
     rememberDiskContent(written); // what the new file holds (LF, a new note)
     releaseSession();
@@ -337,7 +352,7 @@ export function clearAutosaveHold() {
     return;
   }
 
-  const safeName = rawName.replace(/[/\\?%*:|"<>]/g, '_');
+  const safeName = sanitizeEntryName(rawName);
   if (safeName === oldBaseName) {
     docTitleEl.value = safeName;
     return;
@@ -345,6 +360,16 @@ export function clearAutosaveHold() {
 
   // If a rename is already in flight, wait for it
   if (_renamePromise) return _renamePromise;
+
+  /* The one name rule (paths.checkEntryName) — for what was typed and for
+     the file name it becomes. The title shows no extension; it is always
+     kept. A refused name puts the old title back and says why. */
+  const problem = checkEntryName(safeName) || checkEntryName(`${safeName}.${ext}`);
+  if (problem) {
+    docTitleEl.value = oldBaseName;
+    await showNameProblem(problem, safeName);
+    return;
+  }
 
 
 
@@ -371,9 +396,24 @@ const execRename = async () => {
         );
       }
 
-      await window.NativeAPI.renameNode(oldPath, finalNewPath);
+      /* Inside the disk lock: a save of the old path that is already
+         queued lands BEFORE the rename (in Tauri, commands are not even
+         ordered — the write could otherwise run after the rename and
+         recreate the old file), and one queued after it sees the new
+         path (see _goneActivePaths). The watcher lets go of the folder
+         first (Windows). Called from a save-chain step too: that is fine
+         — only waiting for the save CHAIN from inside it would deadlock. */
+      await _enqueueDiskOp(async () => {
+        await stopWatchingFile();
+        try {
+          await window.NativeAPI.renameNode(oldPath, finalNewPath);
+        } catch (err) {
+          if (S.activeFilePath) startWatchingFile(S.activeFilePath);
+          throw err;
+        }
+        await retargetActiveFile(oldPath, finalNewPath);
+      });
       pushUndo({ type: 'rename', records: [{ oldPath, newPath: finalNewPath }] });
-      await retargetActiveFile(oldPath, finalNewPath);
       const finalBaseName = finalNewPath.replace(/\\/g, '/').split('/').pop().replace(new RegExp(`\\.${ext}$`), '');
       docTitleEl.value = finalBaseName;
 
@@ -461,8 +501,11 @@ try {
     if (enqueueGen !== S._replaceGeneration) return 'deferred-replaced';
     if (auto && S._conflictHoldPath && S._conflictHoldPath === pathToSave) return 'deferred-hold';
 
-    /* Write in the file's own line-ending style (see WHAT IS ON DISK). */
     const isActive = S.activeFilePath === pathToSave;
+    /* The note moved or was deleted by our own operation after this save
+       captured its path (see _goneActivePaths): never write the old path. */
+    if (!isActive && _goneActivePaths.has(pathKey(pathToSave))) return 'deferred-gone';
+    /* Write in the file's own line-ending style (see WHAT IS ON DISK). */
     const diskText = toDiskText(contentToSave, isActive ? S._diskEol : '\n');
     await window.NativeAPI.writeFile(pathToSave, diskText);
     /* Record what is on disk now INSIDE the lock, so a watcher check queued
@@ -490,10 +533,13 @@ try {
 }
 
 if (writeResult !== 'ok') {
-  // 'deferred-external', 'deferred-replaced' or 'deferred-hold'. No dialog —
-  // the watcher's dialog / the hold's status message is the user's
-  // resolution path. Treat as a save failure (return false) so callers see
-  // the same signal as a real failure.
+  // 'deferred-external', 'deferred-replaced', 'deferred-hold' or
+  // 'deferred-gone'. No dialog — the watcher's dialog / the hold's status
+  // message is the user's resolution path. Treat as a save failure (return
+  // false) so callers see the same signal as a real failure.
+  // 'deferred-gone': the note is elsewhere now — the edits are still
+  // unsaved, so write them there.
+  if (writeResult === 'deferred-gone' && S.activeFilePath && S.isDirty) scheduleAutoSave();
   return false;
 }
 
@@ -564,6 +610,8 @@ export function waitForSaveChainIdle() {
 export async function retargetActiveFile(oldPath, newPath) {
   if (!oldPath || !newPath) return;
   S.activeFilePath = newPath;
+  markActivePathGone(oldPath);
+  forgetGonePath(newPath);
   // A hold belongs to the file, not to its old name (message shows the new one).
   if (S._conflictHoldPath === oldPath) setAutosaveHold(newPath, S._holdReason);
   if (docTitleEl) docTitleEl.value = baseNameOf(newPath).replace(/\.(md|txt)$/, '');
@@ -652,7 +700,26 @@ export function initSaveEngine() {
 
   // Pivot the sidebar state to a newly saved file (used by Save As)
   window.sidebarPivotToNewFile = async function(newPath, newRoot, savedContent) {
+    /* Adopt the CANONICAL spellings the folder listings use (setRootPath
+       resolves the root, canonicalEntryPath the file) — the Save As
+       dialog hands back the path as typed or navigated, which may run
+       through a link or differ in letter case, and a spelling that
+       differs from the tree's made the file operations miss that this
+       note is the open one. On any failure the given spelling stays. */
+    if (newRoot && newRoot !== S.rootPath) {
+      try {
+        const c = await window.NativeAPI.setRootPath(newRoot);
+        if (typeof c === 'string' && c) newRoot = c;
+      } catch (e) {
+        console.warn('[Sidebar] Save As: could not resolve the new root (kept as given):', e);
+      }
+    }
+    try {
+      const c = await window.NativeAPI.canonicalEntryPath(newPath);
+      if (typeof c === 'string' && c) newPath = c;
+    } catch (_) { /* outside the project root: keep as given */ }
     S.activeFilePath = newPath;
+    forgetGonePath(newPath);
     /* Only what Save As actually wrote is on disk. If the buffer changed
        while its dialog was open (possible where the dialog is not modal),
        those edits are NOT saved — keep them dirty so autosave writes them
@@ -677,6 +744,7 @@ export function initSaveEngine() {
     //   • Card view and expandedDirs don't hold stale paths from the old root
     if (newRoot && newRoot !== S.rootPath) {
       S.rootPath = newRoot;
+      clearUndoStack(); // file undo never reaches into another project
       try { localStorage.setItem('revery_root_path', S.rootPath); } catch (_) {}
       if (typeof window.NativeAPI.setLastRootPath === 'function') {
         window.NativeAPI.setLastRootPath(S.rootPath).catch(() => {});
@@ -736,9 +804,13 @@ export function initSaveEngine() {
           console.warn('[Sidebar] scratchpad placeholder volatile failed (non-fatal):', e);
         }
         if (!session.creating && Date.now() >= session.retryAfter) {
-          const baseName = S.previewMediaPath
+          let baseName = S.previewMediaPath
             ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, '') // note named after the image
             : 'untitled';
+          /* An image name the one name rule refuses for a new file (e.g.
+             "aux.png" made on Linux) would make every create attempt fail:
+             such a note is simply called "untitled". */
+          if (checkEntryName(baseName) || checkEntryName(baseName + '.md')) baseName = 'untitled';
           createNoteFromScratchpad(session, targetDir, baseName);
         }
         return; // skip normal flow until the file is established
@@ -776,18 +848,44 @@ export function initSaveEngine() {
       
       await saveActiveFile();
     }
-    /* Ctrl+Z → undo last navigation operation (move or rename).
-       Only fires when the CM editor does NOT have focus, so it never
-       conflicts with CM's own text undo.  We test cmView.hasFocus (a
-       real DOM check) rather than activeElement === editor because
-       `editor` is the JS shim object, not a DOM node — that comparison
-       was always false and both handlers fired simultaneously.          */
-    if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
-      const editorHasFocus = window.cmView ? window.cmView.hasFocus : false;
-      if (editorHasFocus) return; // CM's historyKeymap handles it
+    /* Ctrl+Z → undo the last file move or rename — ONLY while the user is
+       working in the file panel (sidebarUndoAllowed). It used to fire
+       whenever the editor lacked focus, so Ctrl+Z typed in the title
+       field, the find bar or the project search silently moved files
+       back (and rewrote links) instead of undoing the typing. */
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+      if (!sidebarUndoAllowed(e)) return;
       if (!hasUndoOperations()) return;
       e.preventDefault();
       await undoLastOperation();
     }
   });
+
+  /* Where did the user last work? A pointer press or focus inside the
+     file panel (or its menus and dialogs) arms file undo; one anywhere
+     else — the editor, the title, the find bar — disarms it. */
+  const isPanelSurface = (el) => !!(el && el.closest && (
+    (sidebarPanel && sidebarPanel.contains(el))
+    || el.closest('#context-menu, #sidebar-sort-menu, .revery-input-overlay')));
+  document.addEventListener('pointerdown', (e) => { _panelArmed = isPanelSurface(e.target); }, true);
+  document.addEventListener('dragstart', (e) => { if (isPanelSurface(e.target)) _panelArmed = true; }, true);
+  document.addEventListener('focusin', (e) => { if (!isPanelSurface(e.target)) _panelArmed = false; }, true);
+}
+
+let _panelArmed = false;
+
+/* File undo may run only when ALL hold: the editor does not have focus;
+   no text field anywhere has it (Ctrl+Z there means "undo my typing");
+   no dialog is open; the file panel is open; and the last thing the user
+   pressed or focused was the file panel. */
+function sidebarUndoAllowed(e) {
+  if (window.cmView && window.cmView.hasFocus) return false; // CM's own undo
+  const editable = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+  const t = e.target;
+  if (t && t.closest && t.closest(editable)) return false;
+  const a = document.activeElement;
+  if (a && a !== document.body && a.closest && a.closest(editable)) return false;
+  if (document.querySelector('.revery-input-overlay')) return false;
+  if (!S.sidebarOpen) return false;
+  return _panelArmed;
 }

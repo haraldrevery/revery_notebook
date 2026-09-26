@@ -4,6 +4,7 @@ import { stripMarkdownForPreview, getFileCategory, setSidebarDragData } from './
 import { sortEntries, renderTree, updateMultiSelectHighlight, showContextMenu } from './tree.js';
 import { openFile, openMediaFile, openUnsupportedFile } from './fileops.js';
 import { icon } from './icons.js';
+import { samePath, isInsideRoot, baseNameOf, normalizePath, parentPathOf } from './paths.js';
 
 let _cardGeneration = 0;
 
@@ -74,6 +75,10 @@ let _cardGeneration = 0;
     card.className   = 'sidebar-card';
     card.dataset.path = entry.path;
     card.dataset.type = entry.type;
+    if (entry.link) {
+      card.dataset.link = '1';
+      card.title = entry.name + ' — ' + window.t('Link');
+    }
     if (entry.type === 'dir')         card.classList.add('sidebar-card-dir');
     else if (category === 'media')    card.classList.add('sidebar-card-media');
     else if (category === 'other')    card.classList.add('sidebar-card-other');
@@ -86,6 +91,11 @@ let _cardGeneration = 0;
 
     if (entry.type === 'dir') {
       thumb.replaceChildren(icon('folder'));
+
+    } else if (entry.link) {
+      /* A link (to a file or a folder): the link glyph, no preview —
+         nothing is read or loaded through it just to draw a card. */
+      thumb.replaceChildren(icon('link'));
 
     } else if (category === 'media' && window.slowHardwareMode) {
       /* Slow hardware mode: skip the JPEG decode entirely — icon only */
@@ -134,7 +144,7 @@ let _cardGeneration = 0;
     const previewEl = document.createElement('div');
     previewEl.className = 'sidebar-card-preview';
 
-    if (category === 'text' && !window.slowHardwareMode) {
+    if (category === 'text' && !entry.link && !window.slowHardwareMode) {
       /* Fire-and-forget preview load — card shows immediately.
          Skipped in slow hardware mode: opening a folder in card view
          would otherwise read every text file in it off a slow disk. */
@@ -197,7 +207,7 @@ let _cardGeneration = 0;
     card.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      showContextMenu(e.clientX, e.clientY, entry.path, entry.type);
+      showContextMenu(e.clientX, e.clientY, entry.path, entry.type, !!entry.link);
     });
 
     /* ── Drag-and-drop for cards ── */
@@ -235,6 +245,130 @@ let _cardGeneration = 0;
     return card;
   }
   
+  /* ══════════════════════════════════════════════════════════════════
+     NAVIGATION BAR — path bar, or Back + crumb
+     Path bar: every folder from the project root down to the one shown,
+     each ancestor a button (click: go there; drop cards on it: move them
+     there). When it does not fit the panel's width it falls back to the
+     compact bar: "← Back" (click: up; drop: move to the parent folder)
+     plus the current folder's name. Drop targets carry data-drop-dir;
+     dnd.js accepts it only for folders inside the project, and never
+     offers the project root's parent (the bar starts at the root).
+     Paths are sliced from the shown folder's own spelling, so they equal
+     the folder listing's strings.
+  ══════════════════════════════════════════════════════════════════ */
+
+  /** [{ path, label }] from the project root down to dirPath. */
+  function pathSegments(dirPath) {
+    const root = S.rootPath;
+    const segs = [{ path: root, label: baseNameOf(root) || root }];
+    if (!root || samePath(dirPath, root) || !isInsideRoot(dirPath, root)) return segs;
+    const start = normalizePath(root).length;
+    for (let i = start + 1; i <= dirPath.length; i++) {
+      if (i === dirPath.length || dirPath[i] === '/' || dirPath[i] === '\\') {
+        const p = dirPath.slice(0, i);
+        if (p.length > start && !samePath(p, segs[segs.length - 1].path)) {
+          segs.push({ path: p, label: baseNameOf(p) });
+        }
+      }
+    }
+    return segs;
+  }
+
+  function navigateTo(dir) {
+    if (!dir || !S.rootPath || !isInsideRoot(dir, S.rootPath)) return;
+    S.cardViewDir = dir;
+    S.selectedDirPath = dir;
+    _previewCache.clear();
+    renderCards(dir);
+  }
+
+  function buildPathBar(dirPath) {
+    const navEl = document.createElement('div');
+    navEl.className = 'sidebar-card-nav sidebar-card-path';
+    const segs = pathSegments(dirPath);
+    segs.forEach((seg, i) => {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'sidebar-card-sep';
+        sep.textContent = '›';
+        navEl.appendChild(sep);
+      }
+      if (i === segs.length - 1) {
+        const cur = document.createElement('span');
+        cur.className = 'sidebar-card-crumb';
+        cur.textContent = seg.label;
+        cur.title = seg.path;
+        navEl.appendChild(cur);
+      } else {
+        const b = document.createElement('button');
+        b.className = 'sidebar-card-seg';
+        b.textContent = seg.label;
+        b.title = window.t('Go to "{name}" — or drop items here to move them there').replace('{name}', seg.label);
+        b.dataset.dropDir = seg.path;
+        b.addEventListener('click', () => navigateTo(seg.path));
+        navEl.appendChild(b);
+      }
+    });
+    return navEl;
+  }
+
+  function buildCompactNav(dirPath) {
+    const navEl = document.createElement('div');
+    navEl.className = 'sidebar-card-nav';
+    const atRoot = !S.rootPath || samePath(dirPath, S.rootPath) || !isInsideRoot(dirPath, S.rootPath);
+    if (!atRoot) {
+      const parent = parentPathOf(dirPath);
+      const backBtn = document.createElement('button');
+      backBtn.className   = 'sidebar-card-back';
+      backBtn.textContent = '← ' + window.t('Back');
+      backBtn.title       = window.t('Go up one level — or drop items here to move them there');
+      backBtn.dataset.dropDir = parent;
+      backBtn.addEventListener('click', () => navigateTo(parent));
+      navEl.appendChild(backBtn);
+    }
+    const crumbEl = document.createElement('span');
+    crumbEl.className   = 'sidebar-card-crumb';
+    crumbEl.textContent = baseNameOf(dirPath) || dirPath;
+    crumbEl.title       = dirPath;
+    navEl.appendChild(crumbEl);
+    return navEl;
+  }
+
+  let _navDir = null;
+  function buildNav(dirPath) {
+    _navDir = dirPath;
+    return buildPathBar(dirPath);
+  }
+
+  /* Path bar when it fits, otherwise the compact bar. Re-checked when the
+     panel is resized. Only the bar is replaced — never the grid, so a drag
+     in progress keeps its source element. */
+  function fitNav() {
+    const nav = treeEl.querySelector('.sidebar-card-nav');
+    if (!nav || !_navDir) return;
+    let bar = nav;
+    if (!bar.classList.contains('sidebar-card-path')) {
+      bar = buildPathBar(_navDir);
+      nav.replaceWith(bar);
+    }
+    if (bar.scrollWidth > bar.clientWidth + 1) bar.replaceWith(buildCompactNav(_navDir));
+  }
+
+  let _navObserver = null;
+  let _navLastWidth = -1;
+  function observeNavWidth() {
+    if (_navObserver || typeof ResizeObserver !== 'function') return;
+    _navObserver = new ResizeObserver(() => {
+      if (S.sidebarViewMode !== 'card') return;
+      const w = treeEl.clientWidth;
+      if (w === _navLastWidth) return;
+      _navLastWidth = w;
+      fitNav();
+    });
+    _navObserver.observe(treeEl);
+  }
+
   /**
    * Render the card grid for `dirPath`.
    * Replaces the tree content entirely — the tree is rebuilt when the
@@ -242,6 +376,11 @@ let _cardGeneration = 0;
    */
   async function renderCards(dirPath) {
     if (!dirPath) return;
+    /* The card view never shows a folder outside the project. */
+    if (S.rootPath && !isInsideRoot(dirPath, S.rootPath)) {
+      dirPath = S.rootPath;
+      S.cardViewDir = dirPath;
+    }
 
     /* Bump generation so any in-flight preview loads for a previous render
        will notice they are stale and stop updating the DOM.              */
@@ -252,37 +391,8 @@ let _cardGeneration = 0;
     treeEl.classList.add('sidebar-card-view');
 
     /* ── Navigation bar ── */
-    const navEl = document.createElement('div');
-    navEl.className = 'sidebar-card-nav';
-
-    const normDir  = dirPath.replace(/\\/g, '/');
-    const normRoot = (S.rootPath || '').replace(/\\/g, '/');
-    const isAtRoot = (normDir === normRoot);
-
-    if (!isAtRoot) {
-      const backBtn = document.createElement('button');
-      backBtn.className   = 'sidebar-card-back';
-      backBtn.textContent = '← ' + window.t('Back');
-      backBtn.title       = window.t('Go up one level');
-      backBtn.addEventListener('click', () => {
-        const parts = normDir.split('/');
-        parts.pop();
-        const parent = parts.join('/');
-        S.cardViewDir = parent;
-        S.selectedDirPath = parent;
-        _previewCache.clear();
-        renderCards(parent);
-      });
-      navEl.appendChild(backBtn);
-    }
-
-    const crumbEl = document.createElement('span');
-    crumbEl.className   = 'sidebar-card-crumb';
-    crumbEl.textContent = normDir.split('/').pop() || normDir;
-    crumbEl.title       = dirPath;
-    navEl.appendChild(crumbEl);
-
-    treeEl.appendChild(navEl);
+    treeEl.appendChild(buildNav(dirPath));
+    fitNav();
 
     /* ── Loading indicator ── */
     const loadingEl = document.createElement('div');
@@ -392,6 +502,7 @@ treeEl.appendChild(gridEl);
 export { renderCards, highlightActiveFileCards, updateViewBtn, setViewMode };
 
 export function initCardView() {
+  observeNavWidth();
   if (btnViewBtn) {
     btnViewBtn.addEventListener('click', async () => {
       await setViewMode(S.sidebarViewMode === 'card' ? 'tree' : 'card');

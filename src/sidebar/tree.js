@@ -5,7 +5,8 @@ import { getFileCategory, setSidebarDragData } from './helpers.js';
 import { icon } from './icons.js';
 import { renderCards, highlightActiveFileCards } from './cards.js';
 import { openFile, openMediaFile, openUnsupportedFile, createNewFile, createNewFolder,
-         renameNode, deleteNode, renameSelectedNodes, deleteSelectedNodes } from './fileops.js';
+         renameNode, deleteNode, renameSelectedNodes, deleteSelectedNodes,
+         moveItemsTo, moveItemsUp, moveUpTarget, itemInfo } from './fileops.js';
 
 let _treeRenderGeneration = 0;   // cancels stale chunked renders
 
@@ -302,6 +303,7 @@ async function renderNode(containerEl, dirPath, depth, generation = 0) {   // �
       itemEl.className = 'sidebar-item';
       itemEl.dataset.path = entry.path;
       itemEl.dataset.type = entry.type;
+      if (entry.link) itemEl.dataset.link = '1';
       itemEl.style.paddingLeft = (depth * 14 + 10) + 'px';
 
       if (entry.type === 'dir') {
@@ -335,8 +337,14 @@ async function renderNode(containerEl, dirPath, depth, generation = 0) {   // �
         /* ── FILES — show ALL types, classified by category ── */
         const category = getFileCategory(entry.name);
 
-        /* Icon by category */
-        if (category === 'text') {
+        /* Icon by category (a link — to a file or a folder — shows the
+           link glyph: it is never walked into, and moving or deleting it
+           acts on the link itself) */
+        if (entry.link) {
+          iconEl.replaceChildren(icon('link'));
+          itemEl.classList.add('sidebar-link');
+          itemEl.title = window.t('Link');
+        } else if (category === 'text') {
           iconEl.replaceChildren(icon(entry.name.endsWith('.md') ? 'file' : 'file-lines'));
         } else if (category === 'media') {
           iconEl.replaceChildren(icon('image'));
@@ -425,7 +433,7 @@ async function renderNode(containerEl, dirPath, depth, generation = 0) {   // �
       itemEl.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        showContextMenu(e.clientX, e.clientY, entry.path, entry.type);
+        showContextMenu(e.clientX, e.clientY, entry.path, entry.type, !!entry.link);
       });
     }
   }
@@ -495,7 +503,7 @@ async function renderTree() {
      CONTEXT MENU
   ══════════════════════════════════════════════════════════════════ */
 
-  function showContextMenu(x, y, nodePath, type) {
+  function showContextMenu(x, y, nodePath, type, isLink = false) {
     const menu = document.getElementById('context-menu');
     if (!menu) return;
 
@@ -504,41 +512,70 @@ async function renderTree() {
     const isMulti = selectedItems.size > 1 && selectedItems.has(nodePath);
     const nodeCategory = type === 'file' ? getFileCategory(nodePath.replace(/\\/g, '/').split('/').pop()) : 'dir';
 
+    /* Move entries — the same moveNodes as a drag-and-drop, reachable
+       without dragging, in both views. "Move up one level" only when the
+       items share a folder below the project root. */
+    const targets = isMulti
+      ? [...selectedItems].map((p) => ({ path: p, type: itemInfo(p).type }))
+      : [{ path: nodePath, type }];
+    const moveItems = [
+      { label: window.t('Move to…'), action: () => moveItemsTo(targets) },
+      ...(moveUpTarget(targets.map((t) => t.path))
+        ? [{ label: window.t('Move up one level'), action: () => moveItemsUp(targets) }]
+        : []),
+    ];
+    const del = { label: window.t('Delete'), action: () => deleteNode(nodePath, type, isLink), danger: true };
+    const explorer = { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(nodePath) };
+
     const items = isMulti
       ? [
           { label: window.t('Rename {n} items…').replace('{n}', selectedItems.size), action: () => renameSelectedNodes() },
+          ...moveItems,
+          { sep: true },
           { label: window.t('Delete {n} items').replace('{n}', selectedItems.size),  action: () => deleteSelectedNodes(), danger: true },
+        ]
+      : isLink
+      ? [
+          { label: window.t('Rename'),           action: () => renameNode(nodePath, type) },
+          ...moveItems,
+          { sep: true },
+          explorer,
+          del,
         ]
       : type === 'dir'
       ? [
           { label: window.t('New File Here'),    action: () => createNewFile(nodePath) },
           { label: window.t('New Folder Here'),  action: () => createNewFolder(nodePath) },
           { label: window.t('Rename'),           action: () => renameNode(nodePath, 'dir') },
+          ...moveItems,
           { sep: true },
-          { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(nodePath) },
-          { label: window.t('Delete'),           action: () => deleteNode(nodePath, 'dir'), danger: true },
+          explorer,
+          del,
         ]
       : nodeCategory === 'text'
       ? [
           { label: window.t('Open'),             action: () => openFile(nodePath) },
           { label: window.t('Rename'),           action: () => renameNode(nodePath, 'file') },
+          ...moveItems,
           { sep: true },
-          { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(nodePath) },
-          { label: window.t('Delete'),           action: () => deleteNode(nodePath, 'file'), danger: true },
+          explorer,
+          del,
         ]
       : nodeCategory === 'media'
       ? [
           { label: window.t('Preview'),          action: () => openMediaFile(nodePath) },
           { label: window.t('Rename'),           action: () => renameNode(nodePath, 'file') },
+          ...moveItems,
           { sep: true },
-          { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(nodePath) },
-          { label: window.t('Delete'),           action: () => deleteNode(nodePath, 'file'), danger: true },
+          explorer,
+          del,
         ]
       : /* other/unsupported */ [
           { label: window.t('Rename'),           action: () => renameNode(nodePath, 'file') },
+          ...moveItems,
           { sep: true },
-          { label: window.t('Show in Explorer'), action: () => window.NativeAPI.showInExplorer(nodePath) },
-          { label: window.t('Delete'),           action: () => deleteNode(nodePath, 'file'), danger: true },
+          explorer,
+          del,
         ];
 
     renderContextMenu(x, y, items);

@@ -3,7 +3,7 @@
 import { S, docTitleEl, folderNameEl, expandedDirs,
          SCRATCHPAD_PREFIX } from './state.js';
 import { saveActiveFile, markClean, markDirty, scheduleAutoSave, cancelPendingAutoSave,
-         rememberDiskContent } from './save.js';
+         rememberDiskContent, retargetActiveFile } from './save.js';
 import { normalizeEol } from './eol.js';
 import { renderTree, highlightActiveFile } from './tree.js';
 import { updateViewBtn } from './cards.js';
@@ -12,6 +12,7 @@ import { startWatchingFile } from './watcher.js';
 import { openFile } from './fileops.js';
 import { uniquePath, reportBakOrphans, fileExistsViaListing } from './helpers.js';
 import { loadProjects, recordProjectOpen, seedProjectsCache, PROJECTS_KEY } from './projects.js';
+import { joinPath } from './paths.js';
 
 async function sidebarHandleClose() {
   cancelPendingAutoSave();
@@ -346,9 +347,24 @@ try {
         }
 
         if (folder) {
+          /* The backend answers with the root's CANONICAL spelling (the
+             one every folder listing uses); the renderer adopts it. */
+          const canonicalRoot = await window.NativeAPI.setRootPath(folder);
+          if (typeof canonicalRoot === 'string' && canonicalRoot) folder = canonicalRoot;
           S.rootPath        = folder;
-          await window.NativeAPI.setRootPath(folder);
           lastFile = await reconcilePendingRename(journal, lastFile);
+          /* The last file in that same spelling. The stored spelling is
+             still used below to OPEN it and to look up its crash backup
+             (backups are keyed by the path they were written under); the
+             switch to this spelling happens afterwards, through
+             retargetActiveFile, which moves the backup along. */
+          let canonicalLast = lastFile;
+          if (lastFile) {
+            try {
+              const c = await window.NativeAPI.canonicalEntryPath(lastFile);
+              if (typeof c === 'string' && c) canonicalLast = c;
+            } catch (_) { /* outside the root or unresolvable: keep */ }
+          }
           S.selectedDirPath = folder;
           const parts = folder.replace(/\\/g, '/').split('/');
           folderNameEl.textContent = parts[parts.length - 1] || folder;
@@ -358,13 +374,16 @@ try {
           await recordProjectOpen(folder);
           S.cardViewDir = folder;
 
-          if (lastFile && lastFile.replace(/\\/g, '/').startsWith(folder.replace(/\\/g, '/'))) {
-            const relPath = lastFile.replace(/\\/g, '/').substring(folder.length).replace(/^\//, '');
+          if (canonicalLast && canonicalLast.replace(/\\/g, '/').startsWith(folder.replace(/\\/g, '/'))) {
+            const relPath = canonicalLast.replace(/\\/g, '/').substring(folder.length).replace(/^\//, '');
             const relParts = relPath.split('/');
             relParts.pop(); 
-            let currentPath = folder.replace(/\\/g, '/');
+            /* Built in the root's own spelling (joinPath), so the keys
+               equal the tree's entry paths — '/'-joined keys never matched
+               the backslash paths on Windows. */
+            let currentPath = folder;
             for (const p of relParts) {
-              currentPath += '/' + p;
+              currentPath = joinPath(currentPath, p);
               expandedDirs.add(currentPath);
             }
             S.selectedDirPath = currentPath; 
@@ -510,6 +529,16 @@ try {
                 console.warn('[Sidebar Boot] Crash-recovery check failed (non-fatal):', e);
               }
 
+              /* Recovery used the STORED spelling (its backup key). Now
+                 adopt the canonical one through the single retarget,
+                 which moves an unsaved buffer's backup, the watcher and
+                 the last-opened pointer along. Same file — only the
+                 spelling changes, so the file operations recognise it. */
+              if (canonicalLast && canonicalLast !== lastFile && S.activeFilePath === lastFile) {
+                await retargetActiveFile(lastFile, canonicalLast);
+                highlightActiveFile(S.activeFilePath);
+              }
+
             } catch (err) {
               console.warn('[Sidebar Boot] Could not read last file:', err);
               injectStarterText();
@@ -533,8 +562,9 @@ try {
       }
 
       if (defaultFolder) {
+        const canonicalDefault = await window.NativeAPI.setRootPath(defaultFolder);
+        if (typeof canonicalDefault === 'string' && canonicalDefault) defaultFolder = canonicalDefault;
         S.rootPath        = defaultFolder;
-        await window.NativeAPI.setRootPath(defaultFolder);
         try { localStorage.setItem('revery_root_path', S.rootPath); } catch (e) {}
         recordProjectOpen(defaultFolder);
         S.selectedDirPath = defaultFolder;

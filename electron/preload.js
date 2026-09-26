@@ -44,6 +44,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteNode: (targetPath) =>
     ipcRenderer.invoke('fs:delete-node', targetPath),
 
+  canonicalEntryPath: (entryPath) =>
+    ipcRenderer.invoke('fs:canonical-entry', entryPath),
+
   copyFileIntoFolder: (destDir, filename, contentB64) =>
     ipcRenderer.invoke('fs:copy-into-folder', destDir, filename, contentB64),
 

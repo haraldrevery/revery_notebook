@@ -273,6 +273,54 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      /* Path bar (shown when the whole path fits; else Back + crumb).
+         Every ancestor is a button: click to go there, drop to move there. */
+      .sidebar-card-nav.sidebar-card-path { gap: 2px; overflow: hidden; }
+      .sidebar-card-seg {
+        background: none; border: none; cursor: pointer;
+        color: var(--text, #ccc); opacity: 0.65;
+        font-size: 0.72rem; font-family: var(--font-mono, monospace);
+        text-transform: uppercase; letter-spacing: 0.05em;
+        padding: 2px 4px; border-radius: 4px; line-height: 1.2;
+        white-space: nowrap; flex-shrink: 0;
+      }
+      .sidebar-card-seg:hover { opacity: 1; background: var(--hover-bg, rgba(128,128,128,0.12)); }
+      .sidebar-card-sep { opacity: 0.4; font-size: 0.72rem; flex-shrink: 0; }
+      .sidebar-card-path .sidebar-card-crumb { flex-shrink: 0; opacity: 0.9; }
+      .sidebar-card-back.drop-target,
+      .sidebar-card-seg.drop-target {
+        opacity: 1;
+        outline: 2px solid var(--accent, #4a5fc1);
+        outline-offset: -2px;
+        background: rgba(74,95,193,0.25);
+      }
+      /* Links (symlinks / junctions): marked, never walked into */
+      .sidebar-link-badge {
+        position: absolute; top: 3px; right: 3px;
+        width: 14px; height: 14px; opacity: 0.8;
+        pointer-events: none;
+      }
+      .sidebar-item.sidebar-link .sidebar-name { font-style: italic; }
+
+      /* "Move to\u2026" folder picker */
+      .revery-folder-picker { max-width: 460px; }
+      .revery-folder-list {
+        max-height: 50vh; min-height: 120px; overflow-y: auto;
+        border: 1px solid var(--border, #444); border-radius: 6px;
+        padding: 4px; display: flex; flex-direction: column;
+      }
+      .revery-folder-row {
+        text-align: left; background: none; border: none; cursor: pointer;
+        color: var(--text, #ccc); font-size: 0.85rem;
+        padding: 4px 8px; border-radius: 4px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .revery-folder-row:hover:not(:disabled) { background: var(--hover-bg, rgba(128,128,128,0.12)); }
+      .revery-folder-row.selected { background: rgba(74,95,193,0.3); }
+      .revery-folder-row:disabled { opacity: 0.45; cursor: default; }
+      .revery-folder-row-note { opacity: 0.7; font-style: italic; }
+      .revery-folder-note { font-size: 0.78rem; opacity: 0.75; min-height: 1em; }
+      .revery-input-ok:disabled { opacity: 0.45; cursor: default; }
 
       /* Grid of cards */
       .sidebar-cards-grid {
@@ -449,7 +497,7 @@
       requestAnimationFrame(() => okBtn.focus());
     });
   }
-  function showInputDialog(promptText, defaultValue = "") {
+  function showInputDialog(promptText, defaultValue = "", opts = {}) {
     return new Promise((resolve) => {
       const overlay = document.createElement("div");
       overlay.className = "revery-input-overlay";
@@ -496,7 +544,125 @@
       document.body.appendChild(overlay);
       requestAnimationFrame(() => {
         input.focus();
-        input.select();
+        const dot = defaultValue.lastIndexOf(".");
+        if (opts.selectStem && dot > 0) input.setSelectionRange(0, dot);
+        else input.select();
+      });
+    });
+  }
+  function showFolderPickerDialog({ title, okLabel, load }) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "revery-input-overlay";
+      const box = document.createElement("div");
+      box.className = "revery-input-box revery-folder-picker";
+      const label = document.createElement("p");
+      label.textContent = title;
+      const filter = document.createElement("input");
+      filter.type = "text";
+      filter.className = "revery-input-field";
+      filter.placeholder = window.t("Filter folders\u2026");
+      filter.spellcheck = false;
+      const list = document.createElement("div");
+      list.className = "revery-folder-list";
+      list.setAttribute("role", "listbox");
+      const note = document.createElement("div");
+      note.className = "revery-folder-note";
+      note.textContent = window.t("Loading folders\u2026");
+      const btnRow = document.createElement("div");
+      btnRow.className = "revery-input-buttons";
+      const cancelBtn = document.createElement("button");
+      cancelBtn.textContent = window.t("Cancel");
+      cancelBtn.className = "revery-input-cancel";
+      const okBtn = document.createElement("button");
+      okBtn.textContent = okLabel || window.t("OK");
+      okBtn.className = "revery-input-ok";
+      okBtn.disabled = true;
+      let folders = [];
+      let selected = null;
+      let rows = [];
+      function finish(value) {
+        if (!document.body.contains(overlay)) return;
+        document.body.removeChild(overlay);
+        resolve(value);
+      }
+      function choose(f) {
+        selected = f;
+        okBtn.disabled = !f;
+        for (const r of rows) r.el.classList.toggle("selected", r.folder === f);
+        const cur = rows.find((r) => r.folder === f);
+        if (cur) cur.el.scrollIntoView({ block: "nearest" });
+      }
+      function render2() {
+        const q = filter.value.trim().toLowerCase();
+        list.replaceChildren();
+        rows = [];
+        for (const f of folders) {
+          const hay = (f.rel || f.name).toLowerCase();
+          if (q && !hay.includes(q)) continue;
+          const row = document.createElement("button");
+          row.type = "button";
+          row.className = "revery-folder-row";
+          row.setAttribute("role", "option");
+          row.style.paddingLeft = 8 + (q ? 0 : f.depth * 14) + "px";
+          row.textContent = q ? f.rel || f.name : f.name;
+          if (f.note) {
+            const n = document.createElement("span");
+            n.className = "revery-folder-row-note";
+            n.textContent = " " + f.note;
+            row.appendChild(n);
+          }
+          row.title = f.rel || f.name;
+          if (f.disabled) {
+            row.disabled = true;
+          } else {
+            row.addEventListener("click", () => choose(f));
+            row.addEventListener("dblclick", () => finish(f.path));
+            rows.push({ el: row, folder: f });
+          }
+          list.appendChild(row);
+        }
+        if (selected && !rows.some((r) => r.folder === selected)) choose(null);
+        else choose(selected);
+      }
+      filter.addEventListener("input", render2);
+      overlay.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          finish(null);
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (selected) finish(selected.path);
+          return;
+        }
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          if (!rows.length) return;
+          const i = rows.findIndex((r) => r.folder === selected);
+          const next = e.key === "ArrowDown" ? Math.min(rows.length - 1, i + 1) : Math.max(0, i < 0 ? 0 : i - 1);
+          choose(rows[next].folder);
+        }
+      });
+      cancelBtn.addEventListener("click", () => finish(null));
+      okBtn.addEventListener("click", () => {
+        if (selected) finish(selected.path);
+      });
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) finish(null);
+      });
+      btnRow.append(cancelBtn, okBtn);
+      box.append(label, filter, list, note, btnRow);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      requestAnimationFrame(() => filter.focus());
+      Promise.resolve().then(load).then((res) => {
+        folders = res && res.folders || [];
+        note.textContent = res && res.truncated ? window.t("Showing the first {n} folders \u2014 type to filter.").replace("{n}", folders.length) : "";
+        render2();
+      }).catch((err) => {
+        note.textContent = window.t("The folders could not be listed.") + " " + String(err && err.message || err);
       });
     });
   }
@@ -586,18 +752,29 @@
   // src/sidebar/paths.js
   var paths_exports = {};
   __export(paths_exports, {
+    MEDIA_EXTS: () => MEDIA_EXTS,
+    TEXT_EXTS: () => TEXT_EXTS,
     baseNameOf: () => baseNameOf,
+    checkEntryName: () => checkEntryName,
     decodeLinkDest: () => decodeLinkDest,
     dirOf: () => dirOf,
     encodeLinkDest: () => encodeLinkDest,
+    extOf: () => extOf,
     hasUrlScheme: () => hasUrlScheme,
     isAbsolutePath: () => isAbsolutePath,
     isInsideRoot: () => isInsideRoot,
     isWindowsPath: () => isWindowsPath,
+    joinPath: () => joinPath,
     mediaLinkMarkdown: () => mediaLinkMarkdown,
     normalizePath: () => normalizePath,
+    parentPathOf: () => parentPathOf,
+    pathKey: () => pathKey,
     relativePath: () => relativePath,
+    remapUnder: () => remapUnder,
+    renamedFileName: () => renamedFileName,
     resolvePath: () => resolvePath,
+    samePath: () => samePath,
+    sanitizeEntryName: () => sanitizeEntryName,
     uniqueName: () => uniqueName
   });
   var DRIVE_RE = /^[a-zA-Z]:(\/|$)/;
@@ -672,6 +849,92 @@
     if (A === R) return true;
     return A.startsWith(R === "/" ? "/" : R + "/");
   }
+  function samePath(a, b) {
+    const x = pathKey(a);
+    return !!x && x === pathKey(b);
+  }
+  function pathKey(p) {
+    const n = normalizePath(p);
+    return isWindowsPath(n) ? n.toLowerCase() : n;
+  }
+  function sepOf(p) {
+    const s = String(p);
+    return s.includes("\\") && !s.includes("/") ? "\\" : "/";
+  }
+  function joinPath(dir, name) {
+    const d = String(dir);
+    if (d.endsWith("/") || d.endsWith("\\")) return d + name;
+    return d + sepOf(d) + name;
+  }
+  function parentPathOf(p) {
+    const s = String(p || "");
+    const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+    if (i < 0) return "";
+    if (i === 0) return s[0];
+    const head = s.slice(0, i);
+    return /^[A-Za-z]:$/.test(head) ? head + s[i] : head;
+  }
+  function remapUnder(p, from, to) {
+    if (!p || !from || !to) return null;
+    if (samePath(p, from)) return to;
+    if (!isInsideRoot(p, from)) return null;
+    const rest = normalizePath(p).slice(normalizePath(from).length);
+    const sep = sepOf(to);
+    return String(to).replace(/[/\\]$/, "") + (sep === "/" ? rest : rest.replace(/\//g, sep));
+  }
+  var TEXT_EXTS = /* @__PURE__ */ new Set([".md", ".txt"]);
+  var MEDIA_EXTS = /* @__PURE__ */ new Set([
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".bmp",
+    ".ico",
+    ".tiff",
+    ".tif",
+    ".avif"
+  ]);
+  function extOf(name) {
+    const n = String(name || "");
+    const i = n.lastIndexOf(".");
+    return i > 0 ? n.slice(i) : "";
+  }
+  function extGroup(ext) {
+    const e = String(ext).toLowerCase();
+    if (TEXT_EXTS.has(e)) return "text";
+    if (MEDIA_EXTS.has(e)) return "media";
+    return null;
+  }
+  var NAME_FORBIDDEN_RE = /[/\\?%*:|"<>]/g;
+  var WIN_DEVICE_RE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\..*)?$/i;
+  function sanitizeEntryName(raw) {
+    return String(raw == null ? "" : raw).trim().replace(NAME_FORBIDDEN_RE, "_");
+  }
+  function checkEntryName(name) {
+    const n = String(name == null ? "" : name);
+    if (!n.trim()) return "empty";
+    if (n === "." || n === "..") return "invalid";
+    if (/[\u0000-\u001f\u007f/\\]/.test(n)) return "invalid";
+    if (n.startsWith(".")) return "hidden";
+    if (/[. ]$/.test(n) || n.startsWith(" ")) return "edge";
+    if (WIN_DEVICE_RE.test(n)) return "device";
+    if (/\.revery_(tmp|bak)$/i.test(n)) return "internal";
+    if (new TextEncoder().encode(n).length > 255) return "long";
+    return null;
+  }
+  function renamedFileName(oldName, typed) {
+    const oldExt = extOf(oldName);
+    if (!oldExt) return typed;
+    const newExt = extOf(typed);
+    if (newExt) {
+      if (newExt.toLowerCase() === oldExt.toLowerCase()) return typed;
+      const g = extGroup(newExt);
+      if (g && g === extGroup(oldExt)) return typed;
+    }
+    return typed + oldExt;
+  }
   function uniqueName(existingNames, stem, suffix = "", ignoreName = null) {
     const taken = /* @__PURE__ */ new Set();
     for (const n of existingNames || []) {
@@ -741,26 +1004,12 @@
   function stripMarkdownForPreview(raw) {
     return raw.replace(/^---[\s\S]*?---\n?/m, "").replace(/^#{1,6}\s+/gm, "").replace(/!\[.*?\]\(.*?\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`{1,3}[^`]*`{1,3}/g, "").replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, "$1").replace(/^\s*[-*+]\s+/gm, "").replace(/^\s*\d+\.\s+/gm, "").replace(/\n{2,}/g, " ").replace(/\s+/g, " ").trim();
   }
-  var SUPPORTED_TEXT = /* @__PURE__ */ new Set([".md", ".txt"]);
-  var SUPPORTED_MEDIA = /* @__PURE__ */ new Set([
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
-    ".svg",
-    ".bmp",
-    ".ico",
-    ".tiff",
-    ".tif",
-    ".avif"
-  ]);
   function getFileCategory(name) {
     const dot = name.lastIndexOf(".");
     if (dot < 0) return "other";
     const ext = name.substring(dot).toLowerCase();
-    if (SUPPORTED_TEXT.has(ext)) return "text";
-    if (SUPPORTED_MEDIA.has(ext)) return "media";
+    if (TEXT_EXTS.has(ext)) return "text";
+    if (MEDIA_EXTS.has(ext)) return "media";
     return "other";
   }
   function mediaMarkdown(mediaPath, fromDir) {
@@ -774,30 +1023,28 @@
     dataTransfer.setData("text/plain", media.map((p) => mediaMarkdown(p)).join("\n"));
   }
   async function uniqueDestPath(targetDir, name, type) {
-    const sep = targetDir.endsWith("/") || targetDir.endsWith("\\") ? "" : "/";
     let existingNames;
     try {
       const entries = await window.NativeAPI.readDirectory(targetDir);
       existingNames = entries.map((e) => e.name);
     } catch {
-      return `${targetDir}${sep}${name}`;
+      return joinPath(targetDir, name);
     }
     const lastDot = name.lastIndexOf(".");
     const hasExt = type === "file" && lastDot > 0;
     const base = hasExt ? name.substring(0, lastDot) : name;
     const ext = hasExt ? name.substring(lastDot) : "";
-    return `${targetDir}${sep}${uniqueName(existingNames, base, ext)}`;
+    return joinPath(targetDir, uniqueName(existingNames, base, ext));
   }
   async function uniquePath(dir, baseName, ext, ignoreName = null) {
-    const sep = dir.endsWith("/") || dir.endsWith("\\") ? "" : "/";
     let names;
     try {
       const entries = await window.NativeAPI.readDirectory(dir);
       names = entries.map((e) => e.name);
     } catch {
-      return `${dir}${sep}${baseName}.${ext}`;
+      return joinPath(dir, `${baseName}.${ext}`);
     }
-    return `${dir}${sep}${uniqueName(names, baseName, "." + ext, ignoreName)}`;
+    return joinPath(dir, uniqueName(names, baseName, "." + ext, ignoreName));
   }
   async function fileExistsViaListing(p) {
     if (typeof p !== "string") return null;
@@ -912,6 +1159,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     "search": {
       vb: "57.18 -526.12 547.17 547.17",
       d: "M238.87696838378906 162.7147979736328C282.5114288330078 162.71478271484375 322.4273376464844 177.88890075683594 353.6632385253906 203.2783660888672C396.7949981689453 160.66798400878906 543.6646728515625 12.75921630859375 571.9126434326172 -15.488754272460938C575.6201324462891 -19.196258544921875 580.4839019775391 -21.050003051757812 585.3476715087891 -21.050003051757812C595.8454284667969 -21.050003051757812 604.3439483642578 -12.551589965820312 604.3439483642578 -2.0537261962890625C604.3439483642578 2.8100433349609375 602.4902038574219 7.6738128662109375 598.7826995849609 11.381301879882812C596.6297149658203 13.534286499023438 414.57054138183594 196.5345458984375 380.49571228027344 230.2235565185547C405.5955810546875 261.3692321777344 420.57916259765625 301.054931640625 420.57916259765625 344.416015625C420.57916259765625 445.1826477050781 339.6550598144531 526.1181945800781 238.8779296875 526.1181945800781C138.11129760742188 526.1181945800781 57.175750732421875 445.194091796875 57.175750732421875 344.4169616699219C57.175750732421875 243.65032958984375 138.099853515625 162.71478271484375 238.87698364257812 162.71478271484375ZM95.20584106445312 344.4160919189453C95.20582580566406 424.23651123046875 159.05648803710938 488.0881042480469 238.87704467773438 488.0881042480469C318.6974639892578 488.0881042480469 382.54905700683594 424.23744201660156 382.54905700683594 344.41688537597656C382.54905700683594 264.5964660644531 318.6983947753906 200.744873046875 238.87783813476562 200.744873046875C159.0574188232422 200.744873046875 95.20582580566406 264.5955352783203 95.20582580566406 344.4160919189453Z"
+    },
+    /* link.svg (glyph-u1F517) */
+    "link": {
+      vb: "73.86 -511.15 523.27 523.27",
+      d: "M550.8486328125 464.58984375C502.4599609375 512.9794921875 446.7431640625 525.4775390625 414.71484375 493.44921875L225.2109375 303.9443359375C191.2001953125 269.9345703125 209.234375 212.60546875 253.9169921875 167.9228515625C263.556640625 158.283203125 274.162109375 149.611328125 285.2578125 142.3759765625C286.4501953125 141.576171875 287.712890625 140.92578125 289.01953125 140.42578125C292.5888671875 139.0556640625 296.466796875 138.8115234375 300.130859375 139.6640625C303.47265625 140.4404296875 306.6455078125 142.130859375 309.251953125 144.7373046875C316.67578125 152.1611328125 316.67578125 164.1796875 309.251953125 171.6025390625C308.1044921875 172.7509765625 306.845703125 173.7216796875 305.51171875 174.5146484375C300.603515625 177.9580078125 292.150390625 183.51953125 280.8544921875 194.814453125C253.591796875 222.078125 234.9580078125 259.9619140625 252.0751953125 277.080078125L441.580078125 466.583984375C458.9248046875 483.9287109375 497.1162109375 464.5751953125 523.9736328125 437.7177734375C548.494140625 413.197265625 570.583984375 373.546875 552.6005859375 355.5634765625L505.005859375 307.9677734375C497.5830078125 300.544921875 497.58203125 288.5263671875 505.005859375 281.1025390625C512.4287109375 273.6796875 524.4462890625 273.6796875 531.8701171875 281.1025390625L579.4658203125 328.6982421875C613.3271484375 362.5595703125 595.64453125 419.794921875 550.8486328125 464.58984375ZM349.3212890625 152.2841796875 229.453125 32.4150390625C211.4697265625 14.431640625 171.818359375 36.5224609375 147.298828125 61.0419921875C120.447265625 87.8935546875 101.083984375 126.0888671875 118.431640625 143.4365234375L168.3876953125 193.392578125C175.8115234375 200.81640625 175.8115234375 212.833984375 168.3876953125 220.2568359375C160.96484375 227.6806640625 148.9462890625 227.6806640625 141.5234375 220.2568359375L91.5673828125 170.3017578125C59.5380859375 138.2724609375 72.0380859375 82.5556640625 120.4267578125 34.16796875C165.2177734375 -10.623046875 222.4541015625 -28.3125 256.318359375 5.55078125L445.822265625 195.0556640625C479.861328125 229.09375 461.7255859375 286.458984375 417.1669921875 331.0166015625C409.212890625 338.970703125 400.603515625 346.267578125 391.61328125 352.6494140625C390.279296875 353.62109375 388.849609375 354.3974609375 387.359375 354.978515625C383.78125 356.3779296875 379.8828125 356.642578125 376.197265625 355.7978515625C372.8330078125 355.0283203125 369.6376953125 353.3330078125 367.0146484375 350.7099609375C359.591796875 343.287109375 359.591796875 331.2685546875 367.0146484375 323.845703125C367.9462890625 322.9140625 368.9501953125 322.099609375 370.0078125 321.4013671875C373.978515625 318.4189453125 380.8369140625 313.537109375 390.125 304.248046875C417.40234375 276.9716796875 436.1044921875 239.06640625 418.9580078125 221.919921875L355.255859375 158.21875C354.0869140625 157.478515625 352.98046875 156.599609375 351.9599609375 155.580078125C350.9404296875 154.5595703125 350.0615234375 153.453125 349.3212890625 152.2841796875Z"
     }
   };
   function icon(name) {
@@ -1128,6 +1380,18 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       }
     });
     _watchedPath = filePath;
+  }
+  async function stopWatchingFile() {
+    const p = _watchedPath;
+    _watchedPath = null;
+    if (!p) return;
+    try {
+      await window.NativeAPI.unwatchFile(p);
+    } catch (_) {
+    }
+  }
+  function watchedPath() {
+    return _watchedPath;
   }
 
   // src/sidebar/projects.js
@@ -1371,6 +1635,13 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
     return next;
   }
+  var _goneActivePaths = /* @__PURE__ */ new Set();
+  function markActivePathGone(p) {
+    if (p) _goneActivePaths.add(pathKey(p));
+  }
+  function forgetGonePath(p) {
+    if (p) _goneActivePaths.delete(pathKey(p));
+  }
   var _firstDirtyTime = 0;
   var _autoSaveCooldownUntil = 0;
   var _scratchpadFailureWarned = false;
@@ -1456,6 +1727,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         return;
       }
       S.activeFilePath = newPath;
+      forgetGonePath(newPath);
       S.previewMediaPath = null;
       rememberDiskContent(written);
       releaseSession();
@@ -1568,12 +1840,18 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       docTitleEl.value = oldBaseName;
       return;
     }
-    const safeName = rawName.replace(/[/\\?%*:|"<>]/g, "_");
+    const safeName = sanitizeEntryName(rawName);
     if (safeName === oldBaseName) {
       docTitleEl.value = safeName;
       return;
     }
     if (_renamePromise) return _renamePromise;
+    const problem = checkEntryName(safeName) || checkEntryName(`${safeName}.${ext}`);
+    if (problem) {
+      docTitleEl.value = oldBaseName;
+      await showNameProblem(problem, safeName);
+      return;
+    }
     const execRename = async () => {
       S._operationLock = true;
       try {
@@ -1588,9 +1866,17 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
             (e) => console.warn("[Sidebar] Rename journal write failed (non-fatal):", e)
           );
         }
-        await window.NativeAPI.renameNode(oldPath, finalNewPath);
+        await _enqueueDiskOp(async () => {
+          await stopWatchingFile();
+          try {
+            await window.NativeAPI.renameNode(oldPath, finalNewPath);
+          } catch (err) {
+            if (S.activeFilePath) startWatchingFile(S.activeFilePath);
+            throw err;
+          }
+          await retargetActiveFile(oldPath, finalNewPath);
+        });
         pushUndo({ type: "rename", records: [{ oldPath, newPath: finalNewPath }] });
-        await retargetActiveFile(oldPath, finalNewPath);
         const finalBaseName = finalNewPath.replace(/\\/g, "/").split("/").pop().replace(new RegExp(`\\.${ext}$`), "");
         docTitleEl.value = finalBaseName;
         if (typeof window.NativeAPI.setPendingRename === "function") {
@@ -1646,6 +1932,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           if (enqueueGen !== S._replaceGeneration) return "deferred-replaced";
           if (auto && S._conflictHoldPath && S._conflictHoldPath === pathToSave) return "deferred-hold";
           const isActive = S.activeFilePath === pathToSave;
+          if (!isActive && _goneActivePaths.has(pathKey(pathToSave))) return "deferred-gone";
           const diskText = toDiskText(contentToSave, isActive ? S._diskEol : "\n");
           await window.NativeAPI.writeFile(pathToSave, diskText);
           if (isActive) rememberDiskContent(diskText);
@@ -1665,6 +1952,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         return false;
       }
       if (writeResult !== "ok") {
+        if (writeResult === "deferred-gone" && S.activeFilePath && S.isDirty) scheduleAutoSave();
         return false;
       }
       _autoSaveCooldownUntil = 0;
@@ -1705,6 +1993,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   async function retargetActiveFile(oldPath, newPath) {
     if (!oldPath || !newPath) return;
     S.activeFilePath = newPath;
+    markActivePathGone(oldPath);
+    forgetGonePath(newPath);
     if (S._conflictHoldPath === oldPath) setAutosaveHold(newPath, S._holdReason);
     if (docTitleEl) docTitleEl.value = baseNameOf(newPath).replace(/\.(md|txt)$/, "");
     startWatchingFile(newPath);
@@ -1756,7 +2046,21 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     window.sidebarGetRootPath = () => S.rootPath;
     window.sidebarIsDirty = () => S.isDirty;
     window.sidebarPivotToNewFile = async function(newPath, newRoot, savedContent) {
+      if (newRoot && newRoot !== S.rootPath) {
+        try {
+          const c = await window.NativeAPI.setRootPath(newRoot);
+          if (typeof c === "string" && c) newRoot = c;
+        } catch (e) {
+          console.warn("[Sidebar] Save As: could not resolve the new root (kept as given):", e);
+        }
+      }
+      try {
+        const c = await window.NativeAPI.canonicalEntryPath(newPath);
+        if (typeof c === "string" && c) newPath = c;
+      } catch (_) {
+      }
       S.activeFilePath = newPath;
+      forgetGonePath(newPath);
       if (typeof savedContent === "string" && editor.value !== savedContent) {
         markDirty();
         scheduleAutoSave();
@@ -1767,6 +2071,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       await window.NativeAPI.setLastOpenedFile(newPath);
       if (newRoot && newRoot !== S.rootPath) {
         S.rootPath = newRoot;
+        clearUndoStack();
         try {
           localStorage.setItem("revery_root_path", S.rootPath);
         } catch (_) {
@@ -1807,7 +2112,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
             console.warn("[Sidebar] scratchpad placeholder volatile failed (non-fatal):", e);
           }
           if (!session.creating && Date.now() >= session.retryAfter) {
-            const baseName = S.previewMediaPath ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, "") : "untitled";
+            let baseName = S.previewMediaPath ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, "") : "untitled";
+            if (checkEntryName(baseName) || checkEntryName(baseName + ".md")) baseName = "untitled";
             createNoteFromScratchpad(session, targetDir, baseName);
           }
           return;
@@ -1829,14 +2135,35 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         }
         await saveActiveFile();
       }
-      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "z") {
-        const editorHasFocus = window.cmView ? window.cmView.hasFocus : false;
-        if (editorHasFocus) return;
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z") {
+        if (!sidebarUndoAllowed(e)) return;
         if (!hasUndoOperations()) return;
         e.preventDefault();
         await undoLastOperation();
       }
     });
+    const isPanelSurface = (el) => !!(el && el.closest && (sidebarPanel && sidebarPanel.contains(el) || el.closest("#context-menu, #sidebar-sort-menu, .revery-input-overlay")));
+    document.addEventListener("pointerdown", (e) => {
+      _panelArmed = isPanelSurface(e.target);
+    }, true);
+    document.addEventListener("dragstart", (e) => {
+      if (isPanelSurface(e.target)) _panelArmed = true;
+    }, true);
+    document.addEventListener("focusin", (e) => {
+      if (!isPanelSurface(e.target)) _panelArmed = false;
+    }, true);
+  }
+  var _panelArmed = false;
+  function sidebarUndoAllowed(e) {
+    if (window.cmView && window.cmView.hasFocus) return false;
+    const editable = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+    const t = e.target;
+    if (t && t.closest && t.closest(editable)) return false;
+    const a = document.activeElement;
+    if (a && a !== document.body && a.closest && a.closest(editable)) return false;
+    if (document.querySelector(".revery-input-overlay")) return false;
+    if (!S.sidebarOpen) return false;
+    return _panelArmed;
   }
 
   // src/sidebar/panel.js
@@ -2017,6 +2344,106 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
 
   // src/sidebar/fileops.js
+  function errText(err) {
+    return String(err && err.message || err).replace(/^Error invoking remote method '[^']*': /, "").replace(/^Error: /, "");
+  }
+  function reportBusy() {
+    if (typeof window.showStatusWarning === "function") {
+      window.showStatusWarning("fs-busy", window.t("Busy \u2014 try again in a moment."), { priority: 5, ttl: 2500 });
+    }
+  }
+  function nameProblemText(reason, name) {
+    switch (reason) {
+      case "empty":
+        return window.t("Please enter a name.");
+      case "hidden":
+        return window.t("A name that starts with a dot would hide the item from the file panel. Please choose another name.");
+      case "edge":
+        return window.t("A name cannot start with a space or end with a dot or a space. Please choose another name.");
+      case "device":
+        return window.t('"{name}" is a reserved name on Windows. Please choose another name.').replace("{name}", name);
+      case "internal":
+        return window.t("This name ends like one of Revery's own safety files. Please choose another name.");
+      case "long":
+        return window.t("This name is too long. Please choose a shorter name.");
+      default:
+        return window.t("This name cannot be used. Please choose another name.");
+    }
+  }
+  async function showNameProblem(reason, name) {
+    try {
+      await window.NativeAPI.showMessageBox({
+        type: "warning",
+        title: window.t("Invalid Name"),
+        message: nameProblemText(reason, name),
+        buttons: [window.t("OK")]
+      });
+    } catch (_) {
+    }
+  }
+  function activeAffectedBy(paths) {
+    if (!S.activeFilePath) return false;
+    return paths.some((p) => isInsideRoot(S.activeFilePath, p));
+  }
+  async function inDiskLock(involvesActive, fn) {
+    return _enqueueDiskOp(async () => {
+      if (involvesActive) await stopWatchingFile();
+      try {
+        return await fn();
+      } finally {
+        if (involvesActive && S.activeFilePath && !samePath(watchedPath(), S.activeFilePath)) {
+          startWatchingFile(S.activeFilePath);
+        }
+      }
+    });
+  }
+  function remapPathState(records) {
+    for (const { oldPath, newPath } of records) {
+      const f = (p) => remapUnder(p, oldPath, newPath) || p;
+      if (S.selectedDirPath) S.selectedDirPath = f(S.selectedDirPath);
+      if (S.cardViewDir) S.cardViewDir = f(S.cardViewDir);
+      if (S.previewMediaPath) S.previewMediaPath = f(S.previewMediaPath);
+      if (S.selectionAnchor) S.selectionAnchor = f(S.selectionAnchor);
+      const dirs = [...expandedDirs];
+      expandedDirs.clear();
+      for (const d of dirs) expandedDirs.add(f(d));
+    }
+  }
+  function forgetDeletedPathState(p) {
+    const parent = parentPathOf(p);
+    const hit = (q) => q && isInsideRoot(q, p);
+    if (hit(S.selectedDirPath)) S.selectedDirPath = parent;
+    if (hit(S.cardViewDir)) S.cardViewDir = parent;
+    if (hit(S.selectionAnchor)) S.selectionAnchor = null;
+    forgetPreviewIfDeleted(p);
+    for (const d of [...expandedDirs]) if (hit(d)) expandedDirs.delete(d);
+  }
+  async function closeDeletedActiveFile() {
+    markActivePathGone(S.activeFilePath);
+    cancelPendingAutoSave();
+    S.activeFilePath = null;
+    markClean();
+    await window.NativeAPI.clearLastOpenedFile().catch(() => {
+    });
+    if (typeof window.replaceEditorContent === "function") {
+      window.replaceEditorContent("");
+    } else {
+      editor.value = "";
+      if (typeof render === "function") render();
+      if (typeof countWords === "function") countWords();
+    }
+  }
+  function withoutNested(items) {
+    return items.filter((it) => !items.some((o) => o !== it && !samePath(o.path, it.path) && isInsideRoot(it.path, o.path)));
+  }
+  function itemInfo(p) {
+    const el = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(p)}"], .sidebar-card[data-path="${CSS.escape(p)}"]`);
+    return {
+      type: el ? el.dataset.type : "file",
+      link: !!(el && el.dataset.link === "1"),
+      known: !!el
+    };
+  }
   var MAX_UNDO = 30;
   var undoStack = [];
   var _dirOf = (p) => p.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
@@ -2127,14 +2554,6 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   function hasUndoOperations() {
     return undoStack.length > 0;
   }
-  function activeAffectedBy(paths) {
-    if (!S.activeFilePath) return false;
-    const a = _n(S.activeFilePath);
-    return paths.some((p) => {
-      const n = _n(p);
-      return a === n || a.startsWith(n + "/");
-    });
-  }
   async function settleActiveFileBefore(paths) {
     if (!activeAffectedBy(paths)) return true;
     const held = !!S._conflictHoldPath && S._conflictHoldPath === S.activeFilePath;
@@ -2144,36 +2563,54 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
   async function followActiveFile(from, to) {
     if (!S.activeFilePath) return;
-    const a = _n(S.activeFilePath);
-    const f = _n(from);
-    if (a === f) await retargetActiveFile(S.activeFilePath, to);
-    else if (a.startsWith(f + "/")) await retargetActiveFile(S.activeFilePath, _n(to) + a.substring(f.length));
+    const next = remapUnder(S.activeFilePath, from, to);
+    if (next && next !== S.activeFilePath) await retargetActiveFile(S.activeFilePath, next);
+  }
+  function clearUndoStack() {
+    undoStack.length = 0;
   }
   async function undoLastOperation() {
-    if (S._operationLock || undoStack.length === 0) return;
+    if (undoStack.length === 0) return;
+    if (S._operationLock) {
+      reportBusy();
+      return;
+    }
     S._operationLock = true;
     try {
       const op = undoStack.pop();
       const errors = [];
-      if (!await settleActiveFileBefore(op.records.map((r) => r.newPath))) {
+      const undone = [];
+      const currentPaths = op.records.map((r) => r.newPath);
+      if (!await settleActiveFileBefore(currentPaths)) {
         undoStack.push(op);
         return;
       }
-      for (const { oldPath, newPath } of [...op.records].reverse()) {
-        try {
-          await window.NativeAPI.renameNode(newPath, oldPath);
-          await followActiveFile(newPath, oldPath);
-          if (S.selectedDirPath && S.selectedDirPath.replace(/\\/g, "/") === newPath.replace(/\\/g, "/")) {
-            S.selectedDirPath = oldPath;
+      await inDiskLock(activeAffectedBy(currentPaths), async () => {
+        for (const { oldPath, newPath } of [...op.records].reverse()) {
+          try {
+            await window.NativeAPI.renameNode(newPath, oldPath);
+          } catch (err) {
+            errors.push(`${baseNameOf(newPath)}: ${errText(err)}`);
+            continue;
           }
-        } catch (err) {
-          errors.push(`${newPath.replace(/\\/g, "/").split("/").pop()}: ${err.message}`);
+          const back = { oldPath: newPath, newPath: oldPath };
+          undone.push(back);
+          await followActiveFile(newPath, oldPath);
+          remapPathState([back]);
         }
-      }
+      });
       selectedItems.clear();
       S.selectionAnchor = null;
       await renderTree();
-      await updateLinksAfterPathChange(invertRecords(op.records), { confirm: false });
+      if (undone.length) await updateLinksAfterPathChange(undone, { confirm: false });
+      if (undone.length && typeof window.showStatusWarning === "function") {
+        const msg = op.type === "rename" ? window.t('Undone: rename of "{name}".') : window.t("Undone: move of {n} item(s).");
+        window.showStatusWarning(
+          "fs-undo",
+          msg.replace("{name}", baseNameOf(undone[0].newPath)).replace("{n}", undone.length),
+          { priority: 20, ttl: 5e3 }
+        );
+      }
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
@@ -2187,40 +2624,39 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
   }
   async function moveNodes(items, targetDir) {
-    if (S._operationLock || !items.length || !targetDir) return;
+    if (!items.length || !targetDir) return;
+    if (S._operationLock) {
+      reportBusy();
+      return;
+    }
+    if (!S.rootPath || !isInsideRoot(targetDir, S.rootPath)) return;
     S._operationLock = true;
     try {
-      if (!await settleActiveFileBefore(items.map((it) => it.path))) {
+      const plan = withoutNested(items).filter(({ path: src }) => !samePath(src, S.rootPath) && !isInsideRoot(targetDir, src) && !samePath(dirOf(src), targetDir));
+      if (!plan.length) return;
+      const srcPaths = plan.map((it) => it.path);
+      if (!await settleActiveFileBefore(srcPaths)) {
         return;
       }
-      const normalTarget = targetDir.replace(/\\/g, "/");
-      const normalRoot = (S.rootPath || "").replace(/\\/g, "/");
       const errors = [];
       const movedRecords = [];
-      for (const { path: srcPath, type } of items) {
-        const normalSrc = srcPath.replace(/\\/g, "/");
-        const srcParentNorm = normalSrc.substring(0, normalSrc.lastIndexOf("/"));
-        if (normalSrc === normalRoot) continue;
-        if (normalTarget === normalSrc || normalTarget.startsWith(normalSrc + "/")) continue;
-        if (srcParentNorm === normalTarget) continue;
-        const name = normalSrc.split("/").pop();
-        const destPath = await uniqueDestPath(targetDir, name, type);
-        try {
-          await window.NativeAPI.renameNode(srcPath, destPath);
-          movedRecords.push({ oldPath: srcPath, newPath: destPath });
-        } catch (err) {
-          errors.push(`${name}: ${err.message}`);
-          continue;
-        }
-        await followActiveFile(srcPath, destPath);
-        if (S.selectedDirPath) {
-          const normalSel = S.selectedDirPath.replace(/\\/g, "/");
-          if (normalSel === normalSrc || normalSel.startsWith(normalSrc + "/")) {
-            S.selectedDirPath = targetDir;
+      await inDiskLock(activeAffectedBy(srcPaths), async () => {
+        for (const { path: srcPath, type } of plan) {
+          const name = baseNameOf(srcPath);
+          const destPath = await uniqueDestPath(targetDir, name, type);
+          try {
+            await window.NativeAPI.renameNode(srcPath, destPath);
+          } catch (err) {
+            errors.push(`${name}: ${errText(err)}`);
+            continue;
           }
+          const rec = { oldPath: srcPath, newPath: destPath };
+          movedRecords.push(rec);
+          await followActiveFile(srcPath, destPath);
+          remapPathState([rec]);
         }
-        expandedDirs.add(targetDir);
-      }
+      });
+      if (movedRecords.length) expandedDirs.add(targetDir);
       selectedItems.clear();
       S.selectionAnchor = null;
       if (movedRecords.length) pushUndo({ type: "move", records: movedRecords });
@@ -2238,19 +2674,79 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       S._operationLock = false;
     }
   }
-  function forgetPreviewIfDeleted(normalNode) {
-    if (!S.previewMediaPath) return;
-    const normalPrev = S.previewMediaPath.replace(/\\/g, "/");
-    if (normalPrev === normalNode || normalPrev.startsWith(normalNode + "/")) {
+  function moveUpTarget(paths) {
+    if (!paths.length || !S.rootPath) return null;
+    const parent = parentPathOf(paths[0]);
+    if (!paths.every((p) => samePath(parentPathOf(p), parent))) return null;
+    if (samePath(parent, S.rootPath) || !isInsideRoot(parent, S.rootPath)) return null;
+    return parentPathOf(parent);
+  }
+  async function moveItemsUp(items) {
+    const target = moveUpTarget(items.map((it) => it.path));
+    if (target) await moveNodes(items, target);
+  }
+  var PICKER_MAX_FOLDERS = 3e3;
+  async function listProjectFolders() {
+    const folders = [{ path: S.rootPath, name: baseNameOf(S.rootPath) || S.rootPath, rel: "", depth: 0 }];
+    let truncated = false;
+    const walk = async (dir, rel, depth) => {
+      let entries;
+      try {
+        entries = await window.NativeAPI.readDirectory(dir);
+      } catch (_) {
+        return;
+      }
+      const dirs = entries.filter((e) => e.type === "dir" && !e.link && !e.name.startsWith(".")).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+      for (const e of dirs) {
+        if (folders.length >= PICKER_MAX_FOLDERS) {
+          truncated = true;
+          return;
+        }
+        const r = rel ? rel + "/" + e.name : e.name;
+        folders.push({ path: e.path, name: e.name, rel: r, depth });
+        if (depth < 32) await walk(e.path, r, depth + 1);
+      }
+    };
+    await walk(S.rootPath, "", 1);
+    return { folders, truncated };
+  }
+  async function moveItemsTo(items) {
+    if (!items.length || !S.rootPath) return;
+    if (S._operationLock) {
+      reportBusy();
+      return;
+    }
+    const paths = items.map((it) => it.path);
+    const parent = parentPathOf(paths[0]);
+    const sameParent = paths.every((p) => samePath(parentPathOf(p), parent));
+    const title = items.length === 1 ? window.t('Move "{name}" to\u2026').replace("{name}", baseNameOf(paths[0])) : window.t("Move {n} items to\u2026").replace("{n}", items.length);
+    const target = await showFolderPickerDialog({
+      title,
+      okLabel: window.t("Move here"),
+      load: async () => {
+        const { folders, truncated } = await listProjectFolders();
+        return {
+          truncated,
+          folders: folders.filter((f) => !paths.some((p) => isInsideRoot(f.path, p))).map((f) => sameParent && samePath(f.path, parent) ? { ...f, disabled: true, note: window.t("(current folder)") } : f)
+        };
+      }
+    });
+    if (target) await moveNodes(items, target);
+  }
+  function forgetPreviewIfDeleted(node) {
+    if (S.previewMediaPath && isInsideRoot(S.previewMediaPath, node)) {
       S.previewMediaPath = null;
     }
   }
   async function renameSelectedNodes() {
-    if (S._operationLock || selectedItems.size === 0) return;
+    if (selectedItems.size === 0) return;
+    if (S._operationLock) {
+      reportBusy();
+      return;
+    }
     if (selectedItems.size === 1) {
       const p = [...selectedItems][0];
-      const el = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(p)}"]`);
-      await renameNode(p, el ? el.dataset.type : "file");
+      await renameNode(p, itemInfo(p).type);
       selectedItems.clear();
       S.selectionAnchor = null;
       return;
@@ -2258,106 +2754,113 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     S._operationLock = true;
     try {
       const paths = [...selectedItems];
-      const firstName = paths[0].replace(/\\/g, "/").split("/").pop();
+      const firstName = baseNameOf(paths[0]);
       const defaultBase = firstName.replace(/\.(md|txt)$/, "");
       const baseName = await showInputDialog(
         window.t("Rename {n} items \u2014 enter a base name").replace("{n}", paths.length) + "\n" + window.t("(items will be named: name, name_2, name_3 \u2026):"),
         defaultBase
       );
       if (!baseName) return;
-      const safeBase = baseName.trim().replace(/[/\\?%*:|"<>]/g, "_");
-      if (!safeBase) return;
-      if (!await settleActiveFileBefore(paths)) return;
-      const renamedRecords = [];
+      const safeBase = sanitizeEntryName(baseName);
+      const baseProblem = checkEntryName(safeBase);
+      if (baseProblem) {
+        await showNameProblem(baseProblem, safeBase);
+        return;
+      }
+      const plan = [];
       for (let i = 0; i < paths.length; i++) {
         const srcPath = paths[i];
-        const parts = srcPath.replace(/\\/g, "/").split("/");
-        const oldName = parts[parts.length - 1];
-        const el = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(srcPath)}"]`);
-        const type = el ? el.dataset.type : oldName.lastIndexOf(".") > 0 ? "file" : "dir";
-        const lastDot = oldName.lastIndexOf(".");
-        const hasExt = type === "file" && lastDot > 0;
-        const oldExt = hasExt ? oldName.substring(lastDot) : "";
+        const oldName = baseNameOf(srcPath);
+        const { type, known } = itemInfo(srcPath);
+        const isFile = known ? type === "file" : oldName.lastIndexOf(".") > 0;
+        const oldExt = isFile && oldName.lastIndexOf(".") > 0 ? oldName.substring(oldName.lastIndexOf(".")) : "";
         const newName = i === 0 ? `${safeBase}${oldExt}` : `${safeBase}_${i + 1}${oldExt}`;
         if (newName === oldName) continue;
-        parts[parts.length - 1] = newName;
-        const newPath = parts.join("/");
-        try {
-          await window.NativeAPI.renameNode(srcPath, newPath);
-          renamedRecords.push({ oldPath: srcPath, newPath });
-          await followActiveFile(srcPath, newPath);
-          if (S.selectedDirPath) {
-            const normalSel = S.selectedDirPath.replace(/\\/g, "/");
-            const normalSrc = srcPath.replace(/\\/g, "/");
-            const normalNew = newPath.replace(/\\/g, "/");
-            if (normalSel === normalSrc) {
-              S.selectedDirPath = newPath;
-            } else if (normalSel.startsWith(normalSrc + "/")) {
-              const rel = normalSel.substring(normalSrc.length);
-              S.selectedDirPath = normalNew + rel;
-            }
-          }
-        } catch (err) {
-          console.error("[Sidebar] multi-rename failed:", srcPath, err);
+        const problem = checkEntryName(newName);
+        if (problem) {
+          await showNameProblem(problem, newName);
+          return;
         }
+        plan.push({ oldPath: srcPath, newPath: joinPath(parentPathOf(srcPath), newName) });
       }
+      if (!plan.length) return;
+      if (!await settleActiveFileBefore(plan.map((r) => r.oldPath))) return;
+      const renamedRecords = [];
+      const errors = [];
+      await inDiskLock(activeAffectedBy(plan.map((r) => r.oldPath)), async () => {
+        for (const rec of plan) {
+          try {
+            await window.NativeAPI.renameNode(rec.oldPath, rec.newPath);
+          } catch (err) {
+            errors.push(`${baseNameOf(rec.oldPath)}: ${errText(err)}`);
+            continue;
+          }
+          renamedRecords.push(rec);
+          await followActiveFile(rec.oldPath, rec.newPath);
+          remapPathState([rec]);
+        }
+      });
       selectedItems.clear();
       S.selectionAnchor = null;
       if (renamedRecords.length) pushUndo({ type: "rename", records: renamedRecords });
       await renderTree();
       if (renamedRecords.length) await updateLinksAfterPathChange(renamedRecords);
+      if (errors.length) {
+        await window.NativeAPI.showMessageBox({
+          type: "warning",
+          title: window.t("Rename Issues"),
+          message: window.t("{n} item(s) could not be renamed:").replace("{n}", errors.length),
+          detail: errors.join("\n")
+        });
+      }
     } finally {
       S._operationLock = false;
     }
   }
   async function deleteSelectedNodes() {
-    if (S._operationLock || selectedItems.size === 0) return;
+    if (selectedItems.size === 0) return;
+    if (S._operationLock) {
+      reportBusy();
+      return;
+    }
     S._operationLock = true;
     try {
-      const paths = [...selectedItems];
-      const n = paths.length;
+      const items = withoutNested([...selectedItems].map((p) => ({ path: p })));
+      const n = selectedItems.size;
+      const anyLink = [...selectedItems].some((p) => itemInfo(p).link);
       const result = await window.NativeAPI.showMessageBox({
         type: "question",
-        buttons: [window.t("Delete"), window.t("Cancel")],
+        buttons: [window.t("Move to Trash"), window.t("Cancel")],
         defaultId: 1,
         title: window.t("Delete {n} item(s)").replace("{n}", n),
-        message: window.t("Permanently delete {n} item(s)?").replace("{n}", n),
-        detail: window.t("This cannot be undone.")
+        message: window.t("Move {n} item(s) to Trash?").replace("{n}", n),
+        detail: window.t("You can restore them from your system trash.") + (anyLink ? "\n" + window.t("Links are removed as links; the items they point to are not changed.") : "")
       });
       if (result.response !== 0) return;
-      for (const p of paths) {
-        try {
-          await window.NativeAPI.deleteNode(p);
-          const normalNode = p.replace(/\\/g, "/");
-          forgetPreviewIfDeleted(normalNode);
-          if (S.activeFilePath) {
-            const normalActive = S.activeFilePath.replace(/\\/g, "/");
-            if (normalActive === normalNode || normalActive.startsWith(normalNode + "/")) {
-              S.activeFilePath = null;
-              markClean();
-              await window.NativeAPI.clearLastOpenedFile();
-              if (typeof window.replaceEditorContent === "function") {
-                window.replaceEditorContent("");
-              } else {
-                editor.value = "";
-                if (typeof render === "function") render();
-                if (typeof countWords === "function") countWords();
-              }
-            }
+      const errors = [];
+      await inDiskLock(activeAffectedBy(items.map((it) => it.path)), async () => {
+        for (const { path: p } of items) {
+          try {
+            await window.NativeAPI.deleteNode(p);
+          } catch (err) {
+            errors.push(`${baseNameOf(p)}: ${errText(err)}`);
+            continue;
           }
-          if (S.selectedDirPath) {
-            const normalSel = S.selectedDirPath.replace(/\\/g, "/");
-            if (normalSel === normalNode || normalSel.startsWith(normalNode + "/")) {
-              S.selectedDirPath = S.rootPath;
-            }
-          }
-        } catch (err) {
-          console.error("[Sidebar] multi-delete failed:", p, err);
+          if (S.activeFilePath && isInsideRoot(S.activeFilePath, p)) await closeDeletedActiveFile();
+          forgetDeletedPathState(p);
         }
-      }
+      });
       selectedItems.clear();
       S.selectionAnchor = null;
       await renderTree();
+      if (errors.length) {
+        await window.NativeAPI.showMessageBox({
+          type: "warning",
+          title: window.t("Delete Issues"),
+          message: window.t("{n} item(s) could not be moved to the trash (nothing else was changed):").replace("{n}", errors.length),
+          detail: errors.join("\n")
+        });
+      }
     } finally {
       S._operationLock = false;
     }
@@ -2417,6 +2920,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       const saved = await saveActiveFile();
       if (!saved) return;
     }
+    try {
+      const c = await window.NativeAPI.canonicalEntryPath(filePath);
+      if (typeof c === "string" && c) filePath = c;
+    } catch (_) {
+    }
     let content;
     try {
       content = await window.NativeAPI.readFile(filePath);
@@ -2437,6 +2945,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (typeof countWords === "function") countWords();
     }
     S.activeFilePath = filePath;
+    forgetGonePath(filePath);
     markClean();
     rememberDiskContent(content);
     await window.NativeAPI.setLastOpenedFile(filePath);
@@ -2450,6 +2959,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     startWatchingFile(filePath);
   }
   async function createNewFile(targetDir) {
+    if (S._operationLock) {
+      reportBusy();
+      return;
+    }
     if (S.isDirty && S.activeFilePath) await saveActiveFile();
     const dir = targetDir || S.selectedDirPath || S.rootPath;
     if (!dir) {
@@ -2494,13 +3007,35 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
   }
   async function createNewFolder(targetDir) {
+    if (S._operationLock) {
+      reportBusy();
+      return;
+    }
     const dir = targetDir || S.selectedDirPath || S.rootPath;
     if (!dir) return;
     const name = await showInputDialog(window.t("New folder name:"));
     if (!name || !name.trim()) return;
-    const safeName = name.trim().replace(/[/\\?%*:|"<>]/g, "_");
-    const sep = dir.endsWith("/") || dir.endsWith("\\") ? "" : "/";
-    const newPath = `${dir}${sep}${safeName}`;
+    const safeName = sanitizeEntryName(name);
+    const problem = checkEntryName(safeName);
+    if (problem) {
+      await showNameProblem(problem, safeName);
+      return;
+    }
+    const newPath = joinPath(dir, safeName);
+    try {
+      const entries = await window.NativeAPI.readDirectory(dir);
+      if (entries.some((e) => e.name.toLowerCase() === safeName.toLowerCase())) {
+        await window.NativeAPI.showMessageBox({
+          type: "info",
+          title: window.t("Name Already Used"),
+          message: window.t('"{name}" already exists in this folder.').replace("{name}", safeName),
+          buttons: [window.t("OK")]
+        }).catch(() => {
+        });
+        return;
+      }
+    } catch (_) {
+    }
     try {
       await window.NativeAPI.createDirectory(newPath);
       expandedDirs.add(dir);
@@ -2510,106 +3045,115 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       console.error("[Sidebar] createDirectory failed:", err);
       await window.NativeAPI.showMessageBox({
         type: "error",
-        title: "Could Not Create Folder",
-        message: `Could not create folder "${safeName}".`,
-        detail: String(err)
+        title: window.t("Could Not Create Folder"),
+        message: window.t('Could not create folder "{name}".').replace("{name}", safeName),
+        detail: errText(err)
       });
     }
   }
   async function renameNode(nodePath, type) {
-    if (S._operationLock) return;
+    if (S._operationLock) {
+      reportBusy();
+      return;
+    }
     S._operationLock = true;
     try {
-      const parts = nodePath.replace(/\\/g, "/").split("/");
-      const oldName = parts[parts.length - 1];
-      const newName = await showInputDialog(window.t('Rename "{name}" to:').replace("{name}", oldName), oldName);
-      if (!newName || newName.trim() === oldName) return;
-      const safeName = newName.trim().replace(/[/\\?%*:|"<>]/g, "_");
-      const finalName = type === "file" && !safeName.includes(".") ? safeName + oldName.substring(oldName.lastIndexOf(".")) : safeName;
-      parts[parts.length - 1] = finalName;
-      const newPath = parts.join("/");
+      const oldName = baseNameOf(nodePath);
+      const typed = await showInputDialog(
+        window.t('Rename "{name}" to:').replace("{name}", oldName),
+        oldName,
+        { selectStem: type === "file" }
+      );
+      if (!typed) return;
+      const safeName = sanitizeEntryName(typed);
+      if (safeName === oldName) return;
+      const typedProblem = checkEntryName(safeName);
+      if (typedProblem) {
+        await showNameProblem(typedProblem, safeName);
+        return;
+      }
+      const finalName = type === "file" ? renamedFileName(oldName, safeName) : safeName;
+      if (finalName === oldName) return;
+      const finalProblem = checkEntryName(finalName);
+      if (finalProblem) {
+        await showNameProblem(finalProblem, finalName);
+        return;
+      }
+      const newPath = joinPath(parentPathOf(nodePath), finalName);
       if (!await settleActiveFileBefore([nodePath])) return;
+      const rec = { oldPath: nodePath, newPath };
       try {
-        await window.NativeAPI.renameNode(nodePath, newPath);
-        pushUndo({ type: "rename", records: [{ oldPath: nodePath, newPath }] });
-        await followActiveFile(nodePath, newPath);
-        if (S.selectedDirPath) {
-          const normalSel = S.selectedDirPath.replace(/\\/g, "/");
-          const normalOld = nodePath.replace(/\\/g, "/");
-          const normalNew = newPath.replace(/\\/g, "/");
-          if (normalSel === normalOld) {
-            S.selectedDirPath = newPath;
-          } else if (normalSel.startsWith(normalOld + "/")) {
-            const rel = normalSel.substring(normalOld.length);
-            S.selectedDirPath = normalNew + rel;
-          }
-        }
-        await renderTree();
-        await updateLinksAfterPathChange([{ oldPath: nodePath, newPath }]);
+        await inDiskLock(activeAffectedBy([nodePath]), async () => {
+          await window.NativeAPI.renameNode(nodePath, newPath);
+          await followActiveFile(nodePath, newPath);
+          remapPathState([rec]);
+        });
       } catch (err) {
         console.error("[Sidebar] renameNode failed:", err);
         await window.NativeAPI.showMessageBox({
           type: "error",
           title: window.t("Rename Failed"),
           message: window.t('Could not rename file to "{name}".').replace("{name}", finalName),
-          detail: String(err)
+          detail: errText(err)
         }).catch(() => {
         });
+        return;
       }
+      pushUndo({ type: "rename", records: [rec] });
+      await renderTree();
+      await updateLinksAfterPathChange([rec]);
     } finally {
       S._operationLock = false;
     }
   }
-  async function deleteNode(nodePath, type) {
-    if (S._operationLock) return;
+  async function deleteNode(nodePath, type, isLink = false) {
+    if (S._operationLock) {
+      reportBusy();
+      return;
+    }
     S._operationLock = true;
     try {
-      const name = nodePath.replace(/\\/g, "/").split("/").pop();
+      const name = baseNameOf(nodePath);
       const result = await window.NativeAPI.showMessageBox({
         type: "question",
         buttons: [window.t("Move to Trash"), window.t("Cancel")],
         defaultId: 1,
-        title: type === "dir" ? window.t("Delete Folder") : window.t("Delete File"),
-        message: `Move "${name}" to Trash?`,
-        detail: type === "dir" ? "The folder and all its contents will be moved to your system trash. You can restore them from there." : "The file will be moved to your system trash. You can restore it from there."
+        title: isLink ? window.t("Delete Link") : type === "dir" ? window.t("Delete Folder") : window.t("Delete File"),
+        message: (isLink ? window.t('Move the link "{name}" to Trash?') : window.t('Move "{name}" to Trash?')).replace("{name}", name),
+        detail: isLink ? window.t("Only the link is removed. The item it points to is not changed.") : type === "dir" ? window.t("The folder and all its contents will be moved to your system trash. You can restore them from there.") : window.t("The file will be moved to your system trash. You can restore it from there.")
       });
       if (result.response !== 0) return;
-      try {
-        await window.NativeAPI.deleteNode(nodePath);
-        const normalNode = nodePath.replace(/\\/g, "/");
-        forgetPreviewIfDeleted(normalNode);
-        if (S.activeFilePath) {
-          const normalActive = S.activeFilePath.replace(/\\/g, "/");
-          if (normalActive === normalNode || normalActive.startsWith(normalNode + "/")) {
-            S.activeFilePath = null;
-            markClean();
-            await window.NativeAPI.clearLastOpenedFile();
-            if (typeof window.replaceEditorContent === "function") {
-              window.replaceEditorContent("");
-            } else {
-              editor.value = "";
-              if (typeof render === "function") render();
-              if (typeof countWords === "function") countWords();
-            }
-          }
+      let failure = null;
+      await inDiskLock(activeAffectedBy([nodePath]), async () => {
+        try {
+          await window.NativeAPI.deleteNode(nodePath);
+        } catch (err) {
+          failure = err;
+          return;
         }
-        if (S.selectedDirPath) {
-          const normalSel = S.selectedDirPath.replace(/\\/g, "/");
-          if (normalSel === normalNode || normalSel.startsWith(normalNode + "/")) {
-            S.selectedDirPath = S.rootPath;
-          }
-        }
-        await renderTree();
-      } catch (err) {
-        console.error("[Sidebar] deleteNode failed:", err);
+        if (S.activeFilePath && isInsideRoot(S.activeFilePath, nodePath)) await closeDeletedActiveFile();
+        forgetDeletedPathState(nodePath);
+      });
+      if (failure) {
+        console.error("[Sidebar] deleteNode failed:", failure);
+        await window.NativeAPI.showMessageBox({
+          type: "error",
+          title: window.t("Delete Failed"),
+          message: window.t('"{name}" could not be moved to the trash. Nothing was changed.').replace("{name}", name),
+          detail: errText(failure)
+        }).catch(() => {
+        });
       }
+      await renderTree();
     } finally {
       S._operationLock = false;
     }
   }
   async function openFolder(folderPath) {
+    const canonical = await window.NativeAPI.setRootPath(folderPath);
+    if (typeof canonical === "string" && canonical) folderPath = canonical;
     S.rootPath = folderPath;
-    await window.NativeAPI.setRootPath(folderPath);
+    clearUndoStack();
     try {
       localStorage.setItem("revery_root_path", S.rootPath);
     } catch (e) {
@@ -2683,8 +3227,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         reader.onerror = () => alert("An error occurred while reading the file.");
         reader.onload = async (ev) => {
           const content = ev.target.result;
-          const baseName = file.name.replace(/\.[^/.]+$/, "");
+          let baseName = sanitizeEntryName(file.name.replace(/\.[^/.]+$/, ""));
           const ext = file.name.endsWith(".txt") ? "txt" : "md";
+          if (checkEntryName(baseName) || checkEntryName(`${baseName}.${ext}`)) baseName = "imported";
           const destPath = await uniquePath(dir, baseName, ext);
           try {
             await window.NativeAPI.createFile(destPath);
@@ -2923,6 +3468,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       itemEl.className = "sidebar-item";
       itemEl.dataset.path = entry.path;
       itemEl.dataset.type = entry.type;
+      if (entry.link) itemEl.dataset.link = "1";
       itemEl.style.paddingLeft = depth * 14 + 10 + "px";
       if (entry.type === "dir") {
         const isExpanded = expandedDirs.has(entry.path);
@@ -2947,7 +3493,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         });
       } else {
         const category = getFileCategory(entry.name);
-        if (category === "text") {
+        if (entry.link) {
+          iconEl.replaceChildren(icon("link"));
+          itemEl.classList.add("sidebar-link");
+          itemEl.title = window.t("Link");
+        } else if (category === "text") {
           iconEl.replaceChildren(icon(entry.name.endsWith(".md") ? "file" : "file-lines"));
         } else if (category === "media") {
           iconEl.replaceChildren(icon("image"));
@@ -3016,7 +3566,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       itemEl.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        showContextMenu(e.clientX, e.clientY, entry.path, entry.type);
+        showContextMenu(e.clientX, e.clientY, entry.path, entry.type, !!entry.link);
       });
     }
   }
@@ -3068,40 +3618,59 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       el.classList.toggle("selected-dir", el.dataset.path === S.selectedDirPath);
     });
   }
-  function showContextMenu(x, y, nodePath, type) {
+  function showContextMenu(x, y, nodePath, type, isLink = false) {
     const menu = document.getElementById("context-menu");
     if (!menu) return;
     const isMulti = selectedItems.size > 1 && selectedItems.has(nodePath);
     const nodeCategory = type === "file" ? getFileCategory(nodePath.replace(/\\/g, "/").split("/").pop()) : "dir";
+    const targets = isMulti ? [...selectedItems].map((p) => ({ path: p, type: itemInfo(p).type })) : [{ path: nodePath, type }];
+    const moveItems = [
+      { label: window.t("Move to\u2026"), action: () => moveItemsTo(targets) },
+      ...moveUpTarget(targets.map((t) => t.path)) ? [{ label: window.t("Move up one level"), action: () => moveItemsUp(targets) }] : []
+    ];
+    const del = { label: window.t("Delete"), action: () => deleteNode(nodePath, type, isLink), danger: true };
+    const explorer = { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(nodePath) };
     const items = isMulti ? [
       { label: window.t("Rename {n} items\u2026").replace("{n}", selectedItems.size), action: () => renameSelectedNodes() },
+      ...moveItems,
+      { sep: true },
       { label: window.t("Delete {n} items").replace("{n}", selectedItems.size), action: () => deleteSelectedNodes(), danger: true }
+    ] : isLink ? [
+      { label: window.t("Rename"), action: () => renameNode(nodePath, type) },
+      ...moveItems,
+      { sep: true },
+      explorer,
+      del
     ] : type === "dir" ? [
       { label: window.t("New File Here"), action: () => createNewFile(nodePath) },
       { label: window.t("New Folder Here"), action: () => createNewFolder(nodePath) },
       { label: window.t("Rename"), action: () => renameNode(nodePath, "dir") },
+      ...moveItems,
       { sep: true },
-      { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(nodePath) },
-      { label: window.t("Delete"), action: () => deleteNode(nodePath, "dir"), danger: true }
+      explorer,
+      del
     ] : nodeCategory === "text" ? [
       { label: window.t("Open"), action: () => openFile(nodePath) },
       { label: window.t("Rename"), action: () => renameNode(nodePath, "file") },
+      ...moveItems,
       { sep: true },
-      { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(nodePath) },
-      { label: window.t("Delete"), action: () => deleteNode(nodePath, "file"), danger: true }
+      explorer,
+      del
     ] : nodeCategory === "media" ? [
       { label: window.t("Preview"), action: () => openMediaFile(nodePath) },
       { label: window.t("Rename"), action: () => renameNode(nodePath, "file") },
+      ...moveItems,
       { sep: true },
-      { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(nodePath) },
-      { label: window.t("Delete"), action: () => deleteNode(nodePath, "file"), danger: true }
+      explorer,
+      del
     ] : (
       /* other/unsupported */
       [
         { label: window.t("Rename"), action: () => renameNode(nodePath, "file") },
+        ...moveItems,
         { sep: true },
-        { label: window.t("Show in Explorer"), action: () => window.NativeAPI.showInExplorer(nodePath) },
-        { label: window.t("Delete"), action: () => deleteNode(nodePath, "file"), danger: true }
+        explorer,
+        del
       ]
     );
     renderContextMenu(x, y, items);
@@ -3241,6 +3810,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     card.className = "sidebar-card";
     card.dataset.path = entry.path;
     card.dataset.type = entry.type;
+    if (entry.link) {
+      card.dataset.link = "1";
+      card.title = entry.name + " \u2014 " + window.t("Link");
+    }
     if (entry.type === "dir") card.classList.add("sidebar-card-dir");
     else if (category === "media") card.classList.add("sidebar-card-media");
     else if (category === "other") card.classList.add("sidebar-card-other");
@@ -3250,6 +3823,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     thumb.className = "sidebar-card-thumb";
     if (entry.type === "dir") {
       thumb.replaceChildren(icon("folder"));
+    } else if (entry.link) {
+      thumb.replaceChildren(icon("link"));
     } else if (category === "media" && window.slowHardwareMode) {
       thumb.replaceChildren(icon("image"));
     } else if (category === "media") {
@@ -3280,7 +3855,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     titleEl.title = entry.name;
     const previewEl = document.createElement("div");
     previewEl.className = "sidebar-card-preview";
-    if (category === "text" && !window.slowHardwareMode) {
+    if (category === "text" && !entry.link && !window.slowHardwareMode) {
       loadCardPreview(entry.path, previewEl, generation);
     } else if (entry.type === "dir") {
       previewEl.textContent = window.t("Folder");
@@ -3334,7 +3909,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     card.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      showContextMenu(e.clientX, e.clientY, entry.path, entry.type);
+      showContextMenu(e.clientX, e.clientY, entry.path, entry.type, !!entry.link);
     });
     card.draggable = true;
     card.addEventListener("dragstart", (e) => {
@@ -3361,39 +3936,118 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
     return card;
   }
-  async function renderCards(dirPath) {
-    if (!dirPath) return;
-    const generation = ++_cardGeneration;
-    treeEl.innerHTML = "";
-    treeEl.scrollTop = 0;
-    treeEl.classList.add("sidebar-card-view");
+  function pathSegments(dirPath) {
+    const root = S.rootPath;
+    const segs = [{ path: root, label: baseNameOf(root) || root }];
+    if (!root || samePath(dirPath, root) || !isInsideRoot(dirPath, root)) return segs;
+    const start = normalizePath(root).length;
+    for (let i = start + 1; i <= dirPath.length; i++) {
+      if (i === dirPath.length || dirPath[i] === "/" || dirPath[i] === "\\") {
+        const p = dirPath.slice(0, i);
+        if (p.length > start && !samePath(p, segs[segs.length - 1].path)) {
+          segs.push({ path: p, label: baseNameOf(p) });
+        }
+      }
+    }
+    return segs;
+  }
+  function navigateTo(dir) {
+    if (!dir || !S.rootPath || !isInsideRoot(dir, S.rootPath)) return;
+    S.cardViewDir = dir;
+    S.selectedDirPath = dir;
+    _previewCache.clear();
+    renderCards(dir);
+  }
+  function buildPathBar(dirPath) {
+    const navEl = document.createElement("div");
+    navEl.className = "sidebar-card-nav sidebar-card-path";
+    const segs = pathSegments(dirPath);
+    segs.forEach((seg, i) => {
+      if (i > 0) {
+        const sep = document.createElement("span");
+        sep.className = "sidebar-card-sep";
+        sep.textContent = "\u203A";
+        navEl.appendChild(sep);
+      }
+      if (i === segs.length - 1) {
+        const cur = document.createElement("span");
+        cur.className = "sidebar-card-crumb";
+        cur.textContent = seg.label;
+        cur.title = seg.path;
+        navEl.appendChild(cur);
+      } else {
+        const b = document.createElement("button");
+        b.className = "sidebar-card-seg";
+        b.textContent = seg.label;
+        b.title = window.t('Go to "{name}" \u2014 or drop items here to move them there').replace("{name}", seg.label);
+        b.dataset.dropDir = seg.path;
+        b.addEventListener("click", () => navigateTo(seg.path));
+        navEl.appendChild(b);
+      }
+    });
+    return navEl;
+  }
+  function buildCompactNav(dirPath) {
     const navEl = document.createElement("div");
     navEl.className = "sidebar-card-nav";
-    const normDir = dirPath.replace(/\\/g, "/");
-    const normRoot = (S.rootPath || "").replace(/\\/g, "/");
-    const isAtRoot = normDir === normRoot;
-    if (!isAtRoot) {
+    const atRoot = !S.rootPath || samePath(dirPath, S.rootPath) || !isInsideRoot(dirPath, S.rootPath);
+    if (!atRoot) {
+      const parent = parentPathOf(dirPath);
       const backBtn = document.createElement("button");
       backBtn.className = "sidebar-card-back";
       backBtn.textContent = "\u2190 " + window.t("Back");
-      backBtn.title = window.t("Go up one level");
-      backBtn.addEventListener("click", () => {
-        const parts = normDir.split("/");
-        parts.pop();
-        const parent = parts.join("/");
-        S.cardViewDir = parent;
-        S.selectedDirPath = parent;
-        _previewCache.clear();
-        renderCards(parent);
-      });
+      backBtn.title = window.t("Go up one level \u2014 or drop items here to move them there");
+      backBtn.dataset.dropDir = parent;
+      backBtn.addEventListener("click", () => navigateTo(parent));
       navEl.appendChild(backBtn);
     }
     const crumbEl = document.createElement("span");
     crumbEl.className = "sidebar-card-crumb";
-    crumbEl.textContent = normDir.split("/").pop() || normDir;
+    crumbEl.textContent = baseNameOf(dirPath) || dirPath;
     crumbEl.title = dirPath;
     navEl.appendChild(crumbEl);
-    treeEl.appendChild(navEl);
+    return navEl;
+  }
+  var _navDir = null;
+  function buildNav(dirPath) {
+    _navDir = dirPath;
+    return buildPathBar(dirPath);
+  }
+  function fitNav() {
+    const nav = treeEl.querySelector(".sidebar-card-nav");
+    if (!nav || !_navDir) return;
+    let bar = nav;
+    if (!bar.classList.contains("sidebar-card-path")) {
+      bar = buildPathBar(_navDir);
+      nav.replaceWith(bar);
+    }
+    if (bar.scrollWidth > bar.clientWidth + 1) bar.replaceWith(buildCompactNav(_navDir));
+  }
+  var _navObserver = null;
+  var _navLastWidth = -1;
+  function observeNavWidth() {
+    if (_navObserver || typeof ResizeObserver !== "function") return;
+    _navObserver = new ResizeObserver(() => {
+      if (S.sidebarViewMode !== "card") return;
+      const w = treeEl.clientWidth;
+      if (w === _navLastWidth) return;
+      _navLastWidth = w;
+      fitNav();
+    });
+    _navObserver.observe(treeEl);
+  }
+  async function renderCards(dirPath) {
+    if (!dirPath) return;
+    if (S.rootPath && !isInsideRoot(dirPath, S.rootPath)) {
+      dirPath = S.rootPath;
+      S.cardViewDir = dirPath;
+    }
+    const generation = ++_cardGeneration;
+    treeEl.innerHTML = "";
+    treeEl.scrollTop = 0;
+    treeEl.classList.add("sidebar-card-view");
+    treeEl.appendChild(buildNav(dirPath));
+    fitNav();
     const loadingEl = document.createElement("div");
     loadingEl.className = "sidebar-loading";
     loadingEl.textContent = window.t("Loading\u2026");
@@ -3475,6 +4129,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
   }
   function initCardView() {
+    observeNavWidth();
     if (btnViewBtn) {
       btnViewBtn.addEventListener("click", async () => {
         await setViewMode(S.sidebarViewMode === "card" ? "tree" : "card");
@@ -3717,6 +4372,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
 
   // src/sidebar/dnd.js
   function getDropTargetDir(eventTarget) {
+    const navTarget = eventTarget.closest && eventTarget.closest("[data-drop-dir]");
+    if (navTarget) {
+      const dir = navTarget.dataset.dropDir;
+      return dir && S.rootPath && isInsideRoot(dir, S.rootPath) ? dir : null;
+    }
     const dirCard = eventTarget.closest(".sidebar-card-dir");
     if (dirCard && !selectedItems.has(dirCard.dataset.path)) {
       return dirCard.dataset.path;
@@ -3736,6 +4396,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return S.rootPath;
   }
   function getDropTargetEl(eventTarget) {
+    const navTarget = eventTarget.closest && eventTarget.closest("[data-drop-dir]");
+    if (navTarget) return getDropTargetDir(eventTarget) ? navTarget : null;
     const dirPath = getDropTargetDir(eventTarget);
     if (!dirPath || dirPath === S.rootPath || S.sidebarViewMode === "card" && dirPath === S.cardViewDir) return null;
     if (S.sidebarViewMode === "card") {
@@ -3769,6 +4431,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       e.preventDefault();
       const targetDir = getDropTargetDir(e.target);
       clearDropHighlights();
+      if (!targetDir) {
+        S._dragItems = [];
+        return;
+      }
       if (S._dragItems.length) {
         const itemsToMove = [...S._dragItems];
         S._dragItems = [];
@@ -4120,9 +4786,18 @@ More information, click the \xBD logo in the center top of the screen.
             folder = parts.join("/");
           }
           if (folder) {
+            const canonicalRoot = await window.NativeAPI.setRootPath(folder);
+            if (typeof canonicalRoot === "string" && canonicalRoot) folder = canonicalRoot;
             S.rootPath = folder;
-            await window.NativeAPI.setRootPath(folder);
             lastFile = await reconcilePendingRename(journal, lastFile);
+            let canonicalLast = lastFile;
+            if (lastFile) {
+              try {
+                const c = await window.NativeAPI.canonicalEntryPath(lastFile);
+                if (typeof c === "string" && c) canonicalLast = c;
+              } catch (_) {
+              }
+            }
             S.selectedDirPath = folder;
             const parts = folder.replace(/\\/g, "/").split("/");
             folderNameEl.textContent = parts[parts.length - 1] || folder;
@@ -4130,13 +4805,13 @@ More information, click the \xBD logo in the center top of the screen.
             expandedDirs.add(folder);
             await recordProjectOpen(folder);
             S.cardViewDir = folder;
-            if (lastFile && lastFile.replace(/\\/g, "/").startsWith(folder.replace(/\\/g, "/"))) {
-              const relPath = lastFile.replace(/\\/g, "/").substring(folder.length).replace(/^\//, "");
+            if (canonicalLast && canonicalLast.replace(/\\/g, "/").startsWith(folder.replace(/\\/g, "/"))) {
+              const relPath = canonicalLast.replace(/\\/g, "/").substring(folder.length).replace(/^\//, "");
               const relParts = relPath.split("/");
               relParts.pop();
-              let currentPath = folder.replace(/\\/g, "/");
+              let currentPath = folder;
               for (const p of relParts) {
-                currentPath += "/" + p;
+                currentPath = joinPath(currentPath, p);
                 expandedDirs.add(currentPath);
               }
               S.selectedDirPath = currentPath;
@@ -4255,6 +4930,10 @@ Restore these changes, or discard and keep the saved version.`,
                 } catch (e) {
                   console.warn("[Sidebar Boot] Crash-recovery check failed (non-fatal):", e);
                 }
+                if (canonicalLast && canonicalLast !== lastFile && S.activeFilePath === lastFile) {
+                  await retargetActiveFile(lastFile, canonicalLast);
+                  highlightActiveFile(S.activeFilePath);
+                }
               } catch (err) {
                 console.warn("[Sidebar Boot] Could not read last file:", err);
                 injectStarterText();
@@ -4277,8 +4956,9 @@ Restore these changes, or discard and keep the saved version.`,
           console.warn("[Sidebar] getDefaultNotesFolder failed:", e);
         }
         if (defaultFolder) {
+          const canonicalDefault = await window.NativeAPI.setRootPath(defaultFolder);
+          if (typeof canonicalDefault === "string" && canonicalDefault) defaultFolder = canonicalDefault;
           S.rootPath = defaultFolder;
-          await window.NativeAPI.setRootPath(defaultFolder);
           try {
             localStorage.setItem("revery_root_path", S.rootPath);
           } catch (e) {

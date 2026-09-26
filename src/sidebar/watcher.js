@@ -286,4 +286,19 @@ function startWatchingFile(filePath) {
     _watchedPath = filePath;
   }
 
-export { startWatchingFile };
+/* Stop watching and WAIT until the backend has let go. Both backends
+   watch the note's FOLDER; on Windows an open handle inside a folder can
+   make renaming or moving that folder (or any folder above it) fail. The
+   file operations call this before touching the open note's path and
+   start watching again afterwards (the new path, or the old one when the
+   operation failed). */
+async function stopWatchingFile() {
+  const p = _watchedPath;
+  _watchedPath = null;
+  if (!p) return;
+  try { await window.NativeAPI.unwatchFile(p); } catch (_) { /* gone already */ }
+}
+
+function watchedPath() { return _watchedPath; }
+
+export { startWatchingFile, stopWatchingFile, watchedPath };

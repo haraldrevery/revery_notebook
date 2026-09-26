@@ -328,6 +328,14 @@ function debounceVolatile(path, content) {
       return window.electronAPI.deleteNode(path);
     },
 
+    /* The canonical spelling of a file/folder/link inside the project —
+       the spelling folder listings use (its parent folder resolved, its
+       own name untouched). setRootPath likewise resolves to the root's
+       canonical spelling. */
+    canonicalEntryPath(path) {
+      return window.electronAPI.canonicalEntryPath(path);
+    },
+
     copyFileIntoFolder(destDir, filename, contentB64) {
       return window.electronAPI.copyFileIntoFolder(destDir, filename, contentB64);
     },
@@ -563,6 +571,10 @@ const tauriImpl = {
 
     deleteNode(path) {
       return this._invoke('delete_node', { path });
+    },
+
+    canonicalEntryPath(path) {
+      return this._invoke('canonical_entry_path', { path });
     },
 
     copyFileIntoFolder(destDir, filename, contentB64) {
@@ -1015,6 +1027,7 @@ getVolatileContent(path) {
     createDirectory: () => notSupported('createDirectory'),
     renameNode: ()      => notSupported('renameNode'),
     deleteNode: ()      => notSupported('deleteNode'),
+    canonicalEntryPath(path) { return Promise.resolve(path); },
     copyFileIntoFolder: () => notSupported('copyFileIntoFolder'),
     copyPathIntoFolder: () => notSupported('copyPathIntoFolder'),
     onNativeFileDrop: () => Promise.resolve(() => {}),

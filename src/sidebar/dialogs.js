@@ -263,6 +263,54 @@ export function initDialogStyles() {
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      /* Path bar (shown when the whole path fits; else Back + crumb).
+         Every ancestor is a button: click to go there, drop to move there. */
+      .sidebar-card-nav.sidebar-card-path { gap: 2px; overflow: hidden; }
+      .sidebar-card-seg {
+        background: none; border: none; cursor: pointer;
+        color: var(--text, #ccc); opacity: 0.65;
+        font-size: 0.72rem; font-family: var(--font-mono, monospace);
+        text-transform: uppercase; letter-spacing: 0.05em;
+        padding: 2px 4px; border-radius: 4px; line-height: 1.2;
+        white-space: nowrap; flex-shrink: 0;
+      }
+      .sidebar-card-seg:hover { opacity: 1; background: var(--hover-bg, rgba(128,128,128,0.12)); }
+      .sidebar-card-sep { opacity: 0.4; font-size: 0.72rem; flex-shrink: 0; }
+      .sidebar-card-path .sidebar-card-crumb { flex-shrink: 0; opacity: 0.9; }
+      .sidebar-card-back.drop-target,
+      .sidebar-card-seg.drop-target {
+        opacity: 1;
+        outline: 2px solid var(--accent, #4a5fc1);
+        outline-offset: -2px;
+        background: rgba(74,95,193,0.25);
+      }
+      /* Links (symlinks / junctions): marked, never walked into */
+      .sidebar-link-badge {
+        position: absolute; top: 3px; right: 3px;
+        width: 14px; height: 14px; opacity: 0.8;
+        pointer-events: none;
+      }
+      .sidebar-item.sidebar-link .sidebar-name { font-style: italic; }
+
+      /* "Move to…" folder picker */
+      .revery-folder-picker { max-width: 460px; }
+      .revery-folder-list {
+        max-height: 50vh; min-height: 120px; overflow-y: auto;
+        border: 1px solid var(--border, #444); border-radius: 6px;
+        padding: 4px; display: flex; flex-direction: column;
+      }
+      .revery-folder-row {
+        text-align: left; background: none; border: none; cursor: pointer;
+        color: var(--text, #ccc); font-size: 0.85rem;
+        padding: 4px 8px; border-radius: 4px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .revery-folder-row:hover:not(:disabled) { background: var(--hover-bg, rgba(128,128,128,0.12)); }
+      .revery-folder-row.selected { background: rgba(74,95,193,0.3); }
+      .revery-folder-row:disabled { opacity: 0.45; cursor: default; }
+      .revery-folder-row-note { opacity: 0.7; font-style: italic; }
+      .revery-folder-note { font-size: 0.78rem; opacity: 0.75; min-height: 1em; }
+      .revery-input-ok:disabled { opacity: 0.45; cursor: default; }
 
       /* Grid of cards */
       .sidebar-cards-grid {
@@ -453,7 +501,7 @@ export function showConfirmDialog(promptText, detailLines = [], okLabel = null) 
    * Returns a Promise<string|null> — null means the user cancelled.
    * Works in sandboxed Electron, Tauri, and web — unlike prompt().
    */
-export function showInputDialog(promptText, defaultValue = '') {
+export function showInputDialog(promptText, defaultValue = '', opts = {}) {
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
       overlay.className = 'revery-input-overlay';
@@ -499,6 +547,145 @@ export function showInputDialog(promptText, defaultValue = '') {
       box.append(label, input, btnRow);
       overlay.appendChild(box);
       document.body.appendChild(overlay);
-      requestAnimationFrame(() => { input.focus(); input.select(); });
+      requestAnimationFrame(() => {
+        input.focus();
+        /* opts.selectStem: preselect the name WITHOUT its extension, so
+           typing replaces the name and the extension stays (the Finder /
+           Explorer convention). */
+        const dot = defaultValue.lastIndexOf('.');
+        if (opts.selectStem && dot > 0) input.setSelectionRange(0, dot);
+        else input.select();
+      });
     });
   }
+
+/**
+ * showFolderPickerDialog({ title, okLabel, load })
+ * The "Move to…" folder picker. `load()` resolves to
+ *   { folders: [{ path, name, rel, depth, disabled?, note? }], truncated }
+ * (the dialog is shown at once and fills in when the list arrives).
+ * Returns a Promise<string|null> — the chosen folder's path, or null.
+ * Keyboard: type to filter, ↑/↓ to choose, Enter to confirm, Esc to cancel.
+ * Every name is set with textContent: folder names are user data.
+ */
+export function showFolderPickerDialog({ title, okLabel, load }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'revery-input-overlay';
+
+    const box = document.createElement('div');
+    box.className = 'revery-input-box revery-folder-picker';
+
+    const label = document.createElement('p');
+    label.textContent = title;
+
+    const filter = document.createElement('input');
+    filter.type = 'text';
+    filter.className = 'revery-input-field';
+    filter.placeholder = window.t('Filter folders…');
+    filter.spellcheck = false;
+
+    const list = document.createElement('div');
+    list.className = 'revery-folder-list';
+    list.setAttribute('role', 'listbox');
+
+    const note = document.createElement('div');
+    note.className = 'revery-folder-note';
+    note.textContent = window.t('Loading folders…');
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'revery-input-buttons';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = window.t('Cancel');
+    cancelBtn.className = 'revery-input-cancel';
+    const okBtn = document.createElement('button');
+    okBtn.textContent = okLabel || window.t('OK');
+    okBtn.className = 'revery-input-ok';
+    okBtn.disabled = true;
+
+    let folders = [];
+    let selected = null; // folder object
+    let rows = [];       // [{ el, folder }] currently shown and enabled
+
+    function finish(value) {
+      if (!document.body.contains(overlay)) return;
+      document.body.removeChild(overlay);
+      resolve(value);
+    }
+
+    function choose(f) {
+      selected = f;
+      okBtn.disabled = !f;
+      for (const r of rows) r.el.classList.toggle('selected', r.folder === f);
+      const cur = rows.find((r) => r.folder === f);
+      if (cur) cur.el.scrollIntoView({ block: 'nearest' });
+    }
+
+    function render() {
+      const q = filter.value.trim().toLowerCase();
+      list.replaceChildren();
+      rows = [];
+      for (const f of folders) {
+        const hay = (f.rel || f.name).toLowerCase();
+        if (q && !hay.includes(q)) continue;
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'revery-folder-row';
+        row.setAttribute('role', 'option');
+        row.style.paddingLeft = (8 + (q ? 0 : f.depth * 14)) + 'px';
+        row.textContent = q ? (f.rel || f.name) : f.name;
+        if (f.note) {
+          const n = document.createElement('span');
+          n.className = 'revery-folder-row-note';
+          n.textContent = ' ' + f.note;
+          row.appendChild(n);
+        }
+        row.title = f.rel || f.name;
+        if (f.disabled) {
+          row.disabled = true;
+        } else {
+          row.addEventListener('click', () => choose(f));
+          row.addEventListener('dblclick', () => finish(f.path));
+          rows.push({ el: row, folder: f });
+        }
+        list.appendChild(row);
+      }
+      if (selected && !rows.some((r) => r.folder === selected)) choose(null);
+      else choose(selected);
+    }
+
+    filter.addEventListener('input', render);
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); finish(null); return; }
+      if (e.key === 'Enter')  { e.preventDefault(); if (selected) finish(selected.path); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!rows.length) return;
+        const i = rows.findIndex((r) => r.folder === selected);
+        const next = e.key === 'ArrowDown'
+          ? Math.min(rows.length - 1, i + 1)
+          : Math.max(0, i < 0 ? 0 : i - 1);
+        choose(rows[next].folder);
+      }
+    });
+    cancelBtn.addEventListener('click', () => finish(null));
+    okBtn.addEventListener('click', () => { if (selected) finish(selected.path); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+
+    btnRow.append(cancelBtn, okBtn);
+    box.append(label, filter, list, note, btnRow);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => filter.focus());
+
+    Promise.resolve().then(load).then((res) => {
+      folders = (res && res.folders) || [];
+      note.textContent = (res && res.truncated)
+        ? window.t('Showing the first {n} folders — type to filter.').replace('{n}', folders.length)
+        : '';
+      render();
+    }).catch((err) => {
+      note.textContent = window.t('The folders could not be listed.') + ' ' + String((err && err.message) || err);
+    });
+  });
+}

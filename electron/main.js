@@ -42,7 +42,10 @@ const {
   syncParentDir,
   validatePath,
   validatePathInside,
-  isCaseOnlyAliasOfSameFile,
+  validateEntryInside,
+  assertEntryName,
+  renameEntry,
+  trashableEntry,
   sanitizeDropFilename,
   ensureVolatileDir,
   setVolatileContent,
@@ -475,21 +478,28 @@ ipcMain.handle('dialog:open-folder', async () => {
 /* ── Restore root from persisted settings ─────────────────────────────────
    Called by the frontend on startup when getLastOpenedFile() returns a path.
    Validates that the path is an existing directory before accepting it.    */
+/* Returns the root's CANONICAL spelling (realpath). The renderer adopts it
+   as its project root: every entry the folder listing returns is spelled
+   that way, and a root opened through a symlink (or junction) spelled
+   differently made the renderer's "same folder?" checks fail — a file
+   dropped into its own folder was renamed to name_2. Trust is compared
+   on the real folder too, so a root saved in either spelling reopens. */
 ipcMain.handle('fs:set-root-path', (_event, dirPath) => {
   const resolved = validatePath(dirPath);          // null-byte / type check
   const stat = fs.statSync(resolved);              // must exist
   if (!stat.isDirectory()) throw new Error(`Not a directory: ${resolved}`);
-  
+  const real = fs.realpathSync(resolved);
+
   // SECURITY FIX: Verify path against backend-verified trusted roots
   const settings = readSettings();
   const trustedRoots = Array.isArray(settings.trustedRoots) ? settings.trustedRoots : [];
-  
-  // Use path.resolve to compare paths accurately (handles trailing slashes & exact OS matches)
+
   const isTrusted = trustedRoots.some(trustedPath => {
-    try { 
-      return path.resolve(trustedPath) === resolved; 
-    } catch { 
-      return false; 
+    try {
+      const t = path.resolve(trustedPath);
+      return t === resolved || fs.realpathSync(t) === real;
+    } catch {
+      return false;
     }
   });
 
@@ -498,7 +508,15 @@ ipcMain.handle('fs:set-root-path', (_event, dirPath) => {
     throw new Error(`Security Error: This folder has not been authorized by the user.`);
   }
 
-  currentRootPath = resolved;
+  currentRootPath = real;
+  return real;
+});
+
+/* The canonical spelling of an entry inside the project (see
+   fs_core.validateEntryInside) — the renderer normalises paths that did
+   not come from a folder listing (the restored last file, Save As). */
+ipcMain.handle('fs:canonical-entry', (_event, entryPath) => {
+  return validateEntryInside(entryPath, requireRoot());
 });
 
 /* ── Read directory ───────────────────────────────────────────────────── */
@@ -519,7 +537,11 @@ ipcMain.handle('fs:read-directory', (_event, dirPath) => {
       return {
         name: entry.name,
         path: entryPath,
+        /* Dirent does not follow links: a link — to a file or a folder —
+           is listed as type 'file' and flagged, so it is never walked
+           into, and moving or deleting it acts on the link itself. */
         type: entry.isDirectory() ? 'dir' : 'file',
+        link: entry.isSymbolicLink(),
         mtime,
         ctime,
       };
@@ -616,6 +638,7 @@ ipcMain.handle('fs:copy-into-folder', (_event, destDir, filename, contentB64) =>
 /* ── Create file ──────────────────────────────────────────────────────── */
 ipcMain.handle('fs:create-file', (_event, filePath) => {
   const safe = validatePathInside(filePath, requireRoot());
+  assertEntryName(path.basename(safe));
   let fd;
   try {
     fd = fs.openSync(safe, 'wx'); // O_CREAT | O_EXCL — fails if it exists
@@ -628,126 +651,38 @@ ipcMain.handle('fs:create-file', (_event, filePath) => {
 /* ── Create directory ─────────────────────────────────────────────────── */
 ipcMain.handle('fs:create-directory', (_event, dirPath) => {
   const safe = validatePathInside(dirPath, requireRoot());
-
+  assertEntryName(path.basename(safe));
   fs.mkdirSync(safe, { recursive: true });
 });
 
 
 
 
-/* ── Rename node (file or directory) ─────────────────────────────────── */
-// Note the added 'async' to the handler function
+/* ── Rename / move node (file, folder or link) ─────────────────────────
+   All policy lives in fs_core.renameEntry (unit-tested): entries, never
+   link targets; never overwrites; no cross-drive copy fallback; a short
+   retry on Windows for transient locks. */
 ipcMain.handle('fs:rename-node', async (_event, oldPath, newPath) => {
-  const root = requireRoot();
-  const safeOld = validatePathInside(oldPath, root);
-  let   safeNew = validatePathInside(newPath, root);
-
-  // SECURITY FIX: Prevent renaming or moving the project root
-  if (safeOld === path.resolve(root)) {
-    throw new Error('Security Error: Cannot move or rename the project root folder.');
-  }
-
-  // Fast synchronous checks for existence before heavy lifting
-  if (!fs.existsSync(safeOld)) throw new Error(`Source not found: ${safeOld}`);
-  if (fs.existsSync(safeNew)) {
-    /* The target "exists" when it is the SAME file under a spelling that
-       differs only in case (case-insensitive filesystem): rename it to the
-       REQUESTED spelling. Any other existing target is a different file
-       and is never overwritten. See fs_core.isCaseOnlyAliasOfSameFile. */
-    if (!isCaseOnlyAliasOfSameFile(safeOld, safeNew)) {
-      throw new Error(`Destination already exists: ${safeNew}`);
-    }
-    safeNew = path.join(path.dirname(safeOld), path.basename(path.resolve(newPath)));
-    if (safeNew === safeOld) return; // nothing to change
-  }
-
-  try {
-    await fs.promises.rename(safeOld, safeNew);
-  } catch (err) {
-    if (err.code === 'EXDEV' || err.code === 'EBUSY') {
-
-      // ── Step 1: Copy ─────────────────────────────────────────────────
-      try {
-        await fs.promises.cp(safeOld, safeNew, { recursive: true, verbatimSymlinks: true });
-      } catch (cpErr) {
-        try { await fs.promises.rm(safeNew, { recursive: true, force: true }); } catch (_) {}
-        throw cpErr;
-      }
-
-      // Post-copy sanity check
-      const destStat = await fs.promises.stat(safeNew).catch(() => null);
-      if (!destStat) {
-        throw new Error(
-          `Cross-device copy reported success but destination "${safeNew}" ` +
-          `does not exist. The original at "${safeOld}" has not been modified.`
-        );
-      }
-
-      // ── Step 2: Delete original ──────────────────────────────────────────
-      try {
-        await fs.promises.rm(safeOld, { recursive: true, force: true });
-      } catch (rmErr) {
-        const oldGone = !fs.existsSync(safeOld);
-
-        if (!oldGone) {
-          throw new Error(
-            `Move incomplete: the item was copied to "${safeNew}" but the ` +
-            `original at "${safeOld}" could not be fully deleted (it may be ` +
-            `locked by another program). Both locations contain your data. ` +
-            `Please verify both paths and remove the duplicate manually. ` +
-            `Details: ${rmErr.message}`
-          );
-        }
-
-        // Original is gone — attempt to restore from the copy.
-        try {
-          await fs.promises.cp(safeNew, safeOld, { recursive: true, verbatimSymlinks: true });
-          try { await fs.promises.rm(safeNew, { recursive: true, force: true }); } catch (_) {}
-          throw new Error(
-            `Move failed and was rolled back: the original at "${safeOld}" was ` +
-            `temporarily deleted but has been restored from the copy. No data was ` +
-            `lost. Please try the move again. Details: ${rmErr.message}`
-          );
-        } catch (rollbackErr) {
-          if (rollbackErr.message.startsWith('Move failed and was rolled back:')) {
-            throw rollbackErr;
-          }
-          throw new Error(
-            `Move partially failed: your data was copied to "${safeNew}" but ` +
-            `the original could not be deleted and automatic recovery also failed. ` +
-            `"${safeNew}" is your only complete copy — please move it manually ` +
-            `to the intended location. ` +
-            `Delete error: ${rmErr.message} | Recovery error: ${rollbackErr.message}`
-          );
-        }
-      }
-    } else {
-      throw err; 
-    }
-  }
+  await renameEntry(oldPath, newPath, requireRoot());
 });
 
 
 /* ── Delete node (move to OS trash) ──────────────────────────────────────
    shell.trashItem moves the item to the OS trash (Recycle Bin on Windows,
    Trash on macOS, XDG-spec trash on Linux). Available since Electron 12.
-   The user can restore the item from their system trash UI.            */
+   The user can restore the item from their system trash UI.
+   The ENTRY is trashed (fs_core.trashableEntry): deleting a link removes
+   the link, never the folder or file it points to. The project root is
+   never an entry.                                                       */
 ipcMain.handle('fs:delete-node', async (_event, targetPath) => {
-  const root = requireRoot();
-  const safe = validatePathInside(targetPath, root);
-
-  // SECURITY: Prevent trashing of the project root
-  if (safe === path.resolve(root)) {
-    throw new Error('Security Error: Cannot delete the project root folder.');
-  }
-
-  if (!fs.existsSync(safe)) return; // Already gone — preserve idempotency
+  const entry = trashableEntry(targetPath, requireRoot());
+  if (!entry) return; // Already gone — preserve idempotency
 
   // We deliberately do NOT fall back to fs.rmSync / fs.unlinkSync if
   // shell.trashItem rejects — silent permanent deletion would defeat the
   // safety net this whole change is meant to provide. Surface the error
-  // to the renderer instead, which already has a console.error path.
-  await shell.trashItem(safe);
+  // to the renderer instead.
+  await shell.trashItem(entry);
 });
 
 /* ── Volatile (crash backup) write ───────────────────────────────────── */
