@@ -38,6 +38,7 @@ const os    = require('os');
    This file owns only the wiring: windows, IPC, dialogs, policy state. */
 const {
   atomicWriteFile,
+  writeAllSync,
   readUtf8TextStrict,
   syncParentDir,
   validatePath,
@@ -621,7 +622,7 @@ ipcMain.handle('fs:copy-into-folder', (_event, destDir, filename, contentB64) =>
   }
 
   try {
-    fs.writeSync(fd, buffer, 0, buffer.length, 0);
+    writeAllSync(fd, buffer); // a short write must not leave a truncated copy
     fs.fsyncSync(fd);
   } catch (err) {
     try { fs.closeSync(fd); } catch (_) {}

@@ -1203,177 +1203,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       _watchedPath = null;
     }
     if (!filePath) return;
-    Promise.resolve(window.NativeAPI.watchFile(filePath, async (eventType) => {
+    Promise.resolve(window.NativeAPI.watchFile(filePath, (eventType) => {
       if (eventType !== "modify") return;
-      if (filePath !== S.activeFilePath) return;
-      if (S._externalChangeInProgress) return;
-      let verdict;
-      try {
-        verdict = await _enqueueDiskOp(async () => {
-          if (filePath !== S.activeFilePath) return null;
-          let content;
-          try {
-            content = await window.NativeAPI.readFile(filePath);
-          } catch (readErr) {
-            const exists = await fileExistsViaListing(filePath);
-            if (exists === false) return { kind: "missing" };
-            if (exists === true && /not valid UTF-8/.test(String(readErr))) return { kind: "unreadable" };
-            console.warn("[Sidebar] Could not verify external change content:", readErr);
-            return null;
-          }
-          if (S._diskBaseline !== null && content === S._diskBaseline) return { kind: "same" };
-          if (normalizeEol(content) === editor.value) {
-            rememberDiskContent(content);
-            return { kind: "same" };
-          }
-          S._externalChangeInProgress = true;
-          return { kind: "changed" };
-        });
-      } catch (err) {
-        console.warn("[Sidebar] verify lock op rejected:", err);
-        return;
-      }
-      if (!verdict) return;
-      if (verdict.kind === "same") {
-        if (S._conflictHoldPath === filePath && (S._holdReason === "missing" || S._holdReason === "unreadable")) {
-          clearAutosaveHold();
-          if (S.isDirty) scheduleAutoSave();
-        }
-        return;
-      }
-      if (verdict.kind === "missing" || verdict.kind === "unreadable") {
-        cancelPendingAutoSave();
-        setAutosaveHold(filePath, verdict.kind);
-        writeDurableSnapshot(filePath, editor.value);
-        return;
-      }
-      cancelPendingAutoSave();
-      let resolved = false;
-      try {
-        const dialogButtons = S.isDirty ? ["Reload from disk", "Save my version & reload", "Keep my version"] : ["Reload from disk", "Keep my version"];
-        const dialogCancelId = dialogButtons.length - 1;
-        const result = await window.NativeAPI.showMessageBox({
-          type: "question",
-          buttons: dialogButtons,
-          defaultId: 0,
-          cancelId: dialogCancelId,
-          title: "File Changed Externally",
-          message: `"${filePath.replace(/\\/g, "/").split("/").pop()}" was modified by another program.`,
-          detail: S.isDirty ? 'You have unsaved changes. "Reload from disk" discards them. "Save my version & reload" writes your unsaved edits to a new file alongside the original, then loads the latest disk version. "Keep my version" leaves the editor untouched and pauses auto-save for this file \u2014 the disk keeps the external version until you save manually (Ctrl+S), switch files, or close (which writes your version).' : 'Do you want to reload the latest version? "Keep my version" leaves the editor as it is and pauses auto-save for this file until you save it (Ctrl+S).'
-        });
-        const choice = dialogButtons[result.response];
-        if (choice === "Reload from disk") {
-          try {
-            await _enqueueDiskOp(async () => {
-              const fresh = await window.NativeAPI.readFile(filePath);
-              if (typeof window.replaceEditorContent === "function") {
-                window.replaceEditorContent(fresh);
-              } else {
-                editor.value = fresh;
-                if (typeof render === "function") render();
-                if (typeof countWords === "function") countWords();
-              }
-              S._replaceGeneration++;
-              markClean();
-              rememberDiskContent(fresh);
-            });
-            resolved = true;
-          } catch (err) {
-            console.error("[Sidebar] reload after external change failed:", err);
-          }
-        } else if (choice === "Save my version & reload") {
-          const copyContent = editor.value;
-          const baseName = filePath.replace(/\\/g, "/").split("/").pop();
-          const lastDot = baseName.lastIndexOf(".");
-          const stem = lastDot > 0 ? baseName.substring(0, lastDot) : baseName;
-          const ext = lastDot > 0 ? baseName.substring(lastDot + 1) : "md";
-          const dir = filePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
-          let copyPath = null;
-          let createdOk = false;
-          let copyOk = false;
-          let reloadErr = null;
-          let copyErr = null;
-          try {
-            await _enqueueDiskOp(async () => {
-              try {
-                copyPath = await uniquePath(dir, stem + "_local", ext);
-                await window.NativeAPI.createFile(copyPath);
-                createdOk = true;
-                await window.NativeAPI.writeFile(copyPath, copyContent);
-                copyOk = true;
-              } catch (err) {
-                copyErr = err;
-                throw err;
-              }
-              try {
-                const fresh = await window.NativeAPI.readFile(filePath);
-                if (typeof window.replaceEditorContent === "function") {
-                  window.replaceEditorContent(fresh);
-                } else {
-                  editor.value = fresh;
-                  if (typeof render === "function") render();
-                  if (typeof countWords === "function") countWords();
-                }
-                S._replaceGeneration++;
-                markClean();
-                rememberDiskContent(fresh);
-              } catch (err) {
-                reloadErr = err;
-                throw err;
-              }
-            });
-          } catch (_innerErr) {
-            if (copyErr) {
-              console.error("[Sidebar] save-as-copy failed:", copyErr);
-              if (createdOk && !copyOk && copyPath) {
-                window.NativeAPI.deleteNode(copyPath).catch(() => {
-                });
-              }
-              window.NativeAPI.showMessageBox({
-                type: "error",
-                title: "Could Not Save Copy",
-                message: "Your version could not be saved as a copy.",
-                detail: String(copyErr) + "\n\nYour unsaved content is still in the editor; the disk version was NOT loaded. You can copy your work elsewhere or try again.",
-                buttons: ["OK"]
-              }).catch(() => {
-              });
-              return;
-            }
-            console.error("[Sidebar] reload after save-as-copy failed:", reloadErr);
-            const copyNameP = copyPath.replace(/\\/g, "/").split("/").pop();
-            window.NativeAPI.showMessageBox({
-              type: "warning",
-              title: "Saved Copy, Could Not Reload",
-              message: `Your version was saved as "${copyNameP}", but the original could not be reloaded.`,
-              detail: String(reloadErr),
-              buttons: ["OK"]
-            }).catch(() => {
-            });
-            return;
-          }
-          resolved = true;
-          window.NativeAPI.deleteVolatileContent(filePath).catch(() => {
-          });
-          if (typeof renderTree === "function") {
-            await renderTree();
-          }
-          const copyName = copyPath.replace(/\\/g, "/").split("/").pop();
-          window.NativeAPI.showMessageBox({
-            type: "info",
-            title: "Saved as Copy",
-            message: `Your version was saved as "${copyName}".`,
-            detail: "The latest disk version of the original file is now loaded.",
-            buttons: ["OK"]
-          }).catch(() => {
-          });
-        }
-      } finally {
-        S._externalChangeInProgress = false;
-        if (!resolved && S.activeFilePath === filePath) {
-          setAutosaveHold(filePath, "conflict");
-          writeDurableSnapshot(filePath, editor.value);
-        }
-      }
+      checkActiveFileOnDisk(filePath).catch((err) => console.warn("[Sidebar] external-change check failed:", err));
     })).catch((err) => {
       console.warn("[Sidebar] Could not watch file for external changes:", err);
       if (typeof window.showStatusWarning === "function") {
@@ -1385,6 +1217,171 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       }
     });
     _watchedPath = filePath;
+  }
+  async function checkActiveFileOnDisk(filePath) {
+    if (filePath !== S.activeFilePath) return null;
+    if (S._externalChangeInProgress) return null;
+    let verdict;
+    try {
+      verdict = await _enqueueDiskOp(async () => {
+        if (filePath !== S.activeFilePath) return null;
+        if (S._externalChangeInProgress) return null;
+        const disk = await compareDiskWithBaseline(filePath, editor.value);
+        if (disk.kind === "unknown") {
+          console.warn("[Sidebar] Could not verify external change content:", disk.error);
+          return null;
+        }
+        if (disk.kind === "same" || disk.kind === "adopted") return { kind: "same" };
+        if (disk.kind === "missing" || disk.kind === "unreadable") return { kind: disk.kind };
+        S._externalChangeInProgress = true;
+        return { kind: "changed" };
+      });
+    } catch (err) {
+      console.warn("[Sidebar] verify lock op rejected:", err);
+      return null;
+    }
+    if (!verdict) return null;
+    if (verdict.kind === "same") {
+      if (S._conflictHoldPath === filePath && (S._holdReason === "missing" || S._holdReason === "unreadable")) {
+        clearAutosaveHold();
+        if (S.isDirty) scheduleAutoSave();
+      }
+      return "same";
+    }
+    if (verdict.kind === "missing" || verdict.kind === "unreadable") {
+      cancelPendingAutoSave();
+      setAutosaveHold(filePath, verdict.kind);
+      writeDurableSnapshot(filePath, editor.value);
+      return verdict.kind;
+    }
+    cancelPendingAutoSave();
+    let resolved = false;
+    try {
+      const dialogButtons = S.isDirty ? ["Reload from disk", "Save my version & reload", "Keep my version"] : ["Reload from disk", "Keep my version"];
+      const dialogCancelId = dialogButtons.length - 1;
+      const result = await window.NativeAPI.showMessageBox({
+        type: "question",
+        buttons: dialogButtons,
+        defaultId: 0,
+        cancelId: dialogCancelId,
+        title: "File Changed Externally",
+        message: `"${filePath.replace(/\\/g, "/").split("/").pop()}" was modified by another program.`,
+        detail: S.isDirty ? 'You have unsaved changes. "Reload from disk" discards them. "Save my version & reload" writes your unsaved edits to a new file alongside the original, then loads the latest disk version. "Keep my version" leaves the editor untouched and pauses auto-save for this file \u2014 the disk keeps the external version until you save manually (Ctrl+S), switch files, or close (which writes your version).' : 'Do you want to reload the latest version? "Keep my version" leaves the editor as it is and pauses auto-save for this file until you save it (Ctrl+S).'
+      });
+      const choice = dialogButtons[result.response];
+      if (choice === "Reload from disk") {
+        try {
+          await _enqueueDiskOp(async () => {
+            const fresh = await window.NativeAPI.readFile(filePath);
+            if (typeof window.replaceEditorContent === "function") {
+              window.replaceEditorContent(fresh);
+            } else {
+              editor.value = fresh;
+              if (typeof render === "function") render();
+              if (typeof countWords === "function") countWords();
+            }
+            S._replaceGeneration++;
+            markClean();
+            rememberDiskContent(fresh);
+          });
+          resolved = true;
+        } catch (err) {
+          console.error("[Sidebar] reload after external change failed:", err);
+        }
+      } else if (choice === "Save my version & reload") {
+        const copyContent = editor.value;
+        const baseName = filePath.replace(/\\/g, "/").split("/").pop();
+        const lastDot = baseName.lastIndexOf(".");
+        const stem = lastDot > 0 ? baseName.substring(0, lastDot) : baseName;
+        const ext = lastDot > 0 ? baseName.substring(lastDot + 1) : "md";
+        const dir = filePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+        let copyPath = null;
+        let createdOk = false;
+        let copyOk = false;
+        let reloadErr = null;
+        let copyErr = null;
+        try {
+          await _enqueueDiskOp(async () => {
+            try {
+              copyPath = await uniquePath(dir, stem + "_local", ext);
+              await window.NativeAPI.createFile(copyPath);
+              createdOk = true;
+              await window.NativeAPI.writeFile(copyPath, copyContent);
+              copyOk = true;
+            } catch (err) {
+              copyErr = err;
+              throw err;
+            }
+            try {
+              const fresh = await window.NativeAPI.readFile(filePath);
+              if (typeof window.replaceEditorContent === "function") {
+                window.replaceEditorContent(fresh);
+              } else {
+                editor.value = fresh;
+                if (typeof render === "function") render();
+                if (typeof countWords === "function") countWords();
+              }
+              S._replaceGeneration++;
+              markClean();
+              rememberDiskContent(fresh);
+            } catch (err) {
+              reloadErr = err;
+              throw err;
+            }
+          });
+        } catch (_innerErr) {
+          if (copyErr) {
+            console.error("[Sidebar] save-as-copy failed:", copyErr);
+            if (createdOk && !copyOk && copyPath) {
+              window.NativeAPI.deleteNode(copyPath).catch(() => {
+              });
+            }
+            window.NativeAPI.showMessageBox({
+              type: "error",
+              title: "Could Not Save Copy",
+              message: "Your version could not be saved as a copy.",
+              detail: String(copyErr) + "\n\nYour unsaved content is still in the editor; the disk version was NOT loaded. You can copy your work elsewhere or try again.",
+              buttons: ["OK"]
+            }).catch(() => {
+            });
+            return;
+          }
+          console.error("[Sidebar] reload after save-as-copy failed:", reloadErr);
+          const copyNameP = copyPath.replace(/\\/g, "/").split("/").pop();
+          window.NativeAPI.showMessageBox({
+            type: "warning",
+            title: "Saved Copy, Could Not Reload",
+            message: `Your version was saved as "${copyNameP}", but the original could not be reloaded.`,
+            detail: String(reloadErr),
+            buttons: ["OK"]
+          }).catch(() => {
+          });
+          return;
+        }
+        resolved = true;
+        window.NativeAPI.deleteVolatileContent(filePath).catch(() => {
+        });
+        if (typeof renderTree === "function") {
+          await renderTree();
+        }
+        const copyName = copyPath.replace(/\\/g, "/").split("/").pop();
+        window.NativeAPI.showMessageBox({
+          type: "info",
+          title: "Saved as Copy",
+          message: `Your version was saved as "${copyName}".`,
+          detail: "The latest disk version of the original file is now loaded.",
+          buttons: ["OK"]
+        }).catch(() => {
+        });
+      }
+    } finally {
+      S._externalChangeInProgress = false;
+      if (!resolved && S.activeFilePath === filePath) {
+        setAutosaveHold(filePath, "conflict");
+        writeDurableSnapshot(filePath, editor.value);
+      }
+    }
+    return "changed";
   }
   async function stopWatchingFile() {
     const p = _watchedPath;
@@ -1474,12 +1471,13 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         item.addEventListener("click", async () => {
           menu.remove();
           if (isActive) return;
+          await waitForTitleRename();
           if (S.isDirty && S.activeFilePath) {
             const saved = await saveActiveFile();
             if (!saved) return;
           }
           S.activeFilePath = null;
-          await window.NativeAPI.clearLastOpenedFile();
+          await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
           markClean();
           if (typeof window.replaceEditorContent === "function") {
             window.replaceEditorContent("");
@@ -1803,6 +1801,25 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     S._diskBaseline = api && typeof api.wellFormedText === "function" ? api.wellFormedText(raw) : raw;
     S._diskEol = detectEol(raw);
   }
+  async function compareDiskWithBaseline(filePath, bufferText) {
+    let content;
+    try {
+      content = await window.NativeAPI.readFile(filePath);
+    } catch (err) {
+      const exists = await fileExistsViaListing(filePath);
+      if (exists === false) return { kind: "missing" };
+      if (exists === true && /not valid UTF-8/.test(String(err))) return { kind: "unreadable" };
+      return { kind: "unknown", error: err };
+    }
+    if (S._diskBaseline !== null && content === S._diskBaseline) return { kind: "same" };
+    const api = window.NativeAPI;
+    const wellFormed = (s) => api && typeof api.wellFormedText === "function" ? api.wellFormedText(s) : s;
+    if (typeof bufferText === "string" && normalizeEol(content) === wellFormed(bufferText)) {
+      rememberDiskContent(content);
+      return { kind: "adopted" };
+    }
+    return { kind: "changed" };
+  }
   var HOLD_STATUS = "autosave-hold";
   function setAutosaveHold(path, reason) {
     S._conflictHoldPath = path;
@@ -1831,6 +1848,14 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     clearAutosaveHold();
   }
   var _renamePromise = null;
+  async function waitForTitleRename() {
+    for (let i = 0; i < 10 && _renamePromise; i++) {
+      try {
+        await _renamePromise;
+      } catch (_) {
+      }
+    }
+  }
   async function renameActiveFileFromTitle() {
     if (S._operationLock) return;
     if (!S.activeFilePath || window._showingUnsupportedFile) return;
@@ -1862,6 +1887,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       try {
         const oldPath = S.activeFilePath;
         const finalNewPath = await uniquePath(oldDir, safeName, ext, oldFullName);
+        if (!samePath(S.activeFilePath, oldPath)) return;
         await window.NativeAPI.writeVolatileNow(finalNewPath, editor.value).catch(
           (e) => console.warn("[Sidebar] Pre-rename volatile migration failed (non-fatal):", e)
         );
@@ -1871,19 +1897,20 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
             (e) => console.warn("[Sidebar] Rename journal write failed (non-fatal):", e)
           );
         }
+        let followed = false;
         await _enqueueDiskOp(async () => {
           await stopWatchingFile();
           try {
             await window.NativeAPI.renameNode(oldPath, finalNewPath);
-          } catch (err) {
-            if (S.activeFilePath) startWatchingFile(S.activeFilePath);
-            throw err;
+            followed = await retargetActiveFile(oldPath, finalNewPath);
+          } finally {
+            if (!followed && S.activeFilePath) startWatchingFile(S.activeFilePath);
           }
-          await retargetActiveFile(oldPath, finalNewPath);
         });
         pushUndo({ type: "rename", records: [{ oldPath, newPath: finalNewPath }] });
-        const finalBaseName = finalNewPath.replace(/\\/g, "/").split("/").pop().replace(new RegExp(`\\.${ext}$`), "");
-        docTitleEl.value = finalBaseName;
+        if (followed) {
+          docTitleEl.value = finalNewPath.replace(/\\/g, "/").split("/").pop().replace(new RegExp(`\\.${ext}$`), "");
+        }
         if (typeof window.NativeAPI.setPendingRename === "function") {
           window.NativeAPI.setPendingRename(null).catch(
             (e) => console.warn("[Sidebar] Rename journal clear failed (non-fatal):", e)
@@ -1912,21 +1939,33 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   var _saveChain = Promise.resolve();
   async function saveActiveFile(opts) {
     const auto = !!(opts && opts.auto);
-    if (!S.activeFilePath) return false;
+    const report = opts && typeof opts.onOutcome === "function" ? opts.onOutcome : () => {
+    };
+    if (!S.activeFilePath) {
+      report("no-file");
+      return false;
+    }
     clearTimeout(_autoSaveTimer);
     const contentToSave = editor.value;
     const enqueueGen = S._replaceGeneration;
+    const docGen = currentDocGeneration();
     const savePromise = _saveChain = _saveChain.then(async () => {
       if (typeof _renamePromise !== "undefined" && _renamePromise) {
         await _renamePromise;
       }
-      if (!S.activeFilePath) return false;
+      if (!S.activeFilePath) {
+        report("no-file");
+        return false;
+      }
       if (docTitleEl) {
         const currentBase = S.activeFilePath.replace(/\\/g, "/").split("/").pop().replace(/\.[^/.]+$/, "");
         const inputName = docTitleEl.value.trim();
         if (inputName && inputName !== currentBase && !window._showingUnsupportedFile) {
           await renameActiveFileFromTitle();
-          if (!S.activeFilePath) return false;
+          if (!S.activeFilePath) {
+            report("no-file");
+            return false;
+          }
         }
       }
       const pathToSave = S.activeFilePath;
@@ -1935,9 +1974,18 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         writeResult = await _enqueueDiskOp(async () => {
           if (S._externalChangeInProgress) return "deferred-external";
           if (enqueueGen !== S._replaceGeneration) return "deferred-replaced";
-          if (auto && S._conflictHoldPath && S._conflictHoldPath === pathToSave) return "deferred-hold";
+          const held = !!S._conflictHoldPath && S._conflictHoldPath === pathToSave;
+          if (auto && held) return "deferred-hold";
           const isActive = S.activeFilePath === pathToSave;
+          if (isActive && docGen !== currentDocGeneration()) return "deferred-replaced";
           if (!isActive && _goneActivePaths.has(pathKey(pathToSave))) return "deferred-gone";
+          if (isActive && !held && S._diskBaseline !== null) {
+            const disk = await compareDiskWithBaseline(pathToSave, contentToSave);
+            if (disk.kind === "changed" || disk.kind === "unreadable" || disk.kind === "missing" && auto) {
+              return "deferred-verify";
+            }
+            if (disk.kind === "adopted") return "ok";
+          }
           const diskText = toDiskText(contentToSave, isActive ? S._diskEol : "\n");
           await window.NativeAPI.writeFile(pathToSave, diskText);
           if (isActive) rememberDiskContent(diskText);
@@ -1948,6 +1996,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         _autoSaveCooldownUntil = Date.now() + AUTOSAVE_FAILURE_COOLDOWN_MS;
         writeDurableSnapshot(pathToSave, contentToSave);
         _firstDirtyTime = 0;
+        report("error");
         await window.NativeAPI.showMessageBox({
           type: "error",
           title: window.t("Save Failed"),
@@ -1957,7 +2006,13 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         return false;
       }
       if (writeResult !== "ok") {
+        report(writeResult);
         if (writeResult === "deferred-gone" && S.activeFilePath && S.isDirty) scheduleAutoSave();
+        if (writeResult === "deferred-verify") {
+          checkActiveFileOnDisk(pathToSave).then((kind) => {
+            if (kind === "same" && S.activeFilePath === pathToSave && S.isDirty) scheduleAutoSave();
+          }).catch((e) => console.warn("[Sidebar] disk check after a stopped save failed:", e));
+        }
         return false;
       }
       _autoSaveCooldownUntil = 0;
@@ -1983,9 +2038,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           if (previewEl) previewEl.textContent = previewText;
         }
       }
+      report("ok");
       return true;
     }).catch((err) => {
       console.error("[Sidebar] Uncaught error in save chain \u2013 recovering:", err);
+      report("error");
       return false;
     });
     return savePromise;
@@ -1996,9 +2053,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
   }
   async function retargetActiveFile(oldPath, newPath) {
-    if (!oldPath || !newPath) return;
-    S.activeFilePath = newPath;
+    if (!oldPath || !newPath) return false;
     markActivePathGone(oldPath);
+    if (!samePath(S.activeFilePath, oldPath)) return false;
+    S.activeFilePath = newPath;
     forgetGonePath(newPath);
     if (S._conflictHoldPath === oldPath) setAutosaveHold(newPath, S._holdReason);
     if (docTitleEl) docTitleEl.value = baseNameOf(newPath).replace(/\.(md|txt)$/, "");
@@ -2017,6 +2075,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     } catch (e) {
       console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e);
     }
+    return true;
   }
   function scheduleAutoSave() {
     if (!S.activeFilePath) return;
@@ -2051,6 +2110,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     window.sidebarGetRootPath = () => S.rootPath;
     window.sidebarIsDirty = () => S.isDirty;
     window.sidebarPivotToNewFile = async function(newPath, newRoot, savedContent) {
+      await waitForTitleRename();
       if (newRoot && newRoot !== S.rootPath) {
         try {
           const c = await window.NativeAPI.setRootPath(newRoot);
@@ -2073,7 +2133,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         markClean();
       }
       rememberDiskContent(typeof savedContent === "string" ? savedContent : null);
-      await window.NativeAPI.setLastOpenedFile(newPath);
+      await window.NativeAPI.setLastOpenedFile(newPath).catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
       if (newRoot && newRoot !== S.rootPath) {
         S.rootPath = newRoot;
         clearUndoStack();
@@ -2871,6 +2931,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
   }
   async function openMediaFile(filePath) {
+    await waitForTitleRename();
     if (S.isDirty && S.activeFilePath) {
       const saved = await saveActiveFile();
       if (!saved) return;
@@ -2896,6 +2957,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     switchFromMobileSidebar();
   }
   async function openUnsupportedFile(filePath) {
+    await waitForTitleRename();
     if (S.isDirty && S.activeFilePath) {
       const saved = await saveActiveFile();
       if (!saved) return;
@@ -2919,6 +2981,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     markClean();
   }
   async function openFile(filePath) {
+    await waitForTitleRename();
     S.previewMediaPath = null;
     window._showingUnsupportedFile = false;
     if (S.isDirty && S.activeFilePath) {
@@ -2953,7 +3016,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     forgetGonePath(filePath);
     markClean();
     rememberDiskContent(content);
-    await window.NativeAPI.setLastOpenedFile(filePath);
+    await window.NativeAPI.setLastOpenedFile(filePath).catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
     if (docTitleEl) {
       const base = filePath.replace(/\\/g, "/").split("/").pop();
       docTitleEl.value = base.replace(/\.(md|txt)$/, "");
@@ -3179,6 +3242,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (!S.sidebarOpen) openSidebar();
   }
   async function promptOpenFolder() {
+    await waitForTitleRename();
     if (S.isDirty && S.activeFilePath) {
       const saved = await saveActiveFile();
       if (!saved) return;
@@ -3188,7 +3252,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (!path) return;
       S.activeFilePath = null;
       S.previewMediaPath = null;
-      await window.NativeAPI.clearLastOpenedFile();
+      await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
       markClean();
       if (typeof window.replaceEditorContent === "function") {
         window.replaceEditorContent("");
@@ -4517,9 +4581,12 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (S.activeFilePath) {
       if (S.isDirty) {
         let saved = false;
+        let outcome = null;
         for (let attempt = 0; attempt < 3 && S.isDirty; attempt++) {
           try {
-            saved = await saveActiveFile();
+            saved = await saveActiveFile({ onOutcome: (o) => {
+              outcome = o;
+            } });
           } catch (err) {
             console.error("[sidebarHandleClose] Save threw unexpectedly:", err);
             saved = false;
@@ -4527,7 +4594,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           if (!saved) break;
         }
         if (!saved) {
-          const baseName = S.activeFilePath.replace(/\\/g, "/").split("/").pop();
+          if (outcome === "deferred-verify") return;
+          const baseName = baseNameOf(S.activeFilePath || "") || "this note";
           let proceedWithClose = false;
           try {
             const choice = await window.NativeAPI.showMessageBox({
@@ -4706,6 +4774,121 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       return;
     }
   }
+  async function saveRecoveredTextAsNewFile(notePath, content) {
+    let dir = parentPathOf(notePath);
+    if (!dir || !S.rootPath || !isInsideRoot(dir, S.rootPath)) dir = S.rootPath;
+    try {
+      await window.NativeAPI.readDirectory(dir);
+    } catch (_) {
+      dir = S.rootPath;
+    }
+    if (!dir) throw new Error("No project folder is open.");
+    const base = baseNameOf(notePath);
+    const dot = base.lastIndexOf(".");
+    const oldExt = dot > 0 ? base.slice(dot + 1) : "";
+    const ext = /^(md|txt)$/i.test(oldExt) ? oldExt : "md";
+    let stem = (dot > 0 ? base.slice(0, dot) : base) + "_recovered";
+    if (checkEntryName(`${stem}.${ext}`) || new TextEncoder().encode(`${stem}.${ext}`).length > 150) {
+      stem = "recovered";
+    }
+    let newPath = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      newPath = await uniquePath(dir, stem, ext);
+      try {
+        await window.NativeAPI.createFile(newPath);
+        break;
+      } catch (err) {
+        if (String(err).includes("already exists") && attempt < 4) continue;
+        throw err;
+      }
+    }
+    try {
+      await window.NativeAPI.writeFile(newPath, content);
+    } catch (err) {
+      window.NativeAPI.deleteNode(newPath).catch(() => {
+      });
+      throw err;
+    }
+    return newPath;
+  }
+  async function saveBackupBesideNote(notePath, content) {
+    let copyPath;
+    try {
+      copyPath = await saveRecoveredTextAsNewFile(notePath, content);
+    } catch (err) {
+      console.error("[Sidebar Boot] Saving the crash backup as a separate file failed:", err);
+      await window.NativeAPI.showMessageBox({
+        type: "error",
+        title: window.t("Recovery Failed"),
+        message: "The unsaved changes could not be saved as a separate file.",
+        detail: String(err) + "\n\nThe backup was kept. Revery offers it again at the next start, as long as this is still the last note you had open.",
+        buttons: ["OK"],
+        defaultId: 0
+      }).catch(() => {
+      });
+      return null;
+    }
+    await window.NativeAPI.deleteVolatileContent(notePath).catch(() => {
+    });
+    try {
+      expandedDirs.add(parentPathOf(copyPath));
+      await renderTree();
+      if (S.activeFilePath) highlightActiveFile(S.activeFilePath);
+      if (typeof window.showStatusWarning === "function") {
+        window.showStatusWarning(
+          "recovered-copy",
+          window.t('The unsaved changes were saved as "{name}".').replace("{name}", baseNameOf(copyPath)),
+          { priority: 30, ttl: 8e3 }
+        );
+      }
+    } catch (e) {
+      console.warn("[Sidebar Boot] refreshing the tree after recovery failed (the copy is saved):", e);
+    }
+    return copyPath;
+  }
+  async function offerBackupOfUnreadableNote(notePath, readErr) {
+    let backup = null;
+    try {
+      backup = await window.NativeAPI.getVolatileContent(notePath);
+    } catch (_) {
+      return "none";
+    }
+    if (!backup || typeof backup.content !== "string" || !backup.content.trim()) return "none";
+    const reason = String(readErr && readErr.message || readErr || "").replace(/^Error invoking remote method '[^']*': /, "").replace(/^Error: /, "");
+    let choice;
+    try {
+      choice = await window.NativeAPI.showMessageBox({
+        type: "warning",
+        title: "Recover unsaved changes?",
+        message: `"${baseNameOf(notePath)}" could not be opened, but unsaved changes to it from a previous session were found.`,
+        detail: `${reason}
+
+Last edited: ${new Date(backup.ts || Date.now()).toLocaleString()}
+
+\u201CSave as a new file\u201D writes them into a new note in this project \u2014 nothing is overwritten. \u201CDiscard\u201D deletes them permanently.`,
+        buttons: ["Save as a new file", "Discard"],
+        defaultId: 0,
+        cancelId: 0
+        // Escape keeps the text — never destructive
+      });
+    } catch (e) {
+      console.warn("[Sidebar Boot] Recovery dialog failed (backup kept):", e);
+      return "kept";
+    }
+    if (choice && choice.response === 1) {
+      await window.NativeAPI.deleteVolatileContent(notePath).catch(() => {
+      });
+      return "none";
+    }
+    const copyPath = await saveBackupBesideNote(notePath, backup.content);
+    if (!copyPath) return "kept";
+    try {
+      await openFile(copyPath);
+    } catch (e) {
+      console.warn("[Sidebar Boot] opening the recovered note failed (it is saved):", e);
+    }
+    return S.activeFilePath ? "opened" : "none";
+  }
   function runBoot() {
     (async function bootSidebar() {
       let hasLoadedText = false;
@@ -4830,8 +5013,15 @@ More information, click the \xBD logo in the center top of the screen.
               console.warn("[Sidebar Boot] Bak orphan report failed:", e);
             }
             if (lastFile) {
+              let readFailed = false;
               try {
-                const diskContent = await window.NativeAPI.readFile(lastFile);
+                let diskContent;
+                try {
+                  diskContent = await window.NativeAPI.readFile(lastFile);
+                } catch (readErr) {
+                  readFailed = true;
+                  throw readErr;
+                }
                 if (typeof window.replaceEditorContent === "function") {
                   window.replaceEditorContent(diskContent);
                 } else {
@@ -4867,49 +5057,69 @@ More information, click the \xBD logo in the center top of the screen.
                     } catch (_) {
                     }
                     const stale = !suspicious && fileMtime > 0 && backup.ts > 0 && backup.ts < fileMtime;
-                    let dialogOpts;
-                    if (suspicious) {
-                      dialogOpts = {
+                    const blank = backup.content.trim().length === 0;
+                    const KEEP_BOTH = "\n\nRecommended: \u201CSave backup as a copy\u201D \u2014 the saved file stays as it is and the backup becomes a separate file next to it, so nothing is lost.";
+                    let dialog;
+                    if (blank) {
+                      dialog = {
+                        type: "warning",
+                        message: "A crash backup was found, but it is empty.",
+                        detail: `Last edited: ${ts}
+
+Restoring it would REPLACE your saved file with empty text.
+
+Recommended: keep the saved version.`,
+                        choices: [["restore", "Restore empty backup"], ["discard", "Keep saved version"]],
+                        defaultAction: "discard",
+                        cancelAction: "discard"
+                      };
+                    } else if (suspicious) {
+                      dialog = {
                         type: "warning",
                         message: "A crash backup was found, but it looks incomplete.",
                         detail: `Last edited: ${ts}
 
-The backup is ${backupLen === 0 ? "empty" : "much shorter than the saved file"} (${backupLen} vs ${diskLen} characters) \u2014 it was likely damaged by the crash itself. Restoring it would REPLACE your saved file with this incomplete content.
-
-Recommended: keep the saved version.`,
-                        buttons: ["Restore incomplete backup", "Keep saved version"],
-                        defaultId: 1
+The backup is much shorter than the saved file (${backupLen} vs ${diskLen} characters) \u2014 the crash may have damaged it. Restoring it would REPLACE your saved file with this content.` + KEEP_BOTH,
+                        choices: [["restore", "Restore incomplete backup"], ["copy", "Save backup as a copy"], ["discard", "Discard backup"]],
+                        defaultAction: "copy",
+                        cancelAction: "copy"
                       };
                     } else if (stale) {
-                      dialogOpts = {
+                      dialog = {
                         type: "warning",
                         message: "A crash backup was found, but the file has been saved more recently.",
                         detail: `Backup from: ${ts}
 File last saved: ${new Date(fileMtime).toLocaleString()}
 
-The saved file is NEWER than this backup \u2014 restoring would replace the newer saved content with this older backup.
-
-Recommended: keep the saved version.`,
-                        buttons: ["Restore older backup", "Keep saved version"],
-                        defaultId: 1
+The saved file is NEWER than this backup \u2014 restoring would replace the newer saved content with this older backup.` + KEEP_BOTH,
+                        choices: [["restore", "Restore older backup"], ["copy", "Save backup as a copy"], ["discard", "Discard backup"]],
+                        defaultAction: "copy",
+                        cancelAction: "copy"
                       };
                     } else {
-                      dialogOpts = {
+                      dialog = {
                         type: "question",
                         message: "Unsaved changes from a previous session were found.",
                         detail: `Last edited: ${ts}
 
-Restore these changes, or discard and keep the saved version.`,
-                        buttons: ["Restore", "Discard"],
-                        defaultId: 0
+\u201CRestore\u201D puts them back into the editor. \u201CSave as a copy\u201D keeps the saved note as it is and writes the unsaved changes into a separate file next to it. \u201CDiscard\u201D deletes them permanently.`,
+                        choices: [["restore", "Restore"], ["copy", "Save as a copy"], ["discard", "Discard"]],
+                        defaultAction: "restore",
+                        cancelAction: "copy"
                       };
                     }
+                    const actions = dialog.choices.map((c) => c[0]);
                     const choice = await window.NativeAPI.showMessageBox({
                       title: "Recover unsaved changes?",
-                      cancelId: 1,
-                      ...dialogOpts
+                      type: dialog.type,
+                      message: dialog.message,
+                      detail: dialog.detail,
+                      buttons: dialog.choices.map((c) => c[1]),
+                      defaultId: actions.indexOf(dialog.defaultAction),
+                      cancelId: actions.indexOf(dialog.cancelAction)
                     });
-                    if (choice.response === 0) {
+                    const action = actions[choice && choice.response] || dialog.cancelAction;
+                    if (action === "restore") {
                       if (typeof window.replaceEditorContent === "function") {
                         window.replaceEditorContent(backup.content);
                       } else {
@@ -4924,6 +5134,8 @@ Restore these changes, or discard and keep the saved version.`,
                           (e) => console.warn("[Sidebar] Refreshing backup after restore failed:", e)
                         );
                       }
+                    } else if (action === "copy") {
+                      await saveBackupBesideNote(lastFile, backup.content);
                     } else {
                       await window.NativeAPI.deleteVolatileContent(lastFile).catch(() => {
                       });
@@ -4941,10 +5153,17 @@ Restore these changes, or discard and keep the saved version.`,
                 }
               } catch (err) {
                 console.warn("[Sidebar Boot] Could not read last file:", err);
-                injectStarterText();
-                try {
-                  await window.NativeAPI.clearLastOpenedFile();
-                } catch {
+                const recovered = readFailed ? await offerBackupOfUnreadableNote(lastFile, err) : "none";
+                if (recovered === "opened") {
+                  hasLoadedText = true;
+                } else {
+                  injectStarterText();
+                  if (recovered !== "kept") {
+                    try {
+                      await window.NativeAPI.clearLastOpenedFile();
+                    } catch {
+                    }
+                  }
                 }
               }
             } else {

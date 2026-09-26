@@ -12,7 +12,7 @@ import { startWatchingFile } from './watcher.js';
 import { openFile } from './fileops.js';
 import { uniquePath, reportBakOrphans, fileExistsViaListing } from './helpers.js';
 import { loadProjects, recordProjectOpen, seedProjectsCache, PROJECTS_KEY } from './projects.js';
-import { joinPath } from './paths.js';
+import { joinPath, baseNameOf, parentPathOf, isInsideRoot, checkEntryName } from './paths.js';
 
 async function sidebarHandleClose() {
   cancelPendingAutoSave();
@@ -21,9 +21,10 @@ async function sidebarHandleClose() {
   if (S.activeFilePath) {
     if (S.isDirty) {
       let saved = false;
+      let outcome = null;
       for (let attempt = 0; attempt < 3 && S.isDirty; attempt++) {
         try {
-          saved = await saveActiveFile();
+          saved = await saveActiveFile({ onOutcome: (o) => { outcome = o; } });
         } catch (err) {
 
           console.error('[sidebarHandleClose] Save threw unexpectedly:', err);
@@ -33,10 +34,16 @@ async function sidebarHandleClose() {
       }
 
       if (!saved) {
+        /* The save stopped because the file on disk is no longer what we
+           last read or wrote (another program changed it): the "File
+           Changed Externally" question is on its way and is the user's
+           path. Keep the window open rather than stacking a "discard?"
+           dialog on top of it; closing again afterwards works as usual. */
+        if (outcome === 'deferred-verify') return;
         // saveActiveFile has already shown its own "Save Failed" dialog with
         // the OS error detail. Now confirm whether to discard or cancel
         // the close — never proceed silently.
-        const baseName = S.activeFilePath.replace(/\\/g, '/').split('/').pop();
+        const baseName = baseNameOf(S.activeFilePath || '') || 'this note';
         let proceedWithClose = false;
         try {
           const choice = await window.NativeAPI.showMessageBox({
@@ -277,6 +284,138 @@ window.NativeAPI.onWindowClose(sidebarHandleClose);
     }
   }
 
+  /* ── Recovered text → a NEW file ──────────────────────────────────────
+     Written beside the note it belongs to (or at the project root when
+     that folder is gone or outside the project) and returns the path.
+     Nothing is ever overwritten: a free name (uniquePath) plus an exclusive
+     create, retried on the backends' "already exists" contract. The name
+     stays short on purpose: the atomic write adds a temporary suffix, and
+     a name near the 255-byte limit could be created but never written. */
+  async function saveRecoveredTextAsNewFile(notePath, content) {
+    let dir = parentPathOf(notePath);
+    if (!dir || !S.rootPath || !isInsideRoot(dir, S.rootPath)) dir = S.rootPath;
+    try { await window.NativeAPI.readDirectory(dir); } catch (_) { dir = S.rootPath; }
+    if (!dir) throw new Error('No project folder is open.');
+
+    const base = baseNameOf(notePath);
+    const dot = base.lastIndexOf('.');
+    const oldExt = dot > 0 ? base.slice(dot + 1) : '';
+    const ext = /^(md|txt)$/i.test(oldExt) ? oldExt : 'md';
+    let stem = (dot > 0 ? base.slice(0, dot) : base) + '_recovered';
+    if (checkEntryName(`${stem}.${ext}`) || new TextEncoder().encode(`${stem}.${ext}`).length > 150) {
+      stem = 'recovered';
+    }
+
+    let newPath = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      newPath = await uniquePath(dir, stem, ext);
+      try {
+        await window.NativeAPI.createFile(newPath);
+        break;
+      } catch (err) {
+        if (String(err).includes('already exists') && attempt < 4) continue;
+        throw err;
+      }
+    }
+    try {
+      await window.NativeAPI.writeFile(newPath, content);
+    } catch (err) {
+      /* The empty file is ours (created exclusively a moment ago): do not
+         leave it behind looking like a recovered note. */
+      window.NativeAPI.deleteNode(newPath).catch(() => {});
+      throw err;
+    }
+    return newPath;
+  }
+
+  /* "Save as a copy": the crash backup becomes a separate note beside the
+     one it belongs to; the saved note stays exactly as it is. The backup
+     is deleted only once the copy is on disk — if that fails it stays, and
+     the user is told. → the copy's path, or null on failure. */
+  async function saveBackupBesideNote(notePath, content) {
+    let copyPath;
+    try {
+      copyPath = await saveRecoveredTextAsNewFile(notePath, content);
+    } catch (err) {
+      console.error('[Sidebar Boot] Saving the crash backup as a separate file failed:', err);
+      await window.NativeAPI.showMessageBox({
+        type:    'error',
+        title:   window.t('Recovery Failed'),
+        message: 'The unsaved changes could not be saved as a separate file.',
+        detail:  String(err) + '\n\nThe backup was kept. Revery offers it again at the next start, as long as this is still the last note you had open.',
+        buttons: ['OK'],
+        defaultId: 0,
+      }).catch(() => {});
+      return null;
+    }
+    /* The text is safely in its own file from here on. */
+    await window.NativeAPI.deleteVolatileContent(notePath).catch(() => {});
+    try {
+      expandedDirs.add(parentPathOf(copyPath));
+      await renderTree();
+      if (S.activeFilePath) highlightActiveFile(S.activeFilePath);
+      if (typeof window.showStatusWarning === 'function') {
+        window.showStatusWarning('recovered-copy',
+          window.t('The unsaved changes were saved as "{name}".').replace('{name}', baseNameOf(copyPath)),
+          { priority: 30, ttl: 8000 });
+      }
+    } catch (e) {
+      console.warn('[Sidebar Boot] refreshing the tree after recovery failed (the copy is saved):', e);
+    }
+    return copyPath;
+  }
+
+  /* The last note could not be opened (deleted or moved by another
+     program, no longer UTF-8, too large, locked). Its crash backup may now
+     be the ONLY copy of that text. The start used to show the welcome
+     text, forget the note and never mention the backup — which then
+     expired in the 7-day purge (on Linux: at the next reboot, with the
+     temp folder).
+     → 'opened'  the text was saved as a new note, which is now open;
+       'kept'    the backup stays (the dialog or the copy failed) — keep
+                 the last-note pointer so the next start asks again;
+       'none'    nothing to recover, or the user discarded it.
+     Never throws. */
+  async function offerBackupOfUnreadableNote(notePath, readErr) {
+    let backup = null;
+    try { backup = await window.NativeAPI.getVolatileContent(notePath); } catch (_) { return 'none'; }
+    if (!backup || typeof backup.content !== 'string' || !backup.content.trim()) return 'none';
+
+    const reason = String((readErr && readErr.message) || readErr || '')
+      .replace(/^Error invoking remote method '[^']*': /, '')
+      .replace(/^Error: /, '');
+    let choice;
+    try {
+      choice = await window.NativeAPI.showMessageBox({
+        type:    'warning',
+        title:   'Recover unsaved changes?',
+        message: `"${baseNameOf(notePath)}" could not be opened, but unsaved changes to it from a previous session were found.`,
+        detail:  `${reason}\n\nLast edited: ${new Date(backup.ts || Date.now()).toLocaleString()}\n\n` +
+                 '“Save as a new file” writes them into a new note in this project — nothing is overwritten. “Discard” deletes them permanently.',
+        buttons:   ['Save as a new file', 'Discard'],
+        defaultId: 0,
+        cancelId:  0, // Escape keeps the text — never destructive
+      });
+    } catch (e) {
+      console.warn('[Sidebar Boot] Recovery dialog failed (backup kept):', e);
+      return 'kept';
+    }
+    if (choice && choice.response === 1) {
+      await window.NativeAPI.deleteVolatileContent(notePath).catch(() => {});
+      return 'none';
+    }
+    const copyPath = await saveBackupBesideNote(notePath, backup.content);
+    if (!copyPath) return 'kept';
+    try {
+      await openFile(copyPath);
+    } catch (e) {
+      console.warn('[Sidebar Boot] opening the recovered note failed (it is saved):', e);
+    }
+    /* Whatever is open now must not get the welcome text over it: the boot
+       inserts that only when nothing was loaded ('none'). */
+    return S.activeFilePath ? 'opened' : 'none';
+  }
+
 export function runBoot() {
   (async function bootSidebar() {
     let hasLoadedText = false;
@@ -400,8 +539,15 @@ try {
 
           /* ── Load File Content & Crash Recovery ── */
           if (lastFile) {
+            let readFailed = false;
             try {
-              const diskContent = await window.NativeAPI.readFile(lastFile);
+              let diskContent;
+              try {
+                diskContent = await window.NativeAPI.readFile(lastFile);
+              } catch (readErr) {
+                readFailed = true;
+                throw readErr;
+              }
               if (typeof window.replaceEditorContent === 'function') {
                 window.replaceEditorContent(diskContent);
               } else {
@@ -436,9 +582,7 @@ try {
                      A crash during the backup write itself (power loss,
                      disk full) can leave the backup empty or truncated.
                      Restoring it and letting autosave run would overwrite
-                     the INTACT on-disk file within seconds. For these
-                     cases: warn explicitly and make "Discard" the default
-                     so a reflexive Enter keeps the safe copy.            */
+                     the INTACT on-disk file within seconds. */
                   const backupLen = backup.content.length;
                   const diskLen   = diskContent.length;
                   const suspicious =
@@ -452,8 +596,7 @@ try {
                      again, and a durable snapshot of the abandoned version
                      survived (those outlive reboots by design). A default
                      of "Restore" would replace the NEWER saved content on
-                     a reflexive Enter. Keep offering the backup (never
-                     destroy data on a guess) but flip the safe default.
+                     a reflexive Enter.
                      mtime and backup.ts are both ms since epoch on both
                      platforms; either being unavailable (0) disables the
                      guard — when unsure, keep today's behavior.          */
@@ -468,39 +611,64 @@ try {
                   const stale = !suspicious
                     && fileMtime > 0 && backup.ts > 0 && backup.ts < fileMtime;
 
-                  let dialogOpts;
-                  if (suspicious) {
-                    dialogOpts = {
+                  /* Every answer except an explicit "Discard" keeps the text.
+                     Escape — and closing the dialog — SAVES THE BACKUP AS A
+                     SEPARATE FILE: it used to mean Discard, and a reflexive
+                     Escape at startup deleted the only copy of the unsaved
+                     changes. A doubtful backup (incomplete, or older than the
+                     file) recommends the copy too: keeping both can never
+                     lose anything, while "Keep saved version" deleted it on
+                     a guess. Only a blank backup has nothing worth keeping —
+                     there the safe answer is the saved file. */
+                  const blank = backup.content.trim().length === 0;
+                  const KEEP_BOTH = '\n\nRecommended: \u201cSave backup as a copy\u201d \u2014 the saved file stays as it is and the backup becomes a separate file next to it, so nothing is lost.';
+                  let dialog;
+                  if (blank) {
+                    dialog = {
+                      type:    'warning',
+                      message: 'A crash backup was found, but it is empty.',
+                      detail:  `Last edited: ${ts}\n\nRestoring it would REPLACE your saved file with empty text.\n\nRecommended: keep the saved version.`,
+                      choices: [['restore', 'Restore empty backup'], ['discard', 'Keep saved version']],
+                      defaultAction: 'discard', cancelAction: 'discard',
+                    };
+                  } else if (suspicious) {
+                    dialog = {
                       type:    'warning',
                       message: 'A crash backup was found, but it looks incomplete.',
-                      detail:  `Last edited: ${ts}\n\nThe backup is ${backupLen === 0 ? 'empty' : 'much shorter than the saved file'} (${backupLen} vs ${diskLen} characters) — it was likely damaged by the crash itself. Restoring it would REPLACE your saved file with this incomplete content.\n\nRecommended: keep the saved version.`,
-                      buttons: ['Restore incomplete backup', 'Keep saved version'],
-                      defaultId: 1,
+                      detail:  `Last edited: ${ts}\n\nThe backup is much shorter than the saved file (${backupLen} vs ${diskLen} characters) \u2014 the crash may have damaged it. Restoring it would REPLACE your saved file with this content.` + KEEP_BOTH,
+                      choices: [['restore', 'Restore incomplete backup'], ['copy', 'Save backup as a copy'], ['discard', 'Discard backup']],
+                      defaultAction: 'copy', cancelAction: 'copy',
                     };
                   } else if (stale) {
-                    dialogOpts = {
+                    dialog = {
                       type:    'warning',
                       message: 'A crash backup was found, but the file has been saved more recently.',
-                      detail:  `Backup from: ${ts}\nFile last saved: ${new Date(fileMtime).toLocaleString()}\n\nThe saved file is NEWER than this backup — restoring would replace the newer saved content with this older backup.\n\nRecommended: keep the saved version.`,
-                      buttons: ['Restore older backup', 'Keep saved version'],
-                      defaultId: 1,
+                      detail:  `Backup from: ${ts}\nFile last saved: ${new Date(fileMtime).toLocaleString()}\n\nThe saved file is NEWER than this backup \u2014 restoring would replace the newer saved content with this older backup.` + KEEP_BOTH,
+                      choices: [['restore', 'Restore older backup'], ['copy', 'Save backup as a copy'], ['discard', 'Discard backup']],
+                      defaultAction: 'copy', cancelAction: 'copy',
                     };
                   } else {
-                    dialogOpts = {
+                    dialog = {
                       type:    'question',
                       message: 'Unsaved changes from a previous session were found.',
-                      detail:  `Last edited: ${ts}\n\nRestore these changes, or discard and keep the saved version.`,
-                      buttons: ['Restore', 'Discard'],
-                      defaultId: 0,
+                      detail:  `Last edited: ${ts}\n\n\u201cRestore\u201d puts them back into the editor. \u201cSave as a copy\u201d keeps the saved note as it is and writes the unsaved changes into a separate file next to it. \u201cDiscard\u201d deletes them permanently.`,
+                      choices: [['restore', 'Restore'], ['copy', 'Save as a copy'], ['discard', 'Discard']],
+                      defaultAction: 'restore', cancelAction: 'copy',
                     };
                   }
-
+                  const actions = dialog.choices.map((c) => c[0]);
                   const choice = await window.NativeAPI.showMessageBox({
-                    title: 'Recover unsaved changes?',
-                    cancelId: 1,
-                    ...dialogOpts,
+                    title:     'Recover unsaved changes?',
+                    type:      dialog.type,
+                    message:   dialog.message,
+                    detail:    dialog.detail,
+                    buttons:   dialog.choices.map((c) => c[1]),
+                    defaultId: actions.indexOf(dialog.defaultAction),
+                    cancelId:  actions.indexOf(dialog.cancelAction),
                   });
-                  if (choice.response === 0) {
+                  const action = actions[choice && choice.response] || dialog.cancelAction;
+
+                  if (action === 'restore') {
                     // Restore the backup content
                     if (typeof window.replaceEditorContent === 'function') {
                       window.replaceEditorContent(backup.content);
@@ -517,8 +685,10 @@ try {
                         console.warn('[Sidebar] Refreshing backup after restore failed:', e)
                       );
                     }
+                  } else if (action === 'copy') {
+                    await saveBackupBesideNote(lastFile, backup.content);
                   } else {
-                    // User chose Discard – delete the stale backup
+                    // An explicit Discard (or a blank backup): delete it.
                     await window.NativeAPI.deleteVolatileContent(lastFile).catch(() => {});
                   }
                 } else if (backup) {
@@ -541,8 +711,19 @@ try {
 
             } catch (err) {
               console.warn('[Sidebar Boot] Could not read last file:', err);
-              injectStarterText();
-              try { await window.NativeAPI.clearLastOpenedFile(); } catch { /* ignore */ }
+              /* Only a failed READ means the note itself is unavailable; its
+                 crash backup may then be the only copy of the text. */
+              const recovered = readFailed ? await offerBackupOfUnreadableNote(lastFile, err) : 'none';
+              if (recovered === 'opened') {
+                hasLoadedText = true; // the recovered note is open: no welcome text over it
+              } else {
+                injectStarterText();
+                /* 'kept': the backup is still there — keep the pointer, so the
+                   next start asks again (and the 7-day purge spares it). */
+                if (recovered !== 'kept') {
+                  try { await window.NativeAPI.clearLastOpenedFile(); } catch { /* ignore */ }
+                }
+              }
             }
           } else {
             injectStarterText();

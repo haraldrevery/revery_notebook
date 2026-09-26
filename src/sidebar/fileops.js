@@ -6,7 +6,8 @@ import { showInputDialog, showConfirmDialog, showFolderPickerDialog } from './di
 import { getFileCategory, mediaMarkdown, uniquePath, uniqueDestPath } from './helpers.js';
 import { saveActiveFile, markClean, scheduleAutoSave, cancelPendingAutoSave,
          retargetActiveFile, waitForSaveChainIdle, rememberDiskContent,
-         _enqueueDiskOp, markActivePathGone, forgetGonePath } from './save.js';
+         _enqueueDiskOp, markActivePathGone, forgetGonePath,
+         waitForTitleRename } from './save.js';
 import { renderTree, updateMultiSelectHighlight, updateSelectedDirHighlight, highlightActiveFile } from './tree.js';
 import { openSidebar, switchFromMobileSidebar } from './panel.js';
 import { startWatchingFile, stopWatchingFile, watchedPath } from './watcher.js';
@@ -714,6 +715,7 @@ import { samePath, isInsideRoot, baseNameOf, dirOf, joinPath, parentPathOf, rema
   ══════════════════════════════════════════════════════════════════ */
 
   async function openMediaFile(filePath) {
+    await waitForTitleRename(); // see openFile
     /* Save any dirty text file before switching away */
     if (S.isDirty && S.activeFilePath) {
       const saved = await saveActiveFile();
@@ -763,6 +765,7 @@ import { samePath, isInsideRoot, baseNameOf, dirOf, joinPath, parentPathOf, rema
   ══════════════════════════════════════════════════════════════════ */
 
   async function openUnsupportedFile(filePath) {
+    await waitForTitleRename(); // see openFile
     if (S.isDirty && S.activeFilePath) {
       const saved = await saveActiveFile();
       if (!saved) return;
@@ -801,6 +804,12 @@ import { samePath, isInsideRoot, baseNameOf, dirOf, joinPath, parentPathOf, rema
   ══════════════════════════════════════════════════════════════════ */
 
   async function openFile(filePath) {
+    /* A title rename still running (the title field lost focus to this
+       very click) finishes first: it moves the open note to its new name,
+       and must not do that after this function has put another note in
+       the editor — autosave then wrote that note into the renamed file. */
+    await waitForTitleRename();
+
     /* Clear any special viewing modes */
     S.previewMediaPath             = null;
     window._showingUnsupportedFile = false;
@@ -845,7 +854,10 @@ import { samePath, isInsideRoot, baseNameOf, dirOf, joinPath, parentPathOf, rema
     forgetGonePath(filePath);
     markClean();
     rememberDiskContent(content);
-    await window.NativeAPI.setLastOpenedFile(filePath);
+    /* Non-fatal, like every other pointer update: a failing settings write
+       (a full disk now reports it) must not stop the switch half way — the
+       title, the watcher and the highlight below belong to this note. */
+    await window.NativeAPI.setLastOpenedFile(filePath).catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
 
     /* Update doc-title */
     if (docTitleEl) {
@@ -1127,6 +1139,7 @@ async function openFolder(folderPath) {
 
 
 async function promptOpenFolder() {
+      await waitForTitleRename(); // see openFile
 
       /* Auto-save current file before switching folders */
       if (S.isDirty && S.activeFilePath) {
@@ -1140,7 +1153,8 @@ async function promptOpenFolder() {
       /* Clear the editor BEFORE setting the new root to prevent path-escape races */
       S.activeFilePath   = null;
       S.previewMediaPath = null;
-      await window.NativeAPI.clearLastOpenedFile();
+      // Non-fatal: the old note must leave the editor even if this fails.
+      await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
       markClean();
       if (typeof window.replaceEditorContent === 'function') {
         window.replaceEditorContent('');

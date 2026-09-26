@@ -422,6 +422,20 @@ loads another document before that file exists, the typed text still goes
 into the new note and the editor is left alone (the editor's document
 generation, `window.getEditorDocGeneration()`, tells the two apart).
 
+**Title renames and switching notes.** Renaming the open note in the title
+field starts when the field loses focus — typically to the very click that
+opens another note. Everything that puts another document in the editor
+(`openFile`, the media/unsupported previews, folder and project switches,
+Save As) first awaits `waitForTitleRename()`, so the rename finishes on the
+note it belongs to. `retargetActiveFile` only moves the OPEN note (it
+returns false otherwise), and a save whose text belongs to a document that
+has since left the editor (document generation changed) is dropped
+(`'deferred-replaced'`). Before this (audit 2026-09-27), a rename finishing
+after the switch pointed autosave at the renamed file while the editor
+showed the other note — the next keystroke replaced the renamed note's
+text; reliably so on slow disks, where the rename's fsync'd writes take
+longer than a click.
+
 ### Ctrl+S Behaviour (Desktop Override)
 
 When `activeFilePath` is set, `Ctrl+S` calls `NativeAPI.writeFile()` with an
@@ -441,6 +455,22 @@ the buffer → a real external change: the user chooses Reload / Save my
 version & reload / Keep my version. There is no time window after a save in
 which events are ignored (that used to let another program's change be
 overwritten by the next autosave).
+
+**Checked again before every write.** The watcher's event arrives ~300 ms
+after another program's write (debounce); an autosave landing in between
+used to overwrite that write unasked. `saveActiveFile` therefore compares
+the disk with the record inside the disk lock, right before writing
+(`compareDiskWithBaseline`, shared with the watcher): a changed or
+unreadable file is never written — the save stops (`'deferred-verify'`)
+and hands over to the watcher's own check (`checkActiveFileOnDisk`), which
+asks the usual question. A vanished file is not recreated by a BACKGROUND
+save (it gets the `missing` hold — on Tauri, whose watcher reports no
+deletions, this is how a deleted note is noticed); an explicit save still
+recreates it. An explicit save of a held file skips the check (the user
+already chose their version). Closing while the question is pending keeps
+the window open (no "discard?" dialog on top). The same check covers the
+watcher's silent times: network shares without change notifications, a
+watcher that died, the pause around the app's own file operations.
 
 **Auto-save hold** (`setAutosaveHold`, save.js): background autosave never
 writes a held file; an explicit save (Ctrl+S, switching files, closing)
@@ -662,6 +692,18 @@ startup the boot recovery offers the last opened file's backup (and any
 scratchpad backup); the 7-day purge never deletes the last opened file's
 backup, since it runs on a timer, not after that offer.
 
+**The recovery question** (lifecycle.js) has three answers: Restore / Save
+as a copy / Discard. Only an explicit click on Discard deletes the backup.
+Escape (and closing the dialog) saves the backup as a separate file beside
+the note (`<name>_recovered.md`, never overwriting); a doubtful backup
+(much shorter than the file, or older than its last save) makes that the
+recommended default too. A blank backup only offers "Keep saved version".
+When the last note cannot be opened at all (deleted or moved while the
+app was closed, no longer UTF-8, too large), its backup is offered as a new
+note that then opens — the start used to show the welcome text and forget
+the backup. Recovered files are written with a short name (≤ 150 bytes) so
+the atomic write's temporary suffix always fits.
+
 ### Atomic Writes
 
 `writeFile()` never writes directly to the target path. It always:
@@ -671,6 +713,13 @@ backup, since it runs on a timer, not after that offer.
 
 A crash mid-write leaves the original file intact; a leftover
 `.revery_tmp` is harmless.
+
+Every byte is written before the fsync: `write(2)` may write fewer bytes
+than asked on a nearly full disk, and `fs.writeSync` then just returns the
+smaller count. Electron's `writeAllSync` (fs_core.js) keeps writing until
+all bytes are down, so the real error (ENOSPC/EFBIG) surfaces and the old
+file stays — a single `writeSync` used to rename a truncated temp file over
+the note and report success. Tauri's `write_all` always looped.
 
 ### Text encoding, line endings, lone surrogates
 
@@ -966,7 +1015,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 
 | Suite | What it proves |
 |---|---|
-| `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails |
+| `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails; short writes are completed, a short write followed by ENOSPC fails with the target untouched, a zero-progress write cannot loop, and a REAL kernel short write (`ulimit -f`, Linux) is reported instead of truncating |
 | `test/fs_core.paths.test.js` | Path traversal / symlink-escape rejection, dropped-filename sanitisation |
 | `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
 | `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup |
@@ -978,6 +1027,8 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/eol.test.js` | Line-ending rules: which files keep CRLF, normalisation, byte-exact round-trip |
 | `test/unique_name.test.js` | New/renamed/imported/moved names: case-insensitive collisions, trailing `_2024` kept, the renamed file does not block its own spelling |
 | `test/data_safety_e2e.test.js` | Boots the REAL desktop app on a temp project: Replace after edits / file switch / regex context; scratchpad race; sidebar Ctrl+Z; rename during a "Keep my version" hold; open-note links follow a rename; CRLF kept; external write right after an autosave detected; a note moved away by another program not recreated |
+| `test/save_race_e2e.test.js` | Boots the REAL desktop app: renaming the open note in the title and clicking another note while the rename runs (the renamed note keeps its text, the opened note gets the typing); another program's write just before an autosave, and just before Ctrl+S (never overwritten unasked: one "File Changed Externally" question, both versions survive); a note moved away just before an autosave (not recreated in the background, Ctrl+S still can); closing right after an external write (the window stays open at that question) |
+| `test/recovery_e2e.test.js` | Boots the REAL desktop app six times with a crash backup waiting: Escape saves it as `note_recovered.md` (it used to delete it), Restore and an explicit Discard do exactly that, Enter on a backup older than the file keeps both, a last note that is gone gets its backup offered, saved as a new note and opened (or discarded on request) |
 | `test/close_watchdog_e2e.test.js` | The app can always be closed, never silently: normal close, a failing close flow, a renderer reported gone (reload offered), a hung page (force close offered after 5 s) |
 | `test/crash_consistency.test.js` | A child process is SIGKILLed mid-write 12 times; the target file must always contain exactly one complete payload |
 | `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output; `buildZipFromEntries` (LaTeX-project assembler) auto parent-dirs + unsafe-name rejection |
@@ -998,6 +1049,11 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 atomic-write strategy — both `fs:write-file` and `dialog:save-file` call
 `atomicWriteFile()`. Do not re-inline that logic into handlers; it is what
 the tests pin down.
+
+Every desktop E2E harness (`test/helpers/*_e2e_main.js`) points
+`os.tmpdir()` at a private folder before loading `electron/main.js`: the
+real main purges crash backups older than 7 days 5 s after start, and a
+test run must never touch the developer's real `revery-volatile` folder.
 
 ### Zip Project Export
 

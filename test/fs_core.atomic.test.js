@@ -78,6 +78,67 @@ describe('atomicWriteFile', () => {
     assert.deepEqual(siblings(dir, 'note.md'), []);
   });
 
+  /* write(2) may write FEWER bytes than asked (nearly full disk, file-size
+     limit) and fs.writeSync then just returns the smaller count. A single
+     writeSync used to fsync and rename that truncated temp file over the
+     note — and report success. */
+  test('short writes are completed: the file is never truncated', () => {
+    fs.writeFileSync(target, 'OLD');
+    const content = 'Thesis chapter 📝 with Ünïcode 测试\n'.repeat(80);
+    let calls = 0;
+    fs.writeSync = (fd, buf, off, len, pos) => {
+      calls++;
+      return realWriteSync(fd, buf, off, Math.min(len, 7), pos); // at most 7 bytes per call
+    };
+    atomicWriteFile(target, content);
+    fs.writeSync = realWriteSync;
+    assert.equal(fs.readFileSync(target, 'utf8'), content);
+    assert.ok(calls > 100, 'the write must have been split into many short writes');
+    assert.deepEqual(siblings(dir, 'note.md'), []);
+  });
+
+  test('short write, then the disk is full: the save fails, target untouched, temp cleaned up', () => {
+    fs.writeFileSync(target, 'OLD');
+    let calls = 0;
+    fs.writeSync = (fd, buf, off, len, pos) => {
+      if (++calls === 1) return realWriteSync(fd, buf, off, Math.floor(len / 2), pos);
+      const e = new Error('ENOSPC: no space left on device');
+      e.code = 'ENOSPC';
+      throw e;
+    };
+    assert.throws(() => atomicWriteFile(target, 'NEW CONTENT THAT DOES NOT FIT'), /ENOSPC/);
+    fs.writeSync = realWriteSync;
+    assert.equal(fs.readFileSync(target, 'utf8'), 'OLD');
+    assert.deepEqual(siblings(dir, 'note.md'), []);
+  });
+
+  test('a write that makes no progress fails instead of looping forever', () => {
+    fs.writeFileSync(target, 'OLD');
+    fs.writeSync = () => 0;
+    assert.throws(() => atomicWriteFile(target, 'NEW'), /no progress/);
+    fs.writeSync = realWriteSync;
+    assert.equal(fs.readFileSync(target, 'utf8'), 'OLD');
+    assert.deepEqual(siblings(dir, 'note.md'), []);
+  });
+
+  /* The real kernel behaviour, not a mock: RLIMIT_FSIZE of 1 KiB makes
+     write(2) return a short count exactly like a nearly full disk. */
+  test('real short write (file-size limit): reported as an error, target untouched',
+    { skip: process.platform !== 'linux' }, () => {
+      fs.writeFileSync(target, 'OLD CONTENT');
+      const child = `
+        process.on('SIGXFSZ', () => {}); // keep running, like a real ENOSPC (no signal there)
+        const { atomicWriteFile } = require(${JSON.stringify(path.join(__dirname, '..', 'electron', 'fs_core.js'))});
+        try { atomicWriteFile(process.argv[1], 'x'.repeat(5000)); console.log('WROTE'); }
+        catch (e) { console.log('THREW ' + e.code); }`;
+      const { spawnSync } = require('node:child_process');
+      const r = spawnSync('sh', ['-c', 'ulimit -f 1 && exec "$0" -e "$1" "$2"', process.execPath, child, target],
+        { encoding: 'utf8' });
+      assert.equal(r.stdout.trim(), 'THREW EFBIG', `child output: ${r.stdout} ${r.stderr}`);
+      assert.equal(fs.readFileSync(target, 'utf8'), 'OLD CONTENT');
+      assert.deepEqual(siblings(dir, 'note.md'), []);
+    });
+
   test('non-EXDEV rename failure: error propagates, temp cleaned, target untouched', () => {
     fs.writeFileSync(target, 'OLD');
     fs.renameSync = () => {

@@ -5,11 +5,11 @@
 import { S, docTitleEl, folderNameEl, treeEl, expandedDirs, _previewCache,
          SCRATCHPAD_PREFIX, ensureScratchpadVolatileKey,
          pendingNoteDir, sidebarPanel } from './state.js';
-import { uniquePath, stripMarkdownForPreview } from './helpers.js';
-import { baseNameOf, pathKey, sanitizeEntryName, checkEntryName } from './paths.js';
-import { detectEol, toDiskText } from './eol.js';
+import { uniquePath, stripMarkdownForPreview, fileExistsViaListing } from './helpers.js';
+import { baseNameOf, pathKey, samePath, sanitizeEntryName, checkEntryName } from './paths.js';
+import { detectEol, normalizeEol, toDiskText } from './eol.js';
 import { renderTree, highlightActiveFile } from './tree.js';
-import { startWatchingFile, stopWatchingFile } from './watcher.js';
+import { startWatchingFile, stopWatchingFile, checkActiveFileOnDisk } from './watcher.js';
 import { pushUndo, hasUndoOperations, undoLastOperation, clearUndoStack,
          showNameProblem } from './fileops.js';
 import { recordProjectOpen } from './projects.js';
@@ -275,6 +275,48 @@ export function rememberDiskContent(raw) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+     IS THE DISK STILL WHAT WE LAST SAW?
+   One comparison, used by the watcher (after a change event) and by
+   saveActiveFile (just before it writes, inside the disk lock). The
+   watcher alone left a gap: its event arrives ~300 ms after another
+   program's write (debounce), and an autosave landing in between wrote
+   over that change without asking. Checking again right before writing
+   closes the gap — and covers the times the watcher is silent (a network
+   share without change notifications, a watcher that died, the pause
+   around our own file operations, Tauri's missing delete events).
+   `bufferText` is the caller's text: the editor's for the watcher, the
+   text about to be written for a save.
+   → { kind, error }:
+     'same'       exactly the recorded on-disk text (our own write, a touch)
+     'adopted'    not the record, but already equal to bufferText (e.g. a
+                  Save As over this very file) — recorded as the new
+                  on-disk text
+     'changed'    readable and different from both: another program's
+     'missing'    the file is gone (deleted or moved away)
+     'unreadable' it exists but is no longer valid UTF-8
+     'unknown'    could not tell (locked, over the size cap, transient)
+  ══════════════════════════════════════════════════════════════════ */
+export async function compareDiskWithBaseline(filePath, bufferText) {
+  let content;
+  try {
+    content = await window.NativeAPI.readFile(filePath);
+  } catch (err) {
+    const exists = await fileExistsViaListing(filePath);
+    if (exists === false) return { kind: 'missing' };
+    if (exists === true && /not valid UTF-8/.test(String(err))) return { kind: 'unreadable' };
+    return { kind: 'unknown', error: err };
+  }
+  if (S._diskBaseline !== null && content === S._diskBaseline) return { kind: 'same' };
+  const api = window.NativeAPI;
+  const wellFormed = (s) => (api && typeof api.wellFormedText === 'function') ? api.wellFormedText(s) : s;
+  if (typeof bufferText === 'string' && normalizeEol(content) === wellFormed(bufferText)) {
+    rememberDiskContent(content);
+    return { kind: 'adopted' };
+  }
+  return { kind: 'changed' };
+}
+
+/* ══════════════════════════════════════════════════════════════════
      AUTO-SAVE HOLD
    While a file is held, BACKGROUND autosave never writes it; an explicit
    save (Ctrl+S, switching files, closing) still does and lifts the hold.
@@ -332,6 +374,19 @@ export function clearAutosaveHold() {
   
   let _renamePromise = null;
 
+  /** Resolves once no title rename is in flight (never rejects). Everything
+      that puts ANOTHER document in the editor — openFile and the media /
+      unsupported previews, folder and project switches, Save As — awaits
+      this first. A title rename retargets the open note when it completes;
+      a note opened meanwhile used to be overwritten by that retarget (the
+      editor showed it, autosave wrote it into the renamed file). The
+      rename itself, and anything it awaits, must never call this. */
+  export async function waitForTitleRename() {
+    for (let i = 0; i < 10 && _renamePromise; i++) {
+      try { await _renamePromise; } catch (_) { /* the rename reports its own errors */ }
+    }
+  }
+
   async function renameActiveFileFromTitle() {
   // Do not interrupt a bulk operation (move, delete, multi‑rename)
   if (S._operationLock) return;
@@ -383,6 +438,11 @@ const execRename = async () => {
       // The file itself does not block its own name (case-only renames).
       const finalNewPath = await uniquePath(oldDir, safeName, ext, oldFullName);
 
+      /* Nothing has changed on disk yet. If another document took over the
+         editor meanwhile (the openers wait for this rename — see
+         waitForTitleRename; this is the backstop), stop here: the note on
+         screen is no longer the one the title belonged to. */
+      if (!samePath(S.activeFilePath, oldPath)) return;
 
       await window.NativeAPI.writeVolatileNow(finalNewPath, editor.value).catch(e =>
         console.warn('[Sidebar] Pre-rename volatile migration failed (non-fatal):', e)
@@ -403,19 +463,23 @@ const execRename = async () => {
          path (see _goneActivePaths). The watcher lets go of the folder
          first (Windows). Called from a save-chain step too: that is fine
          — only waiting for the save CHAIN from inside it would deadlock. */
+      let followed = false; // did the open note follow the file to its new name?
       await _enqueueDiskOp(async () => {
         await stopWatchingFile();
         try {
           await window.NativeAPI.renameNode(oldPath, finalNewPath);
-        } catch (err) {
-          if (S.activeFilePath) startWatchingFile(S.activeFilePath);
-          throw err;
+          followed = await retargetActiveFile(oldPath, finalNewPath);
+        } finally {
+          /* retargetActiveFile watches the new path; otherwise (the rename
+             failed, or the open note is another document) watch whatever
+             is open again — the watcher was let go for the rename. */
+          if (!followed && S.activeFilePath) startWatchingFile(S.activeFilePath);
         }
-        await retargetActiveFile(oldPath, finalNewPath);
       });
       pushUndo({ type: 'rename', records: [{ oldPath, newPath: finalNewPath }] });
-      const finalBaseName = finalNewPath.replace(/\\/g, '/').split('/').pop().replace(new RegExp(`\\.${ext}$`), '');
-      docTitleEl.value = finalBaseName;
+      if (followed) {
+        docTitleEl.value = finalNewPath.replace(/\\/g, '/').split('/').pop().replace(new RegExp(`\\.${ext}$`), '');
+      }
 
       // Clear the rename journal — everything succeeded. Failure here is
       // non-fatal: a stale journal is idempotent on next boot (lastFile ===
@@ -459,15 +523,33 @@ let _saveChain = Promise.resolve();
    saves never write a held file (see AUTO-SAVE HOLD) — checked inside the
    disk lock, so a timer that fired just before a hold was set cannot slip
    through. Every other caller (Ctrl+S, switching files, close, export) is
-   an explicit save. */
+   an explicit save.
+   opts.onOutcome(outcome): optional; told how THIS save ended — 'ok',
+   'error', 'no-file', or one of the 'deferred-…' results below. (The
+   boolean result stays the contract for every other caller.)
+
+   Before writing the open note, the disk is compared with what we last
+   read or wrote (compareDiskWithBaseline). Another program's version is
+   never overwritten unseen: 'changed' or 'unreadable' → nothing is
+   written and the "File Changed Externally" flow takes over
+   ('deferred-verify'). A file that vanished is not recreated by a
+   BACKGROUND save (that is the 'missing' hold); an explicit save still
+   recreates it — the text is the user's and nothing on disk is lost. A
+   held file skips the check on an explicit save: the user already chose
+   their version. */
 async function saveActiveFile(opts) {
   const auto = !!(opts && opts.auto);
-  if (!S.activeFilePath) return false;
+  const report = (opts && typeof opts.onOutcome === 'function') ? opts.onOutcome : () => {};
+  if (!S.activeFilePath) { report('no-file'); return false; }
   clearTimeout(_autoSaveTimer);
 
   const contentToSave = editor.value;
 
   const enqueueGen = S._replaceGeneration;
+  /* The document this text belongs to. If another document is put in the
+     editor before the write runs, contentToSave belongs to the OLD one and
+     must never be written to whatever path is open by then. */
+  const docGen = currentDocGeneration();
 
   // Chain this save after all previous saves
   const savePromise = _saveChain = _saveChain.then(async () => {
@@ -476,7 +558,7 @@ async function saveActiveFile(opts) {
     await _renamePromise;
   }
   // Path may have changed while waiting, re‑check
-  if (!S.activeFilePath) return false;
+  if (!S.activeFilePath) { report('no-file'); return false; }
 
   // Apply pending title rename if needed
   if (docTitleEl) {
@@ -485,7 +567,7 @@ async function saveActiveFile(opts) {
     const inputName = docTitleEl.value.trim();
     if (inputName && inputName !== currentBase && !window._showingUnsupportedFile) {
       await renameActiveFileFromTitle();
-      if (!S.activeFilePath) return false;
+      if (!S.activeFilePath) { report('no-file'); return false; }
     }
   }
 
@@ -499,12 +581,28 @@ try {
   writeResult = await _enqueueDiskOp(async () => {
     if (S._externalChangeInProgress) return 'deferred-external';
     if (enqueueGen !== S._replaceGeneration) return 'deferred-replaced';
-    if (auto && S._conflictHoldPath && S._conflictHoldPath === pathToSave) return 'deferred-hold';
+    const held = !!S._conflictHoldPath && S._conflictHoldPath === pathToSave;
+    if (auto && held) return 'deferred-hold';
 
     const isActive = S.activeFilePath === pathToSave;
+    /* Another document is in the editor now: this text is not its text. */
+    if (isActive && docGen !== currentDocGeneration()) return 'deferred-replaced';
     /* The note moved or was deleted by our own operation after this save
        captured its path (see _goneActivePaths): never write the old path. */
     if (!isActive && _goneActivePaths.has(pathKey(pathToSave))) return 'deferred-gone';
+
+    /* Is the disk still what we last read or wrote? (see the header) */
+    if (isActive && !held && S._diskBaseline !== null) {
+      const disk = await compareDiskWithBaseline(pathToSave, contentToSave);
+      if (disk.kind === 'changed' || disk.kind === 'unreadable'
+          || (disk.kind === 'missing' && auto)) {
+        return 'deferred-verify';
+      }
+      // The disk already holds exactly this text (recorded as such): done.
+      if (disk.kind === 'adopted') return 'ok';
+      // 'same', 'unknown' (cannot tell — the write reports real errors),
+      // or 'missing' on an explicit save (recreate): write.
+    }
     /* Write in the file's own line-ending style (see WHAT IS ON DISK). */
     const diskText = toDiskText(contentToSave, isActive ? S._diskEol : '\n');
     await window.NativeAPI.writeFile(pathToSave, diskText);
@@ -524,6 +622,7 @@ try {
   // mirror keeps refreshing with newer keystrokes while the cooldown lasts.
   writeDurableSnapshot(pathToSave, contentToSave);
   _firstDirtyTime = 0;
+  report('error');
   await window.NativeAPI.showMessageBox({
     type: 'error', title: window.t('Save Failed'),
     message: window.t('Could not write to:') + '\n' + pathToSave,
@@ -533,13 +632,25 @@ try {
 }
 
 if (writeResult !== 'ok') {
-  // 'deferred-external', 'deferred-replaced', 'deferred-hold' or
-  // 'deferred-gone'. No dialog — the watcher's dialog / the hold's status
-  // message is the user's resolution path. Treat as a save failure (return
-  // false) so callers see the same signal as a real failure.
+  // 'deferred-external', 'deferred-replaced', 'deferred-hold',
+  // 'deferred-gone' or 'deferred-verify'. No dialog here — the watcher's
+  // dialog / the hold's status message is the user's resolution path.
+  // Treat as a save failure (return false) so callers see the same signal
+  // as a real failure.
+  report(writeResult);
   // 'deferred-gone': the note is elsewhere now — the edits are still
   // unsaved, so write them there.
   if (writeResult === 'deferred-gone' && S.activeFilePath && S.isDirty) scheduleAutoSave();
+  // 'deferred-verify': the disk no longer holds what we last saw. Hand it
+  // to the watcher's own check (outside the lock — its dialog can take
+  // minutes): it asks about a changed file, pauses autosave for a vanished
+  // or unreadable one, and says 'same' if the change was already undone,
+  // in which case the edits are simply saved again.
+  if (writeResult === 'deferred-verify') {
+    checkActiveFileOnDisk(pathToSave).then((kind) => {
+      if (kind === 'same' && S.activeFilePath === pathToSave && S.isDirty) scheduleAutoSave();
+    }).catch((e) => console.warn('[Sidebar] disk check after a stopped save failed:', e));
+  }
   return false;
 }
 
@@ -574,6 +685,7 @@ if (S.sidebarViewMode === 'card') {
   }
 }
 
+report('ok');
 return true;
 
 
@@ -583,6 +695,7 @@ return true;
 
 }).catch(err => {
   console.error('[Sidebar] Uncaught error in save chain – recovering:', err);
+  report('error');
   return false;
 });
 return savePromise;
@@ -606,11 +719,20 @@ export function waitForSaveChainIdle() {
    whenever autosave was suspended). Call it right after the rename
    succeeded, before any other await, so watcher events for the old name
    already see the new active path.
+   Only the OPEN note follows: when oldPath is not what the editor shows,
+   nothing but the "left oldPath" mark happens and false is returned. A
+   title rename finishing after another note had been opened used to point
+   the editor (and so autosave) at the renamed file while it showed that
+   other note — the next keystroke wrote the other note's text over the
+   renamed one. Returns true when the open note followed.
   ══════════════════════════════════════════════════════════════════ */
 export async function retargetActiveFile(oldPath, newPath) {
-  if (!oldPath || !newPath) return;
-  S.activeFilePath = newPath;
+  if (!oldPath || !newPath) return false;
+  /* The file left oldPath through our own operation — open or not, a save
+     that captured oldPath must not recreate it there (_goneActivePaths). */
   markActivePathGone(oldPath);
+  if (!samePath(S.activeFilePath, oldPath)) return false;
+  S.activeFilePath = newPath;
   forgetGonePath(newPath);
   // A hold belongs to the file, not to its old name (message shows the new one).
   if (S._conflictHoldPath === oldPath) setAutosaveHold(newPath, S._holdReason);
@@ -635,6 +757,7 @@ export async function retargetActiveFile(oldPath, newPath) {
   } catch (e) {
     console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e);
   }
+  return true;
 }
 
   /** Schedules an auto-save after autosaveDelayMs() of inactivity, but
@@ -700,6 +823,7 @@ export function initSaveEngine() {
 
   // Pivot the sidebar state to a newly saved file (used by Save As)
   window.sidebarPivotToNewFile = async function(newPath, newRoot, savedContent) {
+    await waitForTitleRename(); // it would retarget the note after this pivot
     /* Adopt the CANONICAL spellings the folder listings use (setRootPath
        resolves the root, canonicalEntryPath the file) — the Save As
        dialog hands back the path as typed or navigated, which may run
@@ -733,7 +857,8 @@ export function initSaveEngine() {
     }
     // Save As wrote `savedContent` (editor text, LF) to the new file.
     rememberDiskContent(typeof savedContent === 'string' ? savedContent : null);
-    await window.NativeAPI.setLastOpenedFile(newPath);
+    // Non-fatal: the root, title and watcher below must follow regardless.
+    await window.NativeAPI.setLastOpenedFile(newPath).catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
 
     // If the file was saved to a directory outside the current project root,
     // the backend has already updated its own root state and trustedRoots.

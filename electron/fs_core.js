@@ -17,16 +17,38 @@ const path   = require('path');
 const fs     = require('fs');
 const crypto = require('crypto');
 
+/* ── Write EVERY byte ────────────────────────────────────────────────────
+   write(2) may write fewer bytes than asked — POSIX allows it when the
+   disk is nearly full or a file-size limit is reached — and fs.writeSync
+   then simply returns the smaller count, without an error. A single
+   writeSync therefore let a truncated temp file be fsynced and renamed
+   over the note, and the save reported success. Keep writing until all
+   bytes are down; when no more fit, the next write throws the real error
+   (ENOSPC, EFBIG) and the caller's cleanup keeps the old file. */
+function writeAllSync(fd, buffer) {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const n = fs.writeSync(fd, buffer, offset, buffer.length - offset);
+    if (!(n > 0)) {
+      throw new Error(`Write failed: no progress after ${offset} of ${buffer.length} bytes.`);
+    }
+    offset += n;
+  }
+}
+
 /* ── fsync-safe write helper ────────────────────────────────────────────
    Flushes kernel buffers to physical disk before returning, so a rename
    that follows can never publish a file whose bytes are still in flight
    (ext4 delayed allocation can otherwise produce a zero-byte file after
    power loss). */
 function writeFileWithFsync(filePath, data, encoding) {
+  const buffer = typeof data === 'string'
+    ? Buffer.from(data, encoding || 'utf8')
+    : Buffer.from(data.buffer, data.byteOffset, data.byteLength); // Buffer / typed array, no copy
   let fd;
   try {
     fd = fs.openSync(filePath, 'w');
-    fs.writeSync(fd, data, null, encoding || 'utf8');
+    writeAllSync(fd, buffer);
     fs.fsyncSync(fd);
   } finally {
     if (fd !== undefined) {
@@ -741,6 +763,7 @@ function createSettingsStore(getFilePath) {
 }
 
 module.exports = {
+  writeAllSync,
   writeFileWithFsync,
   syncParentDir,
   atomicWriteFile,

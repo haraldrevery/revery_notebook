@@ -61,7 +61,7 @@ dialog.showMessageBox = async (_win, opts) => {
 };
 
 function cleanup() {
-  for (const d of [project, userData]) {
+  for (const d of [project, userData, tmpRoot]) {
     try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) { /* best effort */ }
   }
 }
@@ -135,5 +135,12 @@ app.on('browser-window-created', (_event, win) => {
     }
   });
 });
+
+/* electron/main.js keeps its crash backups under os.tmpdir() and purges
+   the ones older than 7 days 5 s after start: a test run must never list,
+   write or purge the REAL folder. Point it at one of our own (removed with
+   the rest). Chromium keeps using the real temp dir (TMPDIR untouched). */
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'revery-e2e-tmp-'));
+os.tmpdir = () => tmpRoot;
 
 require(path.join(__dirname, '..', '..', 'electron', 'main.js'));
