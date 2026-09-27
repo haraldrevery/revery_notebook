@@ -1098,7 +1098,7 @@
 
 ${display}${overflow}
 
-To recover: open the file in Revery and verify it looks correct. If it is corrupted, locate the .revery_bak file in your file manager and rename it to replace the original (drop the ".<timestamp>.revery_bak" suffix).`,
+To recover: open the file in Revery and verify it looks correct. If it is corrupted, locate the .revery_bak file in your file manager and rename it to the note's own name to replace the original (the backup is named after the note \u2014 shortened if that name is long \u2014 followed by ".<timestamp>.revery_bak").`,
       buttons: [window.t("OK")]
     });
   }
@@ -2109,6 +2109,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     window.sidebarGetActiveFilePath = () => S.activeFilePath;
     window.sidebarGetRootPath = () => S.rootPath;
     window.sidebarIsDirty = () => S.isDirty;
+    window.sidebarUnsavedState = () => ({
+      path: S.activeFilePath,
+      dirty: S.isDirty,
+      held: !!S._conflictHoldPath && S._conflictHoldPath === S.activeFilePath
+    });
     window.sidebarPivotToNewFile = async function(newPath, newRoot, savedContent) {
       await waitForTitleRename();
       if (newRoot && newRoot !== S.rootPath) {
@@ -2406,6 +2411,21 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
   function invalidateProjectScan() {
     _cache = { at: 0, root: null, files: null };
+  }
+
+  // src/sidebar/import_text.js
+  function decodeImportedText(bytes) {
+    const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (b.length >= 4 && b[0] === 255 && b[1] === 254 && b[2] === 0 && b[3] === 0) {
+      throw new Error("UTF-32 text is not supported.");
+    }
+    if (b.length >= 2 && b[0] === 255 && b[1] === 254) {
+      return new TextDecoder("utf-16le", { fatal: true }).decode(b);
+    }
+    if (b.length >= 2 && b[0] === 254 && b[1] === 255) {
+      return new TextDecoder("utf-16be", { fatal: true }).decode(b);
+    }
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(b);
   }
 
   // src/sidebar/fileops.js
@@ -2882,6 +2902,33 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       S._operationLock = false;
     }
   }
+  function tellDeleteStopped(msg) {
+    if (typeof window.showStatusWarning === "function") {
+      window.showStatusWarning(
+        "action-stopped",
+        msg.replace("{name}", baseNameOf(S.activeFilePath || "")),
+        { priority: 80, ttl: 9e3 }
+      );
+    }
+  }
+  function deleteBlockedByPause(paths) {
+    if (!activeAffectedBy(paths) || !S._conflictHoldPath || S._conflictHoldPath !== S.activeFilePath) return false;
+    tellDeleteStopped(window.t('Nothing was deleted: auto-save is paused for "{name}", so the version on screen is not on disk. Save it (Ctrl+S) or resolve the message first.'));
+    return true;
+  }
+  async function saveOpenNoteBeforeDelete(paths) {
+    if (!activeAffectedBy(paths)) return true;
+    if (deleteBlockedByPause(paths)) return false;
+    if (S.isDirty) {
+      if (!await saveActiveFile()) {
+        tellDeleteStopped(window.t('Nothing was deleted: "{name}" could not be saved first, and its latest edits would have been lost.'));
+        return false;
+      }
+      return true;
+    }
+    await waitForSaveChainIdle();
+    return true;
+  }
   async function deleteSelectedNodes() {
     if (selectedItems.size === 0) return;
     if (S._operationLock) {
@@ -2891,6 +2938,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     S._operationLock = true;
     try {
       const items = withoutNested([...selectedItems].map((p) => ({ path: p })));
+      if (deleteBlockedByPause(items.map((it) => it.path))) return;
       const n = selectedItems.size;
       const anyLink = [...selectedItems].some((p) => itemInfo(p).link);
       const result = await window.NativeAPI.showMessageBox({
@@ -2902,6 +2950,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         detail: window.t("You can restore them from your system trash.") + (anyLink ? "\n" + window.t("Links are removed as links; the items they point to are not changed.") : "")
       });
       if (result.response !== 0) return;
+      if (!await saveOpenNoteBeforeDelete(items.map((it) => it.path))) return;
       const errors = [];
       await inDiskLock(activeAffectedBy(items.map((it) => it.path)), async () => {
         for (const { path: p } of items) {
@@ -3182,6 +3231,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     S._operationLock = true;
     try {
       const name = baseNameOf(nodePath);
+      if (deleteBlockedByPause([nodePath])) return;
       const result = await window.NativeAPI.showMessageBox({
         type: "question",
         buttons: [window.t("Move to Trash"), window.t("Cancel")],
@@ -3191,6 +3241,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         detail: isLink ? window.t("Only the link is removed. The item it points to is not changed.") : type === "dir" ? window.t("The folder and all its contents will be moved to your system trash. You can restore them from there.") : window.t("The file will be moved to your system trash. You can restore it from there.")
       });
       if (result.response !== 0) return;
+      if (!await saveOpenNoteBeforeDelete([nodePath])) return;
       let failure = null;
       await inDiskLock(activeAffectedBy([nodePath]), async () => {
         try {
@@ -3288,29 +3339,74 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       input.onchange = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        const tell = (type, title, message, detail) => window.NativeAPI.showMessageBox({
+          type,
+          title,
+          message,
+          detail,
+          buttons: [window.t("OK")]
+        }).catch(() => {
+        });
         if (file.size > 20 * 1024 * 1024) {
-          alert("File is too large. Maximum is 20 MB.");
+          await tell("warning", window.t("Import"), window.t("File is too large. Maximum is 20 MB."));
           return;
         }
-        const reader = new FileReader();
-        reader.onerror = () => alert("An error occurred while reading the file.");
-        reader.onload = async (ev) => {
-          const content = ev.target.result;
-          let baseName = sanitizeEntryName(file.name.replace(/\.[^/.]+$/, ""));
-          const ext = file.name.endsWith(".txt") ? "txt" : "md";
-          if (checkEntryName(baseName) || checkEntryName(`${baseName}.${ext}`)) baseName = "imported";
-          const destPath = await uniquePath(dir, baseName, ext);
-          try {
-            await window.NativeAPI.createFile(destPath);
-            await window.NativeAPI.writeFile(destPath, content);
-          } catch (err) {
-            console.error("[Sidebar] import write failed:", err);
-            return;
+        let bytes;
+        try {
+          bytes = await file.arrayBuffer();
+        } catch (err) {
+          await tell(
+            "error",
+            window.t("Import Failed"),
+            window.t('"{name}" could not be read.').replace("{name}", file.name),
+            errText(err)
+          );
+          return;
+        }
+        let content;
+        try {
+          content = decodeImportedText(bytes);
+        } catch (_) {
+          await tell(
+            "warning",
+            window.t("Import"),
+            window.t('"{name}" was not imported.').replace("{name}", file.name),
+            window.t("It is not UTF-8 text (it may use another encoding, such as Windows-1252). Importing it would have replaced some of its characters. Convert it to UTF-8 in another editor, then import it again.")
+          );
+          return;
+        }
+        let baseName = sanitizeEntryName(file.name.replace(/\.[^/.]+$/, ""));
+        const ext = /\.txt$/i.test(file.name) ? "txt" : "md";
+        if (checkEntryName(baseName) || checkEntryName(`${baseName}.${ext}`)) baseName = "imported";
+        let destPath = null;
+        let created = false;
+        try {
+          for (let attempt = 0; attempt < 5; attempt++) {
+            destPath = await uniquePath(dir, baseName, ext);
+            try {
+              await window.NativeAPI.createFile(destPath);
+              created = true;
+              break;
+            } catch (err) {
+              if (String(err).includes("already exists") && attempt < 4) continue;
+              throw err;
+            }
           }
-          await renderTree();
-          await openFile(destPath);
-        };
-        reader.readAsText(file);
+          await window.NativeAPI.writeFile(destPath, content);
+        } catch (err) {
+          console.error("[Sidebar] import write failed:", err);
+          if (created) window.NativeAPI.deleteNode(destPath).catch(() => {
+          });
+          await tell(
+            "error",
+            window.t("Import Failed"),
+            window.t('"{name}" could not be imported.').replace("{name}", file.name),
+            errText(err)
+          );
+          return;
+        }
+        await renderTree();
+        await openFile(destPath);
       };
       input.click();
     };

@@ -281,15 +281,22 @@ mainWindow.loadFile(path.join(__dirname, '..', 'www', 'index.html'));
      will-navigate fires for same-frame navigations (standard link clicks).
      setWindowOpenHandler fires for target="_blank" and window.open() calls. */
 
-mainWindow.webContents.on('will-navigate', (event, url) => {
+const navContents = mainWindow.webContents;
+navContents.on('will-navigate', (details, legacyUrl) => {
   /* Allow reloads of the currently loaded page (window.location.reload()
      from the renderer, Ctrl+R when devTools are enabled, etc.). Without
      this guard the unconditional preventDefault() below also cancels
      reloads, which silently breaks any code path that calls reload() —
-     e.g. the Total Reset flow in markdown_editor_actions_cm.js.        */
-  if (url === event.sender.getURL()) return;
+     e.g. the Total Reset flow in markdown_editor_actions_cm.js.
+     Electron now passes a details object (details.url; the positional url
+     is deprecated) that has no `sender`: reading event.sender.getURL()
+     threw in the main process on every reload — an "uncaught exception"
+     error box on Total Reset, with the reload left unguarded. The page's
+     own URL comes from the webContents this listener belongs to. */
+  const url = (details && typeof details.url === 'string') ? details.url : legacyUrl;
+  if (url === navContents.getURL()) return;
 
-  event.preventDefault();
+  details.preventDefault();
   console.warn('[revery] Blocked navigation attempt to:', url);
 });
 

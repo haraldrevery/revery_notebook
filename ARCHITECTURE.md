@@ -414,8 +414,26 @@ a deleted one (in Tauri, commands are not ordered, so even an explicit
 write could land after the rename). When the open note is involved, its
 watcher is stopped first and awaited (on Windows an open handle inside a
 folder can block renaming it) and started again afterwards. Deleting the
-open note closes it (the user confirmed the delete). Never put a dialog
+open note (or a folder around it) first SAVES it, exactly as opening
+another note would, so the copy in the Trash holds the latest text; then it
+is closed. Nothing is deleted when that save fails or stops (another
+program changed the file: its question comes up), nor while auto-save is
+paused for the note — the version on screen is not on disk then, and a
+status message says to save or resolve it first. Never put a dialog
 inside the disk lock: saves would wait on it.
+
+**Import** (sidebar) decodes strictly (`src/sidebar/import_text.js`): UTF-8
+as is (a BOM kept), UTF-16 with a byte-order mark converted, anything else
+refused with a message — `FileReader.readAsText` used to put U+FFFD in
+place of every byte of a Windows-1252 file. A failed write is reported and
+leaves no empty file behind.
+
+**Total Reset** (Quit → Engine Stopped) saves the open note first when it
+has unsaved edits, and does nothing — back to the editor, with a status
+message — when that save fails or auto-save is paused for the note: the
+reset reloads the app and forgets the last-opened note, so edits waiting
+for autosave used to vanish without their crash backup ever being offered.
+"Export & Continue" moves on only when the export was actually written.
 
 Typing with no note open creates one ("scratchpad", save.js). If the user
 loads another document before that file exists, the typed text still goes
@@ -701,8 +719,8 @@ recommended default too. A blank backup only offers "Keep saved version".
 When the last note cannot be opened at all (deleted or moved while the
 app was closed, no longer UTF-8, too large), its backup is offered as a new
 note that then opens — the start used to show the welcome text and forget
-the backup. Recovered files are written with a short name (≤ 150 bytes) so
-the atomic write's temporary suffix always fits.
+the backup. Recovered files get a short name (≤ 150 bytes; a very long
+note name falls back to plain `recovered.md`).
 
 ### Atomic Writes
 
@@ -720,6 +738,21 @@ smaller count. Electron's `writeAllSync` (fs_core.js) keeps writing until
 all bytes are down, so the real error (ENOSPC/EFBIG) surfaces and the old
 file stays — a single `writeSync` used to rename a truncated temp file over
 the note and report success. Tauri's `write_all` always looped.
+
+**Temp names are bounded.** The temp file (and the EXDEV snapshot) starts
+with the note's name, cut to at most 100 bytes on a character boundary
+(`tempSiblingPath` / Rust `temp_sibling`), then `.<unique>.revery_tmp`. The
+FULL name used to be kept, so a note using the 255-byte name limit (76 CJK
+characters are enough) could be created but never saved.
+
+**Permission bits are kept** (POSIX): the temp file takes over the mode of
+the file it replaces before its bytes are written (`existingModeBits` /
+Rust `keep_permissions_of`). The rename publishes a NEW file, which used to
+get the default mode: a private 0600 note became readable by other users
+after one save. Best effort, never fails a save; not done on Windows (the
+mode there is only the read-only flag, and copying it would make the next
+save fail). Owner, group, extended attributes and Windows ACLs are not
+carried over.
 
 ### Text encoding, line endings, lone surrogates
 
@@ -767,7 +800,7 @@ for production).
 | XSS → file read | Renderer has no direct FS access; must go through IPC |
 | Oversized payloads | Files > 20 MB are rejected at the IPC handler level |
 | Dialog spoofing | Only `dialog.*` APIs in main process; renderer cannot fake them |
-| Acting as a browser | `will-navigate` cancels everything except same-URL reloads; `setWindowOpenHandler` denies all; links are never forwarded to the OS browser (policy: the app never opens links) |
+| Acting as a browser | `will-navigate` cancels everything except same-URL reloads (the target comes from `details.url`, the page's own URL from the webContents — `event.sender` no longer exists on Electron's details object, and reading it threw an uncaught exception on every reload, e.g. Total Reset); `setWindowOpenHandler` denies all; links are never forwarded to the OS browser (policy: the app never opens links) |
 
 ### Tauri
 
@@ -1015,7 +1048,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 
 | Suite | What it proves |
 |---|---|
-| `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails; short writes are completed, a short write followed by ENOSPC fails with the target untouched, a zero-progress write cannot loop, and a REAL kernel short write (`ulimit -f`, Linux) is reported instead of truncating |
+| `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails; short writes are completed, a short write followed by ENOSPC fails with the target untouched, a zero-progress write cannot loop, and a REAL kernel short write (`ulimit -f`, Linux) is reported instead of truncating; a note name near the 255-byte limit saves (bounded temp names, whole characters), and the permission bits of the replaced file are kept |
 | `test/fs_core.paths.test.js` | Path traversal / symlink-escape rejection, dropped-filename sanitisation |
 | `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
 | `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup |
@@ -1029,6 +1062,8 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/data_safety_e2e.test.js` | Boots the REAL desktop app on a temp project: Replace after edits / file switch / regex context; scratchpad race; sidebar Ctrl+Z; rename during a "Keep my version" hold; open-note links follow a rename; CRLF kept; external write right after an autosave detected; a note moved away by another program not recreated |
 | `test/save_race_e2e.test.js` | Boots the REAL desktop app: renaming the open note in the title and clicking another note while the rename runs (the renamed note keeps its text, the opened note gets the typing); another program's write just before an autosave, and just before Ctrl+S (never overwritten unasked: one "File Changed Externally" question, both versions survive); a note moved away just before an autosave (not recreated in the background, Ctrl+S still can); closing right after an external write (the window stays open at that question) |
 | `test/recovery_e2e.test.js` | Boots the REAL desktop app six times with a crash backup waiting: Escape saves it as `note_recovered.md` (it used to delete it), Restore and an explicit Discard do exactly that, Enter on a backup older than the file keeps both, a last note that is gone gets its backup offered, saved as a new note and opened (or discarded on request) |
+| `test/import_text.test.js` | The import decoder: UTF-8 exact (BOM kept), UTF-16 LE/BE with a BOM converted, Windows-1252 bytes / unpaired surrogates / odd UTF-16 lengths / a UTF-32 BOM refused |
+| `test/user_ops_e2e.test.js` | Boots the REAL desktop app (the system Trash replaced by a private folder): deleting the open note with unsaved edits puts them in the Trash copy; deleting, or a Total Reset, while auto-save is paused does nothing (and says so); import refuses Windows-1252, converts UTF-16, reports a failed write with nothing left behind; "Export & Continue" with the dialog cancelled stays on step one; a Total Reset with unsaved edits saves them, then reloads (this also pins the navigation guard, which crashed on reloads) |
 | `test/close_watchdog_e2e.test.js` | The app can always be closed, never silently: normal close, a failing close flow, a renderer reported gone (reload offered), a hung page (force close offered after 5 s) |
 | `test/crash_consistency.test.js` | A child process is SIGKILLed mid-write 12 times; the target file must always contain exactly one complete payload |
 | `test/zip_core.test.js` | Zip export: archive validity (CRC + `unzip -t`), UTF-8 names, symlinks never enter the archive, destination self-exclusion, size caps, deterministic output; `buildZipFromEntries` (LaTeX-project assembler) auto parent-dirs + unsafe-name rejection |
@@ -1054,6 +1089,9 @@ Every desktop E2E harness (`test/helpers/*_e2e_main.js`) points
 `os.tmpdir()` at a private folder before loading `electron/main.js`: the
 real main purges crash backups older than 7 days 5 s after start, and a
 test run must never touch the developer's real `revery-volatile` folder.
+They also turn a main-process exception into an immediate `E2E-FAIL` with
+its stack: Electron's default handler shows a modal error box, which
+blocks the run (and appears on the developer's desktop).
 
 ### Zip Project Export
 

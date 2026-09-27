@@ -114,4 +114,13 @@ app.on('browser-window-created', (_event, win) => {
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'revery-e2e-tmp-'));
 os.tmpdir = () => tmpRoot;
 
+/* A main-process exception must fail the run at once, with its stack in
+   the output — Electron's default handler shows a MODAL error box instead,
+   which blocks the process (and pops up on the developer's desktop). */
+process.on('uncaughtException', (err) => {
+  console.error('E2E-FAIL: main-process exception: ' + ((err && err.stack) || err));
+  try { cleanup(); } catch (_) { /* best effort */ }
+  app.exit(1);
+});
+
 require(path.join(__dirname, '..', '..', 'electron', 'main.js'));

@@ -36,18 +36,44 @@ function writeAllSync(fd, buffer) {
   }
 }
 
+/* ── Permission bits of a file being replaced ───────────────────────────
+   The atomic rename publishes a NEW file, which gets the default mode: a
+   private 0600 note became readable by other users after its first save,
+   and an executable script lost its x bit. The temp file takes over the
+   old file's bits instead (POSIX; on Windows the mode is only the
+   read-only flag, and copying that would make the next save fail).
+   Keeping them is best effort — it must never fail the save. */
+function existingModeBits(p) {
+  if (process.platform === 'win32') return null;
+  try { return fs.statSync(p).mode & 0o7777; } catch (_) { return null; } // new file: default mode
+}
+
+function applyModeBits(fd, mode) {
+  try {
+    fs.fchmodSync(fd, mode);
+  } catch (_) {
+    try {
+      fs.fchmodSync(fd, mode & 0o777); // setuid/setgid can be refused: keep the rest
+    } catch (err) {
+      console.warn('[revery] could not keep the file permissions (non-fatal):', err.message);
+    }
+  }
+}
+
 /* ── fsync-safe write helper ────────────────────────────────────────────
    Flushes kernel buffers to physical disk before returning, so a rename
    that follows can never publish a file whose bytes are still in flight
    (ext4 delayed allocation can otherwise produce a zero-byte file after
-   power loss). */
-function writeFileWithFsync(filePath, data, encoding) {
+   power loss). `mode` (optional): permission bits to give the new file
+   before its bytes are written (existingModeBits). */
+function writeFileWithFsync(filePath, data, encoding, mode) {
   const buffer = typeof data === 'string'
     ? Buffer.from(data, encoding || 'utf8')
     : Buffer.from(data.buffer, data.byteOffset, data.byteLength); // Buffer / typed array, no copy
   let fd;
   try {
     fd = fs.openSync(filePath, 'w');
+    if (mode != null) applyModeBits(fd, mode);
     writeAllSync(fd, buffer);
     fs.fsyncSync(fd);
   } finally {
@@ -76,6 +102,29 @@ function syncParentDir(filePath) {
   }
 }
 
+/* ── Temporary sibling names ────────────────────────────────────────────
+   The temp file (and the EXDEV snapshot) sits beside the file it replaces
+   and starts with its name, so a leftover is recognisable — but with at
+   most TEMP_NAME_PREFIX_BYTES bytes of it. A note may use the whole
+   255-byte name limit, and "<full name>.<unique>.revery_tmp" was then too
+   long to create: such a note could never be saved (ENAMETOOLONG on every
+   autosave). ~100 + 34 bytes also fits the tighter limits some filesystems
+   have (eCryptfs: 143). The cut never splits a UTF-8 character. MIRROR of
+   temp_sibling in tauri/src/main.rs. */
+const TEMP_NAME_PREFIX_BYTES = 100;
+
+function tempNamePrefix(name) {
+  const buf = Buffer.from(String(name), 'utf8');
+  if (buf.length <= TEMP_NAME_PREFIX_BYTES) return String(name);
+  let end = TEMP_NAME_PREFIX_BYTES;
+  while (end > 0 && (buf[end] & 0xC0) === 0x80) end--; // back to a character boundary
+  return buf.subarray(0, end).toString('utf8');
+}
+
+function tempSiblingPath(target, uniqueSuffix, tag) {
+  return path.join(path.dirname(target), `${tempNamePrefix(path.basename(target))}.${uniqueSuffix}.${tag}`);
+}
+
 /* ── Atomic file write ──────────────────────────────────────────────────
    Strategy: write to a unique sibling temp file (same directory → same
    filesystem), fsync it, then rename over the destination. A crash at any
@@ -91,11 +140,11 @@ function syncParentDir(filePath) {
    recovery. */
 function atomicWriteFile(safe, content) {
   const uniqueSuffix = Date.now() + '_' + crypto.randomBytes(4).toString('hex');
-  const tmp = safe + `.${uniqueSuffix}.revery_tmp`;
-  const bak = safe + `.${uniqueSuffix}.revery_bak`;
+  const tmp = tempSiblingPath(safe, uniqueSuffix, 'revery_tmp');
+  const bak = tempSiblingPath(safe, uniqueSuffix, 'revery_bak');
 
   try {
-    writeFileWithFsync(tmp, content, 'utf8');
+    writeFileWithFsync(tmp, content, 'utf8', existingModeBits(safe));
   } catch (err) {
     try { fs.rmSync(tmp, { force: true }); } catch (_) {}
     throw err;
@@ -765,6 +814,8 @@ function createSettingsStore(getFilePath) {
 module.exports = {
   writeAllSync,
   writeFileWithFsync,
+  tempSiblingPath,
+  TEMP_NAME_PREFIX_BYTES,
   syncParentDir,
   atomicWriteFile,
   readUtf8TextStrict,

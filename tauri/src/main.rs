@@ -1037,6 +1037,69 @@ where
 
 
 
+/* ── Temporary sibling names ─────────────────────────────────────────────
+   The temp file (and the EXDEV snapshot) sits beside the file it replaces
+   and starts with its name, so a leftover is recognisable — but with at
+   most TEMP_NAME_PREFIX_BYTES bytes of it. A note may use the whole
+   255-byte name limit, and "<full name>.<nanos>.revery_tmp" was then too
+   long to create: such a note could never be saved (ENAMETOOLONG on every
+   autosave). ~100 + 40 bytes also fits tighter filesystem limits
+   (eCryptfs: 143). The cut never splits a character, and a per-process
+   sequence number keeps two notes that share a long prefix from ever
+   sharing a temp name. MIRROR of fs_core.tempSiblingPath (Electron). */
+const TEMP_NAME_PREFIX_BYTES: usize = 100;
+
+fn temp_name_prefix(name: &str) -> &str {
+    if name.len() <= TEMP_NAME_PREFIX_BYTES {
+        return name;
+    }
+    let mut end = TEMP_NAME_PREFIX_BYTES;
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    &name[..end]
+}
+
+fn temp_sibling(dest: &Path, tag: &str) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dest.with_file_name(format!("{}.{}_{}.{}", temp_name_prefix(&name), nanos, seq, tag))
+}
+
+/// Give the new file the permission bits of the file it replaces (Unix).
+/// The rename publishes a NEW file, which used to get the default mode — a
+/// private 0600 note became readable by other users after its first save.
+/// Windows: nothing is copied (the mode there is only the read-only flag,
+/// and a read-only temp file would make the next save fail). Best effort:
+/// never fails the save. MIRROR of fs_core existingModeBits/applyModeBits.
+fn keep_permissions_of(dest: &Path, f: &fs::File) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(dest) {
+            let mode = meta.permissions().mode() & 0o7777;
+            if f.set_permissions(fs::Permissions::from_mode(mode)).is_err() {
+                // setuid/setgid can be refused: keep the rest
+                if let Err(e) = f.set_permissions(fs::Permissions::from_mode(mode & 0o777)) {
+                    eprintln!("[revery] could not keep the file permissions (non-fatal): {e}");
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dest, f);
+    }
+}
+
 /// Atomically write a text file.
 // ── Atomic write helper ───────────────────────────────────────────────────
 //
@@ -1055,6 +1118,7 @@ fn atomic_write_file(tmp: &Path, dest: &Path, content: &[u8]) -> Result<(), Stri
     {
         let mut f = fs::File::create(tmp)
             .map_err(|e| format!("Cannot create temp file: {e}"))?;
+        keep_permissions_of(dest, &f);
         f.write_all(content)
             .map_err(|e| { let _ = fs::remove_file(tmp); format!("Write failed: {e}") })?;
         // FIX: Flush kernel buffers to physical disk before rename 
@@ -1082,12 +1146,7 @@ fn atomic_write_file(tmp: &Path, dest: &Path, content: &[u8]) -> Result<(), Stri
     // Step 3 (EXDEV fallback): backup → overwrite → clean up.
     // If the copy is interrupted mid-write, `dest` would be left truncated.
     // Snapshot `dest` first so we can restore it on failure.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let bak_name = format!("{}.{}.revery_bak", dest.file_name().unwrap_or_default().to_string_lossy(), now);
-    let bak = dest.with_file_name(bak_name);
+    let bak = temp_sibling(dest, "revery_bak");
 
     let has_bak = dest.exists();
     if has_bak {
@@ -1200,27 +1259,12 @@ fn is_cross_device_err(e: &std::io::Error) -> bool {
     tokio::task::spawn_blocking(move || {
         let p = safe_path_inside(&path, &root)?;
 
-    // Append .revery_tmp to the full filename (not replace the extension),
-    // so notes.md → notes.md.revery_tmp and notes.txt → notes.txt.revery_tmp
-    // remain distinct temp files even when saved concurrently.
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-let now = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .unwrap_or_default()
-    .as_nanos();
-// Same ".revery_tmp" suffix as Electron and save_file, so a temp file
-// left behind by a crash is recognisable as ours on either wrapper.
-let unique_name = format!(
-    "{}.{}.revery_tmp",
-    p.file_name()
-        .ok_or("Cannot write file: path has no filename component")?
-        .to_string_lossy(),
-    now
-);
-let tmp = p.with_file_name(unique_name);
-
-atomic_write_file(&tmp, &p, content.as_bytes())
+        p.file_name().ok_or("Cannot write file: path has no filename component")?;
+        // Same ".revery_tmp" suffix as Electron and save_file, so a temp file
+        // left behind by a crash is recognisable as ours on either wrapper;
+        // its name is bounded (see temp_sibling).
+        let tmp = temp_sibling(&p, "revery_tmp");
+        atomic_write_file(&tmp, &p, content.as_bytes())
     })
     .await
     .map_err(|e| format!("Background write task failed: {e}"))?
@@ -1681,12 +1725,8 @@ async fn save_file(
 
             let p = safe_path(&path_str)?;
 
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let unique_name = format!("{}.{}.revery_tmp", p.file_name().ok_or("Path has no filename")?.to_string_lossy(), now);
-            let tmp = p.with_file_name(unique_name);
+            p.file_name().ok_or("Path has no filename")?;
+            let tmp = temp_sibling(&p, "revery_tmp");
 
            atomic_write_file(&tmp, &p, content.as_bytes())?;
 
@@ -1962,16 +2002,8 @@ async fn export_project_zip(
     .await
     .map_err(|e| format!("zip task failed: {e}"))??;
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let unique_name = format!(
-        "{}.{}.revery_tmp",
-        dest.file_name().ok_or("Path has no filename")?.to_string_lossy(),
-        now
-    );
-    let tmp = dest.with_file_name(unique_name);
+    dest.file_name().ok_or("Path has no filename")?;
+    let tmp = temp_sibling(&dest, "revery_tmp");
     atomic_write_file(&tmp, &dest, &zip_bytes)?;
 
     Ok(ZipExportResult {
@@ -2152,16 +2184,8 @@ async fn export_latex_zip(
     let count = entries.len();
     let zip_bytes = build_zip_from_entries(&entries)?;
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let unique_name = format!(
-        "{}.{}.revery_tmp",
-        dest.file_name().ok_or("Path has no filename")?.to_string_lossy(),
-        now
-    );
-    let tmp = dest.with_file_name(unique_name);
+    dest.file_name().ok_or("Path has no filename")?;
+    let tmp = temp_sibling(&dest, "revery_tmp");
     atomic_write_file(&tmp, &dest, &zip_bytes)?;
 
     Ok(ZipExportResult {
@@ -3549,6 +3573,61 @@ mod tests {
             "OLD",
             "failed write must leave the destination untouched"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /* ── temp_sibling / keep_permissions_of ────────────────────────── */
+
+    #[test]
+    fn temp_names_keep_a_short_whole_character_prefix() {
+        let dir = test_dir("tmpname");
+        let short = temp_sibling(&dir.join("note.md"), "revery_tmp");
+        let s = short.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(s.starts_with("note.md.") && s.ends_with(".revery_tmp"), "{s}");
+        // 'ab' + 3-byte characters: the 100-byte cut lands inside a character.
+        for long in [format!("ab{}.md", "会".repeat(80)), format!("x{}.md", "📝".repeat(60))] {
+            let t = temp_sibling(&dir.join(&long), "revery_tmp");
+            let t = t.file_name().unwrap().to_string_lossy().into_owned();
+            let prefix = &t[..t.find('.').unwrap()];
+            assert!(prefix.len() <= TEMP_NAME_PREFIX_BYTES, "{t}");
+            assert!(prefix.len() > TEMP_NAME_PREFIX_BYTES - 4, "as much as fits: {t}");
+            assert!(long.starts_with(prefix), "a prefix of the name: {t}");
+            assert!(t.ends_with(".revery_tmp") && t.len() < 160, "{t}");
+        }
+        // Two temp names for one file in the same instant never collide.
+        assert_ne!(temp_sibling(&dir.join("n.md"), "revery_tmp"), temp_sibling(&dir.join("n.md"), "revery_tmp"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn atomic_write_saves_a_note_whose_name_is_near_the_limit() {
+        let dir = test_dir("aw-longname");
+        let dest = dir.join(format!("{}.md", "会議".repeat(38))); // 231 bytes
+        fs::write(&dest, "OLD").unwrap();
+        atomic_write_file(&temp_sibling(&dest, "revery_tmp"), &dest, b"NEW").unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "NEW");
+        let strays: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path() != dest)
+            .collect();
+        assert!(strays.is_empty(), "no leftovers expected: {strays:?}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_keeps_the_permission_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = test_dir("aw-mode");
+        let dest = dir.join("note.md");
+        for mode in [0o600u32, 0o640, 0o755] {
+            fs::write(&dest, "OLD").unwrap();
+            fs::set_permissions(&dest, fs::Permissions::from_mode(mode)).unwrap();
+            atomic_write_file(&temp_sibling(&dest, "revery_tmp"), &dest, b"NEW").unwrap();
+            assert_eq!(fs::metadata(&dest).unwrap().permissions().mode() & 0o777, mode, "mode {mode:o}");
+            assert_eq!(fs::read_to_string(&dest).unwrap(), "NEW");
+        }
         fs::remove_dir_all(&dir).ok();
     }
 

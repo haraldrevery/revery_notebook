@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { atomicWriteFile } = require('../electron/fs_core.js');
+const { atomicWriteFile, tempSiblingPath, TEMP_NAME_PREFIX_BYTES } = require('../electron/fs_core.js');
 
 /* fs_core holds a reference to the same `fs` module object, so patching a
    method here is visible inside atomicWriteFile. Every patch is restored in
@@ -138,6 +138,48 @@ describe('atomicWriteFile', () => {
       assert.equal(fs.readFileSync(target, 'utf8'), 'OLD CONTENT');
       assert.deepEqual(siblings(dir, 'note.md'), []);
     });
+
+  /* A note may use the whole 255-byte name limit. The temp file used to
+     append ~34 bytes to the FULL name, could not be created, and such a
+     note could never be saved (ENAMETOOLONG on every autosave). */
+  test('a name that uses nearly the whole 255-byte limit can be saved', () => {
+    const name = '会議'.repeat(38) + '.md'; // 231 bytes: 76 CJK characters
+    const p = path.join(dir, name);
+    fs.writeFileSync(p, 'OLD');
+    atomicWriteFile(p, 'NEW');
+    assert.equal(fs.readFileSync(p, 'utf8'), 'NEW');
+    assert.deepEqual(siblings(dir, name), []);
+  });
+
+  test('temp names keep a short prefix of the note name, never a split character', () => {
+    const tail = '.1_ab.revery_tmp';
+    const tempName = (name) => path.basename(tempSiblingPath(path.join(dir, name), '1_ab', 'revery_tmp'));
+    // Short names stay whole, so a leftover is recognisable.
+    assert.equal(tempName('note.md'), 'note.md' + tail);
+    // 'ab' + 3-byte characters: the 100-byte cut lands inside a character.
+    for (const long of ['ab' + '会'.repeat(80) + '.md', 'x' + '📝'.repeat(60) + '.md']) {
+      const t = tempName(long);
+      assert.ok(t.endsWith(tail), t);
+      const prefix = t.slice(0, -tail.length);
+      assert.ok(Buffer.byteLength(prefix) <= TEMP_NAME_PREFIX_BYTES, `prefix ${Buffer.byteLength(prefix)} bytes`);
+      assert.ok(Buffer.byteLength(prefix) > TEMP_NAME_PREFIX_BYTES - 4, 'as much of the name as fits');
+      assert.ok(long.startsWith(prefix), 'a prefix of the name');
+      assert.ok(!prefix.includes('�'), 'no character cut in half');
+    }
+  });
+
+  /* The rename publishes a NEW file: it used to get the default mode, so a
+     private 0600 note became readable by other users after one save. */
+  test('the permission bits of the replaced file are kept', { skip: process.platform === 'win32' }, () => {
+    for (const mode of [0o600, 0o640, 0o755]) {
+      fs.writeFileSync(target, 'OLD');
+      fs.chmodSync(target, mode);
+      atomicWriteFile(target, 'NEW ' + mode.toString(8));
+      assert.equal(fs.statSync(target).mode & 0o777, mode, `mode ${mode.toString(8)} must be kept`);
+      assert.equal(fs.readFileSync(target, 'utf8'), 'NEW ' + mode.toString(8));
+    }
+    assert.deepEqual(siblings(dir, 'note.md'), []);
+  });
 
   test('non-EXDEV rename failure: error propagates, temp cleaned, target untouched', () => {
     fs.writeFileSync(target, 'OLD');

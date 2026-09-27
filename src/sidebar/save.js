@@ -820,6 +820,15 @@ export function initSaveEngine() {
   window.sidebarGetActiveFilePath = () => S.activeFilePath;
   window.sidebarGetRootPath       = () => S.rootPath;
   window.sidebarIsDirty           = () => S.isDirty;
+  /* For flows outside the sidebar that must not drop the open note's work
+     (Total Reset): which note is open, whether it has unsaved edits, and
+     whether auto-save is paused for it — then the version on screen is not
+     on disk, and neither saving nor discarding it is a safe guess. */
+  window.sidebarUnsavedState = () => ({
+    path:  S.activeFilePath,
+    dirty: S.isDirty,
+    held:  !!S._conflictHoldPath && S._conflictHoldPath === S.activeFilePath,
+  });
 
   // Pivot the sidebar state to a newly saved file (used by Save As)
   window.sidebarPivotToNewFile = async function(newPath, newRoot, savedContent) {

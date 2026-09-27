@@ -503,7 +503,9 @@ document.getElementById('table-cols').addEventListener('keydown', e => {
 });
 
 
-/* Export function */
+/* Export function. Resolves true when the file was written (desktop) or
+   handed to the browser's download (web — a cancel cannot be seen there),
+   false when the user cancelled the dialog or the write failed. */
 async function exportFile(extension = 'md') {
   /* Sanitise the doc title: spaces to dashes, remove illegal OS characters, lowercase */
   let baseName = (docTitle.value.trim() || 'untitled').replace(/\s+/g, '-').replace(/[<>:"/\\|?*\x00-\x1F]/g, '').toLowerCase();
@@ -518,6 +520,7 @@ async function exportFile(extension = 'md') {
       const result = await window.NativeAPI.saveFile(filename, content);
       if (result && result.saved) {
         showSavedIndicator();
+        return true;
       }
       // result.saved === false → user cancelled; intentionally silent.
     } catch (err) {
@@ -539,7 +542,7 @@ async function exportFile(extension = 'md') {
         console.error('[exportFile] Could not show error dialog:', dialogErr);
       }
     }
-    return;
+    return false;
   }
   /* ── Tauri / web: blob download (Tauri auto-completes; web keeps old behaviour) ── */
   const blob    = new Blob([content], { type: mimeType });
@@ -559,6 +562,7 @@ async function exportFile(extension = 'md') {
 
   /* Tauri always succeeds (auto-download); web keeps existing behaviour */
   setTimeout(() => showSavedIndicator(), 500);
+  return true;
 }
 
 /* ── Zip project export (desktop only) ────────────────────────────────────
@@ -1106,8 +1110,9 @@ function showQuitStep2() {
 
 // Hook up Step 1 buttons
 document.getElementById('quit-btn-save')?.addEventListener('click', async () => {
-  await exportFile('md');
-  showQuitStep2();
+  /* Move on only when the export really happened: a cancelled or failed
+     export used to continue to "Engine Stopped" as if the text were safe. */
+  if (await exportFile('md')) showQuitStep2();
 });
 
 document.getElementById('quit-btn-nosave')?.addEventListener('click', () => {
@@ -1128,7 +1133,42 @@ document.getElementById('quit-btn-restart')?.addEventListener('click', () => {
   document.getElementById('quit-modal').classList.remove('show');
 });
 
+/* Total Reset reloads the app. A note open on the desktop keeps its work:
+   unsaved edits are saved first (they were dropped with the reload, and
+   the reset also forgets the last-opened note, so their crash backup was
+   never offered). If that save does not go through — it failed, or it
+   stopped because another program changed the file (that question comes
+   up instead) — or auto-save is paused for the note (the version on screen
+   is not on disk; saving or discarding it would both be a guess), nothing
+   is reset and the user is back in the editor with the text intact. */
+async function keepOpenNoteBeforeReset() {
+  if (!(window.NativeAPI && window.NativeAPI.isDesktop)) return true;
+  const st = (typeof window.sidebarUnsavedState === 'function') ? window.sidebarUnsavedState() : null;
+  if (!st || !st.path) return true; // no note open
+  const name = st.path.replace(/\\/g, '/').split('/').pop();
+  const stop = (msg) => {
+    if (typeof showStatusWarning === 'function') {
+      // Same slot as the sidebar's other 'action stopped' notices (the newest
+      // wins), above the sticky hold message (70).
+      showStatusWarning('action-stopped', msg.replace('{name}', name), { priority: 80, ttl: 9000 });
+    }
+    return false;
+  };
+  if (st.held) {
+    return stop(window.t('Total Reset stopped: auto-save is paused for "{name}", so the version on screen is not on disk. Save it (Ctrl+S) or resolve the message first.'));
+  }
+  if (!st.dirty) return true;
+  const saved = (typeof window.sidebarSaveActiveFile === 'function') && await window.sidebarSaveActiveFile();
+  return saved ? true : stop(window.t('Total Reset stopped: "{name}" could not be saved first.'));
+}
+
 document.getElementById('quit-btn-total-reset')?.addEventListener('click', async () => {
+  if (!(await keepOpenNoteBeforeReset())) {
+    window.isQuitting = false; // the editor keeps running: restore the safety net
+    document.getElementById('quit-modal').classList.remove('show');
+    return;
+  }
+
   // Prevent the beforeunload warning while we reset
   window.isQuitting = true;
 

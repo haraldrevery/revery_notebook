@@ -289,8 +289,9 @@ window.NativeAPI.onWindowClose(sidebarHandleClose);
      that folder is gone or outside the project) and returns the path.
      Nothing is ever overwritten: a free name (uniquePath) plus an exclusive
      create, retried on the backends' "already exists" contract. The name
-     stays short on purpose: the atomic write adds a temporary suffix, and
-     a name near the 255-byte limit could be created but never written. */
+     stays short on purpose (≤ 150 bytes): "_recovered" and a numbering
+     suffix ("_2") must still fit the 255-byte limit, and a very long
+     note name falls back to plain "recovered". */
   async function saveRecoveredTextAsNewFile(notePath, content) {
     let dir = parentPathOf(notePath);
     if (!dir || !S.rootPath || !isInsideRoot(dir, S.rootPath)) dir = S.rootPath;

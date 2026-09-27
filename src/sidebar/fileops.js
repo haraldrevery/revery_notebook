@@ -16,6 +16,7 @@ import { rewriteLinksInText, buildAbsMapper, invertRecords } from './link_rewrit
 import { listProjectTextFiles, invalidateProjectScan } from './project_scan.js';
 import { samePath, isInsideRoot, baseNameOf, dirOf, joinPath, parentPathOf, remapUnder,
          sanitizeEntryName, checkEntryName, renamedFileName } from './paths.js';
+import { decodeImportedText } from './import_text.js';
 
   /* ══════════════════════════════════════════════════════════════════
      SHARED PIECES OF EVERY FILE OPERATION
@@ -650,6 +651,47 @@ import { samePath, isInsideRoot, baseNameOf, dirOf, joinPath, parentPathOf, rema
     }
   }
 
+  /* One slot for every "your delete was stopped" notice: the newest replaces
+     the last; priority above the sticky hold message (70) it explains. */
+  function tellDeleteStopped(msg) {
+    if (typeof window.showStatusWarning === 'function') {
+      window.showStatusWarning('action-stopped', msg.replace('{name}', baseNameOf(S.activeFilePath || '')),
+        { priority: 80, ttl: 9000 });
+    }
+  }
+
+  /** Is the open note among `paths` (or inside one) while auto-save is
+      paused for it? Then the version on screen is not on disk, and deleting
+      would lose one of the two versions: nothing is deleted, the user is
+      told to save it (Ctrl+S) or resolve the pause first. Checked before
+      asking — no point confirming a delete that will not happen — and again
+      after (a pause can begin while the question is open). */
+  function deleteBlockedByPause(paths) {
+    if (!activeAffectedBy(paths) || !S._conflictHoldPath || S._conflictHoldPath !== S.activeFilePath) return false;
+    tellDeleteStopped(window.t('Nothing was deleted: auto-save is paused for "{name}", so the version on screen is not on disk. Save it (Ctrl+S) or resolve the message first.'));
+    return true;
+  }
+
+  /** Deleting the open note — or a folder around it — first saves what is
+      on screen, exactly as opening another note would, so the copy in the
+      Trash holds the latest text (it used to lack every edit autosave had
+      not written yet: they were dropped with the editor). Nothing is
+      deleted when the save fails (its error was shown) or stops because
+      another program changed the file (that question comes up instead). */
+  async function saveOpenNoteBeforeDelete(paths) {
+    if (!activeAffectedBy(paths)) return true;
+    if (deleteBlockedByPause(paths)) return false;
+    if (S.isDirty) {
+      if (!(await saveActiveFile())) {
+        tellDeleteStopped(window.t('Nothing was deleted: "{name}" could not be saved first, and its latest edits would have been lost.'));
+        return false;
+      }
+      return true;
+    }
+    await waitForSaveChainIdle();
+    return true;
+  }
+
   /** Move all selected items to the trash with a single confirmation. */
   async function deleteSelectedNodes() {
     if (selectedItems.size === 0) return;
@@ -657,6 +699,7 @@ import { samePath, isInsideRoot, baseNameOf, dirOf, joinPath, parentPathOf, rema
     S._operationLock = true;
     try {
       const items = withoutNested([...selectedItems].map((p) => ({ path: p })));
+      if (deleteBlockedByPause(items.map((it) => it.path))) return;
       const n     = selectedItems.size;
       const anyLink = [...selectedItems].some((p) => itemInfo(p).link);
 
@@ -670,6 +713,7 @@ import { samePath, isInsideRoot, baseNameOf, dirOf, joinPath, parentPathOf, rema
           + (anyLink ? '\n' + window.t('Links are removed as links; the items they point to are not changed.') : ''),
       });
       if (result.response !== 0) return;
+      if (!(await saveOpenNoteBeforeDelete(items.map((it) => it.path)))) return;
 
       const errors = [];
       await inDiskLock(activeAffectedBy(items.map((it) => it.path)), async () => {
@@ -1053,6 +1097,7 @@ async function deleteNode(nodePath, type, isLink = false) {
     S._operationLock = true;
     try {
       const name = baseNameOf(nodePath);
+      if (deleteBlockedByPause([nodePath])) return;
 
       const result = await window.NativeAPI.showMessageBox({
         type: 'question',
@@ -1069,6 +1114,7 @@ async function deleteNode(nodePath, type, isLink = false) {
             : window.t('The file will be moved to your system trash. You can restore it from there.'),
       });
       if (result.response !== 0) return;
+      if (!(await saveOpenNoteBeforeDelete([nodePath]))) return;
 
       let failure = null;
       await inDiskLock(activeAffectedBy([nodePath]), async () => {
@@ -1215,31 +1261,65 @@ export function initFileOps() {
     input.onchange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
+      const tell = (type, title, message, detail) => window.NativeAPI.showMessageBox({
+        type, title, message, detail, buttons: [window.t('OK')],
+      }).catch(() => {});
       if (file.size > 20 * 1024 * 1024) {
-        alert('File is too large. Maximum is 20 MB.');
+        await tell('warning', window.t('Import'), window.t('File is too large. Maximum is 20 MB.'));
         return;
       }
-      const reader = new FileReader();
-      reader.onerror = () => alert('An error occurred while reading the file.');
-      reader.onload = async (ev) => {
-        const content  = ev.target.result;
-        let baseName   = sanitizeEntryName(file.name.replace(/\.[^/.]+$/, ''));
-        const ext      = file.name.endsWith('.txt') ? 'txt' : 'md';
-        /* A picked file's name the one name rule refuses (".notes.md",
-           "con.md") is imported under a neutral name instead. */
-        if (checkEntryName(baseName) || checkEntryName(`${baseName}.${ext}`)) baseName = 'imported';
-        const destPath = await uniquePath(dir, baseName, ext);
-        try {
-          await window.NativeAPI.createFile(destPath);
-          await window.NativeAPI.writeFile(destPath, content);
-        } catch (err) {
-          console.error('[Sidebar] import write failed:', err);
-          return;
+      /* Strictly (import_text.js): readAsText used to decode lossily and
+         put U+FFFD in place of every byte that was not UTF-8. */
+      let bytes;
+      try {
+        bytes = await file.arrayBuffer();
+      } catch (err) {
+        await tell('error', window.t('Import Failed'),
+          window.t('"{name}" could not be read.').replace('{name}', file.name), errText(err));
+        return;
+      }
+      let content;
+      try {
+        content = decodeImportedText(bytes);
+      } catch (_) {
+        await tell('warning', window.t('Import'),
+          window.t('"{name}" was not imported.').replace('{name}', file.name),
+          window.t('It is not UTF-8 text (it may use another encoding, such as Windows-1252). Importing it would have replaced some of its characters. Convert it to UTF-8 in another editor, then import it again.'));
+        return;
+      }
+      let baseName   = sanitizeEntryName(file.name.replace(/\.[^/.]+$/, ''));
+      const ext      = /\.txt$/i.test(file.name) ? 'txt' : 'md';
+      /* A picked file's name the one name rule refuses (".notes.md",
+         "con.md") is imported under a neutral name instead. */
+      if (checkEntryName(baseName) || checkEntryName(`${baseName}.${ext}`)) baseName = 'imported';
+      let destPath = null;
+      let created = false;
+      try {
+        /* Same create-retry as createNewFile: another program may take the
+           free name between uniquePath() and the exclusive create. */
+        for (let attempt = 0; attempt < 5; attempt++) {
+          destPath = await uniquePath(dir, baseName, ext);
+          try {
+            await window.NativeAPI.createFile(destPath);
+            created = true;
+            break;
+          } catch (err) {
+            if (String(err).includes('already exists') && attempt < 4) continue;
+            throw err;
+          }
         }
-        await renderTree();
-        await openFile(destPath);
-      };
-      reader.readAsText(file);
+        await window.NativeAPI.writeFile(destPath, content);
+      } catch (err) {
+        console.error('[Sidebar] import write failed:', err);
+        /* The empty file is ours (just created, exclusively): never leave
+           it behind looking like the import. */
+        if (created) window.NativeAPI.deleteNode(destPath).catch(() => {});
+        await tell('error', window.t('Import Failed'),
+          window.t('"{name}" could not be imported.').replace('{name}', file.name), errText(err));
+        return;
+      }
+      await renderTree();
+      await openFile(destPath);
     };
     input.click();
   };

@@ -197,7 +197,9 @@ import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
         `The matching original file may be corrupted.\n\n${display}${overflow}\n\n` +
         `To recover: open the file in Revery and verify it looks correct. ` +
         `If it is corrupted, locate the .revery_bak file in your file manager ` +
-        `and rename it to replace the original (drop the ".<timestamp>.revery_bak" suffix).`,
+        `and rename it to the note's own name to replace the original (the backup ` +
+        `is named after the note — shortened if that name is long — followed by ` +
+        `".<timestamp>.revery_bak").`,
       buttons: [window.t('OK')],
     });
   }
