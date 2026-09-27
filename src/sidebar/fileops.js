@@ -7,7 +7,8 @@ import { getFileCategory, mediaMarkdown, uniquePath, uniqueDestPath } from './he
 import { saveActiveFile, markClean, scheduleAutoSave, cancelPendingAutoSave,
          retargetActiveFile, waitForSaveChainIdle, rememberDiskContent,
          _enqueueDiskOp, markActivePathGone, forgetGonePath,
-         replaceOpenDocument, SWITCH_CANCELLED } from './save.js';
+         replaceOpenDocument, SWITCH_CANCELLED, saveBeforeLeaving,
+         resumeScratchpadAfterSwitch } from './save.js';
 import { renderTree, updateMultiSelectHighlight, updateSelectedDirHighlight, highlightActiveFile } from './tree.js';
 import { openSidebar, switchFromMobileSidebar } from './panel.js';
 import { startWatchingFile, stopWatchingFile, watchedPath } from './watcher.js';
@@ -917,9 +918,11 @@ import { decodeImportedText } from './import_text.js';
    */
   // AFTER
 async function createNewFile(targetDir) {
-    if (S._operationLock) { reportBusy(); return; }
-    /* Auto-save current before switching */
-    if (S.isDirty && S.activeFilePath) await saveActiveFile();
+    if (S._operationLock || S._projectSwitch) { reportBusy(); return; }
+    /* Save the open note (or give typed text its note) first. If that
+       fails, create nothing: the new file could not be opened anyway, and
+       an empty "untitled" was left behind. */
+    if (!(await saveBeforeLeaving())) return;
 
     const dir = targetDir || S.selectedDirPath || S.rootPath;
     if (!dir) {
@@ -1149,7 +1152,13 @@ async function openFolder(folderPath) {
     // uses — which the renderer adopts.
     const canonical = await window.NativeAPI.setRootPath(folderPath);
     if (typeof canonical === 'string' && canonical) folderPath = canonical;
+    /* Every renderer path that decides where new files go follows the
+       backend's root at once (pendingNoteDir reads the selected folder
+       first — left pointing into the old project across the awaits
+       below, a note created there was refused as outside the root). */
     S.rootPath = folderPath;
+    S.selectedDirPath = folderPath;
+    S.cardViewDir = folderPath;
     clearUndoStack(); // file undo never reaches into another project
     try { localStorage.setItem('revery_root_path', S.rootPath); } catch (e) {}
     
@@ -1160,11 +1169,6 @@ async function openFolder(folderPath) {
     
     // CRITICAL: Add the folder to the recent projects array
     await recordProjectOpen(folderPath);
-
-    S.selectedDirPath = folderPath;
-    S.cardViewDir = folderPath;
-
-
 
     _previewCache.clear();
     const parts = folderPath.replace(/\\/g, '/').split('/');
@@ -1178,8 +1182,11 @@ async function openFolder(folderPath) {
 
 /* Leave the current project: the editor is emptied and no note is open.
    The apply step of save.replaceOpenDocument (synchronous), for both
-   project switches (this dialog, the recent-projects menu). */
+   project switches (this dialog, the recent-projects menu). From here
+   until switchProject is done, S._projectSwitch holds back the note that
+   typing would create (see state.js). */
 function clearEditorForProjectSwitch() {
+  S._projectSwitch               = true;
   S.activeFilePath               = null;
   S.previewMediaPath             = null;
   window._showingUnsupportedFile = false;
@@ -1197,12 +1204,52 @@ function clearEditorForProjectSwitch() {
 /* Switch to another project folder once the open note is saved. The
    backend makes `path` the root only here (openFolder → setRootPath): the
    picker merely authorizes it, so the old note can still be saved after
-   the picker closed. */
+   the picker closed.
+   Text typed into the emptied editor while the switch runs gets its note
+   in the project that is open afterwards (resumeScratchpadAfterSwitch) —
+   it used to be created in the project being left and stay bound to it:
+   every save then failed as "outside the project root".
+   A folder that cannot be opened (a recent project on a drive that is not
+   connected, a folder deleted meanwhile) leaves the current project open:
+   the user is told why, and the note that was open comes back. That
+   failure used to reach only the console, with the editor left empty. */
 async function switchProject(path) {
-  if (!(await replaceOpenDocument(null, clearEditorForProjectSwitch))) return;
-  // Non-fatal: the old note has left the editor even if this fails.
-  await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
-  await openFolder(path);
+  const previousNote = S.activeFilePath;
+  const previousRoot = S.rootPath;
+  let began = false; // this call emptied the editor (and so owns S._projectSwitch)
+  let failure = null;
+  try {
+    if (!(await replaceOpenDocument(null, () => { began = true; clearEditorForProjectSwitch(); }))) return;
+    // Non-fatal: the old note has left the editor even if this fails.
+    await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
+    await openFolder(path);
+  } catch (err) {
+    failure = err;
+  } finally {
+    if (began) S._projectSwitch = false;
+  }
+  if (!began) { // never left the note: nothing to undo or resume
+    if (failure) console.error('[Sidebar] project switch failed before it started:', failure);
+    return;
+  }
+  if (failure) {
+    console.error('[Sidebar] project switch failed:', failure);
+    if (S.rootPath === previousRoot) { // the backend refused it: nothing switched
+      await window.NativeAPI.showMessageBox({
+        type: 'error',
+        title: window.t('Could Not Open Folder'),
+        message: window.t('"{name}" could not be opened. The current project stays open.')
+          .replace('{name}', baseNameOf(path) || path),
+        detail: errText(failure),
+      }).catch(() => {});
+      /* Not over text the user has started typing meanwhile: that gets
+         its own note below. */
+      const untouched = !S.activeFilePath && !S.previewMediaPath
+        && !window._showingUnsupportedFile && editor.value === '';
+      if (previousNote && untouched) await openFile(previousNote);
+    }
+  }
+  resumeScratchpadAfterSwitch();
 }
 
 async function promptOpenFolder() {
@@ -1245,11 +1292,9 @@ export function initFileOps() {
     }
 
 
-    /* Auto-save current file before switching folders */
-    if (S.isDirty && S.activeFilePath) {
-      const saved = await saveActiveFile();
-      if (!saved) return; // FIX: Abort to prevent data loss
-    }
+    /* Save the open note (or give typed text its note) before the import
+       opens the imported one. If that fails, import nothing. */
+    if (!(await saveBeforeLeaving())) return;
 
     const input = document.createElement('input');
     input.type   = 'file';

@@ -14,7 +14,55 @@ import { uniquePath, reportBakOrphans, fileExistsViaListing } from './helpers.js
 import { loadProjects, recordProjectOpen, seedProjectsCache, PROJECTS_KEY } from './projects.js';
 import { joinPath, baseNameOf, parentPathOf, isInsideRoot, checkEntryName } from './paths.js';
 
+/* ── One close at a time ──────────────────────────────────────────────
+   Every close — the title-bar button, Alt+F4, the OS — reaches this as the
+   backend's close request, whose watchdog covers a page that cannot answer
+   at all. A page that answers but whose save never ends (a network drive
+   that stopped responding) used to leave the frameless window with no way
+   out: every further close started another close flow, queued behind the
+   same stuck save. Now a further close is ignored until the save has run
+   for CLOSE_STUCK_MS, and after that it is reported as a failed close — the
+   backend then asks whether to close anyway (default: keep the window).
+   Time the flow spends asking the user (discard?) never counts. */
+const CLOSE_STUCK_MS = 5000;
+let _closing = null; // { savingSince } while a close request is handled
+
 async function sidebarHandleClose() {
+  if (_closing) {
+    const saving = _closing.savingSince ? Date.now() - _closing.savingSince : 0;
+    if (saving >= CLOSE_STUCK_MS) {
+      throw new Error(`Still saving the open note before closing (for ${Math.round(saving / 1000)} s).`);
+    }
+    return;
+  }
+  const closing = _closing = { savingSince: 0 };
+  /* Disk work the close waits for. After a second a status line says so,
+     and how to get out if it never ends. */
+  const whileSaving = async (work) => {
+    closing.savingSince = Date.now();
+    const notice = setTimeout(() => {
+      if (typeof window.showStatusWarning === 'function') {
+        window.showStatusWarning('closing',
+          window.t('Saving the open note before closing… If this takes too long, close again.'),
+          { priority: 90 });
+      }
+    }, 1000);
+    try {
+      return await work();
+    } finally {
+      clearTimeout(notice);
+      closing.savingSince = 0;
+      if (typeof window.clearStatusWarning === 'function') window.clearStatusWarning('closing');
+    }
+  };
+  try {
+    await handleCloseRequest(whileSaving);
+  } finally {
+    _closing = null;
+  }
+}
+
+async function handleCloseRequest(whileSaving) {
   cancelPendingAutoSave();
 
 // Case 1: A real file is open on disk
@@ -24,7 +72,7 @@ async function sidebarHandleClose() {
       let outcome = null;
       for (let attempt = 0; attempt < 3 && S.isDirty; attempt++) {
         try {
-          saved = await saveActiveFile({ onOutcome: (o) => { outcome = o; } });
+          saved = await whileSaving(() => saveActiveFile({ onOutcome: (o) => { outcome = o; } }));
         } catch (err) {
 
           console.error('[sidebarHandleClose] Save threw unexpectedly:', err);
@@ -68,7 +116,7 @@ async function sidebarHandleClose() {
       }
     }
     if (S.isDirty && typeof window.NativeAPI.writeVolatileNow === 'function') {
-      try { await window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value); } catch (_) {}
+      try { await whileSaving(() => window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value)); } catch (_) {}
     }
     window.isQuitting = true;
     window.NativeAPI.confirmClose();

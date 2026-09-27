@@ -1293,36 +1293,24 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     }
 
-        if (btnClose) {
-
-
-btnClose.addEventListener('click', async function () {
-        /* Cluster D #8: delegate to the single source of truth for close
-           logic, defined in project_sidebar.js as sidebarHandleClose.
-           Both the OS-close and in-app-close paths now share that function,
-           so they cannot drift out of sync. */
-        try {
-            if (typeof window.sidebarHandleClose === 'function') {
-                await window.sidebarHandleClose();
-                return;
-            }
-            // Fallback for the rare case where sidebar hasn't loaded yet
-            // (e.g. user clicks close mid-boot). Best-effort straight close.
-            console.warn('[Close] sidebarHandleClose not yet defined — closing without save check.');
-            window.isQuitting = true;
-            window.NativeAPI.confirmClose();
-        } catch (err) {
-            console.error('[Close] Unexpected error during close:', err);
-            // Last-resort: never leave the user with a window that won't close.
-            try {
-                window.isQuitting = true;
-                window.NativeAPI.confirmClose();
-            } catch (_) { /* nothing else we can do */ }
-        }
-    });
-
-
-}
+    if (btnClose) {
+      /* The same path as Alt+F4 and the OS: a close REQUEST to the backend,
+         which arms its watchdog and hands the request to the page's close
+         flow (sidebarHandleClose, via onWindowClose). This button used to
+         call the close flow directly — outside the watchdog, so a close
+         that never finished could not be forced — and closed the window
+         without saving whenever that flow threw. */
+      btnClose.addEventListener('click', function () {
+        Promise.resolve(window.NativeAPI.closeWindow()).catch(function (err) {
+          console.error('[Close] close request failed:', err);
+          if (typeof window.sidebarHandleClose === 'function') {
+            Promise.resolve(window.sidebarHandleClose()).catch(function (e) {
+              console.error('[Close] close flow failed:', e);
+            });
+          }
+        });
+      });
+    }
     /* ── Fullscreen helpers ───────────────────────────────────────────
        Tracks native fullscreen state and hides the window control buttons
        while fullscreen is active. Exposed as window.NativeAPI.* so the

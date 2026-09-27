@@ -16,7 +16,19 @@
      5. a note that cannot be read leaves the open note in place;
      6. an edit arriving while the folder picker is open is saved into the
         OLD project (the picker used to switch the backend's root first,
-        so that save could not happen).
+        so that save could not happen);
+     7. text typed with no note open whose note cannot be created is not
+        replaced by opening another note (it used to be, its only copy a
+        temp-dir backup): it stays, the user is told, a reboot-safe backup
+        is written; once possible, the switch creates the note first;
+     8. text typed into the emptied editor during a project switch gets its
+        note in the project being opened, and saves there (it was created
+        in the project being left, where every save then failed);
+     9. a recent project whose folder is gone: the user is told, the current
+        project and the open note stay (the failure used to reach only the
+        console, with the editor left empty);
+    10. New File while the open note cannot be saved creates nothing (it
+        left an empty "untitled" behind).
    Skipped when no display server is available (same rule as data_safety). */
 
 const { test } = require('node:test');
@@ -27,7 +39,7 @@ const path = require('node:path');
 const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY || process.platform !== 'linux');
 const LINK = /!\[Pasted image [^\]]+\]\([^)\s]+\)/;
 
-test('deferred edits land in the right note in the real Electron app', { skip: !hasDisplay, timeout: 90000 }, async () => {
+test('deferred edits land in the right note in the real Electron app', { skip: !hasDisplay, timeout: 120000 }, async () => {
   const electronBin = require('electron');
   const mainScript  = path.join(__dirname, 'helpers', 'deferred_edits_e2e_main.js');
   const env = { ...process.env };
@@ -87,8 +99,41 @@ test('deferred edits land in the right note in the real Electron app', { skip: !
   assert.equal(r.disk['c.md'], 'Note C before switch\nDURING-PICKER\n',
     'the edit is saved into the old project before the switch\n' + why);
   assert.equal(r.disk['bad.md'], 'Caf�\n', 'never written (read back lossily by the harness)\n' + why);
-  assert.deepEqual(r.disk2, { 'other.md': 'In the second project\n' }, why);
+  assert.equal(r.disk2['other.md'], 'In the second project\n', why);
 
-  assert.deepEqual(r.dialogs, ['Open Failed'], 'no other dialog (e.g. "Save Failed")\n' + why);
+  // 7. text whose note cannot be created, then another note opened
+  const u = r.scratchUncreatable;
+  assert.deepEqual(u.blocked, { active: null, editor: 'UNSAVED-SCRATCH\n' },
+    'the switch is refused while the note cannot be created: the text stays\n' + why);
+  assert.deepEqual([u.switched, u.active, u.note, u.scratchBackups], [true, 'other.md', 'UNSAVED-SCRATCH\n', 0],
+    'once it can be, the note is created first, then the switch happens\n' + why);
+  assert.ok(r.durableWrites.some((w) => w.key.startsWith('__revery_scratchpad__/') && w.content === 'UNSAVED-SCRATCH\n'),
+    'the text got a reboot-safe backup while its note was missing\n' + why);
+  assert.deepEqual(r.durableLeft.filter((k) => k.startsWith('__revery_scratchpad__/')), [],
+    'that backup is gone once the note exists\n' + why);
+  assert.equal(r.disk2['untitled.md'], 'UNSAVED-SCRATCH\n', why);
+
+  // 8. typing while a project switch runs
+  assert.deepEqual(r.typedDuringSwitch, {
+    hooked: true, switched: true, inNewProject: true, dirty: false,
+    note: 'TYPED-IN-GAP\nMORE-AFTER-SWITCH\n',
+  }, 'the note is created in the project being opened and saves there\n' + why);
+  assert.equal(Object.keys(r.disk2).length, 2, 'nothing from the gap lands in the project left\n' + why);
+
+  // 9. a recent project whose folder is gone
+  assert.deepEqual(r.missingProject, { found: true, sameRoot: true, active: 'untitled.md', sameEditor: true },
+    'the current project and the open note stay\n' + why);
+
+  // 10. New File while the open note cannot be saved
+  assert.deepEqual(r.newFileSaveFails, { nothingCreated: true, active: 'untitled.md', kept: true, savedLater: true }, why);
+  assert.equal(r.disk['untitled.md'], 'TYPED-IN-GAP\nMORE-AFTER-SWITCH\nWILL-NOT-SAVE\n', why);
+
+  assert.deepEqual(r.dialogs, [
+    'Open Failed',           // 5
+    'Could Not Create File', // 7: the create that failed while typing
+    'Could Not Create File', // 7: the switch that was refused
+    'Could Not Open Folder', // 9
+    'Save Failed',           // 10
+  ], 'no other dialog\n' + why);
   assert.deepEqual(r.pageErrors, [], why);
 });

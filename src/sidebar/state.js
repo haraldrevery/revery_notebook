@@ -49,6 +49,11 @@ export const S = {
   /* Serialize async FS operations — prevents simultaneous move/rename/delete
      from corrupting state if the user clicks very quickly. */
   _operationLock:   false,
+  /* True from the moment a project switch empties the editor until the new
+     project is open (fileops.switchProject). Text typed meanwhile is only
+     backed up: its note is created once the switch is over, in the project
+     that is then open — not in the one being left. */
+  _projectSwitch:   false,
   _externalChangeInProgress: false,
   _replaceGeneration: 0,
   /* Auto-save hold (save.js setAutosaveHold): the held file's path, and why

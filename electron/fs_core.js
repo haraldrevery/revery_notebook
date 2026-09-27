@@ -125,19 +125,23 @@ function tempSiblingPath(target, uniqueSuffix, tag) {
   return path.join(path.dirname(target), `${tempNamePrefix(path.basename(target))}.${uniqueSuffix}.${tag}`);
 }
 
-/* ── Windows: a lock that lets go in a moment ───────────────────────────
+/* ── A lock that lets go in a moment ────────────────────────────────────
    Another program that briefly holds a file — antivirus scanning the temp
    file we just wrote, a sync client, the search indexer — makes a rename
-   on Windows fail with EPERM, EACCES or EBUSY. A rename happens completely
-   or not at all, so trying again a few times can never leave a partial
-   state. ONE policy for every rename here: the atomic write's final step
-   and renameEntry. MIRROR of classify_rename_error / LOCK_RETRY_DELAYS_MS
-   in tauri/src/main.rs. */
+   on Windows fail with EPERM, EACCES or EBUSY. On Linux and macOS, EBUSY
+   is what the SMB client reports when the server refuses a file another
+   computer has open (a note on a NAS or a Windows share); EPERM/EACCES
+   there are real permission errors and fail at once. A rename happens
+   completely or not at all, so trying again a few times can never leave a
+   partial state. ONE policy for every rename here: the atomic write's
+   final step and renameEntry. MIRROR of classify_rename_error /
+   LOCK_RETRY_DELAYS_MS in tauri/src/main.rs. */
 const LOCK_RETRY_DELAYS_MS = [100, 200, 400];
 
 function isTransientLock(err, platform = process.platform) {
-  return platform === 'win32' && !!err
-    && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES');
+  if (!err) return false;
+  if (err.code === 'EBUSY') return true;
+  return platform === 'win32' && (err.code === 'EPERM' || err.code === 'EACCES');
 }
 
 /* atomicWriteFile is synchronous (every IPC handler that writes relies on
@@ -153,8 +157,8 @@ function sleepSync(ms) {
    point leaves the destination either untouched or fully replaced — never
    truncated.
 
-   A rename blocked by a transient Windows lock is retried (see above).
-   When the lock does not let go, the save FAILS with the old file intact.
+   A rename blocked by a transient lock is retried (see above). When the
+   lock does not let go, the save FAILS with the old file intact.
    It used to fall back to copying over the file in place on EBUSY — the
    error Windows gives for exactly these locks — which a crash could leave
    half-written.
@@ -448,8 +452,9 @@ const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
        original failed half way it left a partly emptied original. Inside
        one project that situation is rare; refusing is the only answer
        that can never lose or duplicate data;
-     • Windows only: a rename refused because something briefly holds a
-       handle (antivirus, the indexer, a watcher being closed) is retried
+     • a rename refused because something briefly holds a handle (Windows:
+       antivirus, the indexer, a watcher being closed; any platform: EBUSY,
+       e.g. a file open on another computer of an SMB share) is retried
        (isTransientLock / LOCK_RETRY_DELAYS_MS — the atomic write's policy).
    `opts.platform` / `opts.sleep` exist for the unit tests. */
 async function renameEntry(oldRaw, newRaw, rootPath, opts = {}) {

@@ -12,7 +12,13 @@
      crash-then-hang  the renderer is killed → "stopped" → Reload editor →
                       the page boots again; then the page hangs and close is
                       requested → after the watchdog timeout "not responding"
-                      → Force close → closed.
+                      → Force close → closed;
+     stalled-save     the page answers, but the open note's save never ends
+                      (a network drive that stopped answering). Closed with
+                      the TITLE-BAR button: a second click at once is
+                      ignored, a status line says what the close waits for,
+                      and a click after 5 s of saving asks "could not close
+                      normally" → Close anyway → closed.
 
    Native dialogs are stubbed (they would block a headless run): every title
    is logged with a timestamp and answered from ANSWERS. Prints one
@@ -132,6 +138,23 @@ app.on('browser-window-created', (_event, win) => {
         log('close');
         win.close();
       }
+    } else if (SCENARIO === 'stalled-save') {
+      const clickClose = () => win.webContents.executeJavaScript(
+        "document.getElementById('win-btn-close').click(); 1", true);
+      await win.webContents.executeJavaScript(
+        "window.insertWithUndo(0, 0, 'unsaved edit '); window.NativeAPI.writeFile = () => new Promise(() => {}); 1", true);
+      log('close');
+      await clickClose();
+      await sleep(300);
+      log('close-again');
+      await clickClose();
+      await sleep(1500);
+      const status = await win.webContents.executeJavaScript(
+        "(document.getElementById('size-warning') || {}).textContent || ''", true);
+      if (/Saving the open note before closing/.test(status)) log('status:saving');
+      await sleep(4500);
+      log('close-again');
+      await clickClose();
     }
   });
 });

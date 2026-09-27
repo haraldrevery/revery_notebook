@@ -181,14 +181,18 @@ describe('atomicWriteFile', () => {
     assert.deepEqual(siblings(dir, 'note.md'), []);
   });
 
-  test('non-EXDEV rename failure: error propagates, temp cleaned, target untouched', () => {
+  test('non-EXDEV rename failure: error propagates at once, temp cleaned, target untouched', () => {
     fs.writeFileSync(target, 'OLD');
+    let calls = 0;
     fs.renameSync = () => {
+      calls++;
       const e = new Error('EPERM: operation not permitted');
       e.code = 'EPERM';
       throw e;
     };
-    assert.throws(() => atomicWriteFile(target, 'NEW', { platform: 'linux' }), /EPERM/);
+    // Off Windows EPERM is a real permission error: never retried.
+    assert.throws(() => atomicWriteFile(target, 'NEW', { platform: 'linux', sleepSync: () => assert.fail('no wait') }), /EPERM/);
+    assert.equal(calls, 1);
     fs.renameSync = realRenameSync;
     assert.equal(fs.readFileSync(target, 'utf8'), 'OLD');
     assert.deepEqual(siblings(dir, 'note.md'), []);
@@ -242,17 +246,29 @@ describe('atomicWriteFile', () => {
     assert.deepEqual(siblings(dir, 'note.md'), []);
   });
 
-  test('EBUSY is never answered with a copy, on any platform', () => {
+  /* Linux/macOS: the SMB client reports a file open on another computer of
+     the share as EBUSY — the same kind of lock, the same policy. */
+  test('EBUSY is retried on every platform and never answered with a copy', () => {
     fs.writeFileSync(target, 'OLD');
     for (const platform of ['linux', 'darwin']) {
       const calls = lockedFor(Infinity, 'EBUSY');
       const copies = noCopies();
-      assert.throws(() => atomicWriteFile(target, 'NEW', { platform, sleepSync: () => assert.fail('no wait off Windows') }), /EBUSY/);
-      assert.equal(calls(), 1, platform);
+      const waits = [];
+      assert.throws(() => atomicWriteFile(target, 'NEW', { platform, sleepSync: (ms) => waits.push(ms) }),
+        /another program is using it.*not changed/);
+      assert.equal(calls(), 4, platform);
+      assert.deepEqual(waits, [100, 200, 400], platform);
       assert.equal(copies(), 0, platform);
     }
     fs.renameSync = realRenameSync;
     assert.equal(fs.readFileSync(target, 'utf8'), 'OLD');
+    assert.deepEqual(siblings(dir, 'note.md'), []);
+
+    const calls = lockedFor(1, 'EBUSY');
+    atomicWriteFile(target, 'NEW', { platform: 'linux', sleepSync: () => {} });
+    fs.renameSync = realRenameSync;
+    assert.equal(calls(), 2);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'NEW', 'a lock that lets go: the save lands');
     assert.deepEqual(siblings(dir, 'note.md'), []);
   });
 

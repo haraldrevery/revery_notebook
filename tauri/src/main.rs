@@ -337,7 +337,8 @@ struct CloseWatch {
     acked:       std::sync::atomic::AtomicU64,
     dialog_open: std::sync::atomic::AtomicBool,
 }
-/// The active project root. Set by open_folder_dialog or set_root_path.
+/// The active project root. Set only by set_root_path (open_folder_dialog
+/// merely authorizes a folder) and by a Save As that opts into a new root.
 /// All FS commands enforce that paths stay inside this root.
 struct RootPath(Mutex<Option<String>>);
 /// Serializes access to the revery_settings.json file to prevent data loss.
@@ -1102,8 +1103,8 @@ fn keep_permissions_of(dest: &Path, f: &fs::File) {
     }
 }
 
-/// Run `rename` again while it fails with a transient Windows lock, waiting
-/// LOCK_RETRY_DELAYS_MS in between; the last error is returned for the
+/// Run `rename` again while it fails with a transient lock (see
+/// classify_rename_error), waiting LOCK_RETRY_DELAYS_MS in between; the last error is returned for the
 /// caller to classify. A rename happens completely or not at all, so a
 /// retry can never leave a partial state. `sleep` exists for the tests.
 fn retry_rename_on_lock(
@@ -1132,8 +1133,9 @@ fn retry_rename_on_lock(
 // Writes `content` to `dest` atomically by:
 //   1. Writing to a sibling temp file `tmp` (same directory → same filesystem).
 //   2. Renaming `tmp` → `dest` (atomic on all local FSes). A transient
-//      Windows lock (antivirus scanning the temp file, a sync client) is
-//      retried; one that does not let go FAILS the write, old file intact.
+//      lock (antivirus scanning the temp file, a sync client, a file open on
+//      another computer of an SMB share) is retried; one that does not let
+//      go FAILS the write, old file intact.
 //      It used to be answered with an in-place copy (ERROR_SHARING_VIOLATION
 //      counted as "cross-device"), which a crash could leave half-written.
 //   3. Only on a real cross-device error (classify_rename_error), falling
@@ -1519,12 +1521,15 @@ enum RenameErrorKind {
 /// on Linux/macOS but ERROR_NOT_SAME_DEVICE (17) on Windows — 17 on Unix is
 /// EEXIST, which the old code mistook for "cross-device" and answered by
 /// copying INTO an existing folder (overwriting same-named files) and then
-/// deleting the original. Transient locks (Windows only): ACCESS_DENIED 5,
-/// SHARING_VIOLATION 32, LOCK_VIOLATION 33.
+/// deleting the original. Transient locks: on Windows ACCESS_DENIED 5,
+/// SHARING_VIOLATION 32, LOCK_VIOLATION 33; on Linux/macOS EBUSY 16, which
+/// the SMB client reports when the server refuses a file another computer
+/// has open (EPERM/EACCES there are real permission errors). Mirror of
+/// isTransientLock in electron/fs_core.js.
 fn classify_rename_error(raw: Option<i32>, windows: bool) -> RenameErrorKind {
     match (raw, windows) {
         (Some(17), true) | (Some(18), false) => RenameErrorKind::CrossDevice,
-        (Some(5) | Some(32) | Some(33), true) => RenameErrorKind::TransientLock,
+        (Some(5) | Some(32) | Some(33), true) | (Some(16), false) => RenameErrorKind::TransientLock,
         _ => RenameErrorKind::Other,
     }
 }
@@ -1545,8 +1550,9 @@ const LOCK_RETRY_DELAYS_MS: [u64; 3] = [100, 200, 400];
 ///   • another drive or volume is REFUSED. The old copy-then-delete
 ///     fallback could leave a half-emptied original, and (see
 ///     classify_rename_error) could merge into an existing folder;
-///   • Windows: a transient lock is retried a few times — a rename happens
-///     completely or not at all, so a retry cannot leave a partial state.
+///   • a transient lock (classify_rename_error) is retried a few times — a
+///     rename happens completely or not at all, so a retry cannot leave a
+///     partial state.
 fn rename_entry_blocking(old_path: &str, new_path: &str, root: &Path) -> Result<(), String> {
     let old = safe_entry_inside(old_path, root)?;
     let new = safe_entry_inside(new_path, root)?;
@@ -3696,12 +3702,26 @@ mod tests {
     }
 
     #[test]
-    fn no_retry_off_windows_or_for_other_errors() {
+    fn no_retry_for_windows_lock_codes_off_windows_or_for_other_errors() {
         let mut waits = Vec::new();
         assert!(retry_rename_on_lock(failing(vec![32]), false, |ms| waits.push(ms)).is_err());
+        assert!(retry_rename_on_lock(failing(vec![13]), false, |ms| waits.push(ms)).is_err()); // EACCES
         assert!(retry_rename_on_lock(failing(vec![18]), false, |ms| waits.push(ms)).is_err());
         assert!(retry_rename_on_lock(failing(vec![17]), true, |ms| waits.push(ms)).is_err());
+        assert!(retry_rename_on_lock(failing(vec![16]), true, |ms| waits.push(ms)).is_err());
         assert!(waits.is_empty());
+    }
+
+    #[test]
+    fn ebusy_off_windows_is_retried_like_a_windows_lock() {
+        // Linux/macOS SMB client: the server refuses a file open elsewhere.
+        let mut waits = Vec::new();
+        assert!(retry_rename_on_lock(failing(vec![16, 16]), false, |ms| waits.push(ms)).is_ok());
+        assert_eq!(waits, vec![100, 200]);
+        waits.clear();
+        let err = retry_rename_on_lock(failing(vec![16; 9]), false, |ms| waits.push(ms)).unwrap_err();
+        assert_eq!(waits, LOCK_RETRY_DELAYS_MS.to_vec());
+        assert_eq!(classify_rename_error(err.raw_os_error(), false), RenameErrorKind::TransientLock);
     }
 
     /* ── is_allowed_navigation ─────────────────────────────────────── */
@@ -3980,11 +4000,16 @@ mod tests {
         assert_eq!(classify_rename_error(Some(32), true), RenameErrorKind::TransientLock);
         assert_eq!(classify_rename_error(Some(5), true), RenameErrorKind::TransientLock);
         assert_eq!(classify_rename_error(Some(32), false), RenameErrorKind::Other);
+        assert_eq!(classify_rename_error(Some(16), false), RenameErrorKind::TransientLock);
+        assert_eq!(classify_rename_error(Some(16), true), RenameErrorKind::Other);
+        assert_eq!(classify_rename_error(Some(13), false), RenameErrorKind::Other);
         assert_eq!(classify_rename_error(None, false), RenameErrorKind::Other);
         #[cfg(unix)]
         {
             assert_eq!(libc::EXDEV, 18);
             assert_eq!(libc::EEXIST, 17);
+            assert_eq!(libc::EBUSY, 16);
+            assert_eq!(libc::EACCES, 13);
         }
     }
 

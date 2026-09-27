@@ -65,8 +65,9 @@ let _scratchpadFailureWarned = false;
    previews an image), the session DETACHES: its own text goes into the
    new file and the editor is left alone. It never binds the new file to a
    document that is no longer on screen, and never writes another
-   document's text into it. */
-let _scratch = null; // { gen, key, latest, creating, retryAfter }
+   document's text into it. (The openers do not get that far: they wait
+   for the note first — see scratchpadToNote.) */
+let _scratch = null; // { gen, key, latest, creating, promise, retryAfter, failed, lastError, quiet }
 const SCRATCHPAD_RETRY_MS = 5000; // after a failed create, wait before retrying
 
 function currentDocGeneration() {
@@ -83,20 +84,48 @@ function scratchpadSession() {
   if (S._scratchpadVolatileKey && _scratch && _scratch.key === S._scratchpadVolatileKey) {
     S._scratchpadVolatileKey = null;
   }
-  _scratch = { gen, key: ensureScratchpadVolatileKey(), latest: '', creating: false, retryAfter: 0 };
+  _scratch = { gen, key: ensureScratchpadVolatileKey(), latest: '', creating: false, promise: null,
+               retryAfter: 0, failed: false, lastError: '', quiet: false };
   return _scratch;
+}
+
+/* The session's text is in a file now (or its document is gone): it no
+   longer owns the placeholder key. The caller deletes the backup once that
+   is safe. */
+function releaseScratchSession(session) {
+  if (_scratch === session) _scratch = null;
+  if (S._scratchpadVolatileKey === session.key) S._scratchpadVolatileKey = null;
+}
+
+/** Text typed with no note open whose note does not exist yet: the
+    scratchpad session of the document on screen, while it holds text.
+    Null when there is none. */
+function pendingScratchpad() {
+  if (S.activeFilePath || window._showingUnsupportedFile) return null;
+  const s = _scratch;
+  if (!s || s.gen !== currentDocGeneration()) return null;
+  return editor.value.trim() ? s : null;
 }
 
 function scratchpadCreateFailed(session, err, emptyFileToRemove) {
   console.error('[Sidebar] scratchpad auto-create failed:', err);
   session.creating   = false;
   session.retryAfter = Date.now() + SCRATCHPAD_RETRY_MS;
+  session.failed     = true;
+  session.lastError  = String(err);
+  /* Until the note exists, the backup in the OS temp dir is this text's
+     only copy — and that dir is emptied by a reboot on many Linux systems.
+     Mirror it to the durable slot too (kept fresh by the input listener
+     while the note is still missing; boot recovery reads both). */
+  writeDurableSnapshot(session.key,
+    currentDocGeneration() === session.gen ? editor.value : session.latest);
   /* createFile succeeded but nothing could be written: that file is ours,
      brand new and empty — move it to the trash so repeated retries (disk
      full, no permission) cannot litter the folder with empty untitled
      files. The placeholder backup is kept in every failure case. */
   if (emptyFileToRemove) window.NativeAPI.deleteNode(emptyFileToRemove).catch(() => {});
-  if (!_scratchpadFailureWarned) {
+  /* quiet: an opener is waiting for this note and tells the user itself. */
+  if (!session.quiet && !_scratchpadFailureWarned) {
     _scratchpadFailureWarned = true;
     window.NativeAPI.showMessageBox({
       type: 'warning',
@@ -115,7 +144,7 @@ function createNoteFromScratchpad(session, targetDir, baseName) {
   const attached = () => currentDocGeneration() === session.gen
     && !S.activeFilePath && !window._showingUnsupportedFile;
 
-  (async () => {
+  session.promise = (async () => {
     let newPath = null;
     try {
       newPath = await uniquePath(targetDir, baseName, 'md');
@@ -144,15 +173,11 @@ function createNoteFromScratchpad(session, targetDir, baseName) {
 
     session.creating = false;
     _scratchpadFailureWarned = false;
-    const releaseSession = () => {
-      if (_scratch === session) _scratch = null;
-      if (S._scratchpadVolatileKey === session.key) S._scratchpadVolatileKey = null;
-    };
 
     if (!attached()) {
       /* DETACHED — the text is safely in newPath and the editor shows
          another document, so nothing is bound. Only now may the backup go. */
-      releaseSession();
+      releaseScratchSession(session);
       window.NativeAPI.deleteVolatileContent(session.key).catch(() => {});
       expandedDirs.add(targetDir);
       await renderTree();
@@ -170,7 +195,7 @@ function createNoteFromScratchpad(session, targetDir, baseName) {
     forgetGonePath(newPath);
     S.previewMediaPath = null; // the preview became this note
     rememberDiskContent(written); // what the new file holds (LF, a new note)
-    releaseSession();
+    releaseScratchSession(session);
 
     let placeholderStillNeeded = false;
     if (editor.value !== written) {
@@ -206,6 +231,61 @@ function createNoteFromScratchpad(session, targetDir, baseName) {
     console.error('[Sidebar] scratchpad create flow failed unexpectedly:', err);
     session.creating = false;
   });
+  return session.promise;
+}
+
+/* Start creating the session's note in pendingNoteDir() — the folder media
+   links resolve against; while an image is previewed the note is named
+   after it and lands beside it. Returns the creation promise (it never
+   rejects), or null when no folder is open. */
+function startScratchpadCreate(session) {
+  const targetDir = pendingNoteDir();
+  if (!targetDir) return null;
+  let baseName = S.previewMediaPath
+    ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, '') // note named after the image
+    : 'untitled';
+  /* An image name the one name rule refuses for a new file (e.g.
+     "aux.png" made on Linux) would make every create attempt fail:
+     such a note is simply called "untitled". */
+  if (checkEntryName(baseName) || checkEntryName(baseName + '.md')) baseName = 'untitled';
+  return createNoteFromScratchpad(session, targetDir, baseName);
+}
+
+/* Put pending scratchpad text into its note NOW — waiting for a create
+   already running, or starting one without the retry pause. Resolves true
+   once the text is in a note (then the open one, bound like any note:
+   keystrokes typed meanwhile are its unsaved edits), false when the note
+   could not be created (the caller tells the user; session.lastError says
+   why). */
+async function scratchpadToNote(session) {
+  session.quiet = true;
+  try {
+    const creating = session.creating ? session.promise : startScratchpadCreate(session);
+    if (creating) await creating;
+  } finally {
+    session.quiet = false;
+  }
+  return pendingScratchpad() !== session;
+}
+
+function tellScratchpadNotSaved(session) {
+  return window.NativeAPI.showMessageBox({
+    type: 'warning',
+    title: window.t('Could Not Create File'),
+    message: window.t('Your text could not be saved to a file, so it stays open.'),
+    detail: (session.lastError ? session.lastError + '\n\n' : '')
+      + window.t('Use "Save as..." in the File menu to save it somewhere else. Until then a backup is kept, and Revery offers it again at the next start.'),
+    buttons: ['OK'],
+    defaultId: 0,
+  }).catch(() => {});
+}
+
+/** A project switch is over (switched or not): text typed while it ran
+    was only backed up — its note is created now, in the project that is
+    open (see S._projectSwitch). */
+export function resumeScratchpadAfterSwitch() {
+  const s = pendingScratchpad();
+  if (s && !s.creating) startScratchpadCreate(s);
 }
 
 /* ── Durable (reboot-safe) backup mirror ─────────────────────────────
@@ -214,7 +294,8 @@ function createNoteFromScratchpad(session, targetDir, baseName) {
    bounds the exposure to seconds, but in the two states where autosave
    is SUSPENDED (external-change conflict hold, save-failure cooldown)
    the temp backup is the ONLY copy of everything typed since — so those
-   states also mirror to a durable slot under userData. Throttled to one
+   states also mirror to a durable slot under userData. So does text typed
+   with no note open whose note could not be created. Throttled to one
    write per DURABLE_MIRROR_MS so the disk-wear cost stays negligible;
    recovery transparently picks whichever backup location is newest.  */
 const DURABLE_MIRROR_MS = 5000;
@@ -234,13 +315,23 @@ export function writeDurableSnapshot(path, content) {
     console.warn('[Sidebar] durable backup failed (non-fatal):', e));
 }
 
+/* The key whose backup must also go to the durable slot right now, or
+   null: the open note while autosave is suspended and it has unsaved
+   edits; with no note open, scratchpad text whose note could not be
+   created (until it is, the temp backup is its only copy). */
+function _durableMirrorKey() {
+  if (S.activeFilePath) return (_durableExposed() && S.isDirty) ? S.activeFilePath : null;
+  const s = pendingScratchpad();
+  return (s && s.failed) ? s.key : null;
+}
+
 function _fireDurableMirror() {
-  if (!_durableExposed() || !S.isDirty) return; // state ended or buffer saved
-  writeDurableSnapshot(S.activeFilePath, editor.value);
+  const key = _durableMirrorKey(); // null: state ended or buffer saved
+  if (key) writeDurableSnapshot(key, editor.value);
 }
 
 function mirrorDurableWhileExposed() {
-  if (!_durableExposed()) return;
+  if (!_durableMirrorKey()) return;
   clearTimeout(_durableMirrorTimer);
   const since = Date.now() - _durableMirrorLast;
   if (since >= DURABLE_MIRROR_MS) {
@@ -725,18 +816,50 @@ export function waitForSaveChainIdle() {
    for a note that is not the last one opened. Such an edit is now saved
    and the switch prepared again. `prepare` returns SWITCH_CANCELLED to
    stop (after telling the user why). Resolves true when `apply` ran.
+   Text typed with no note open counts as unsaved too: its note is created
+   first (saveOpenDocument). It used to be replaced like an empty editor
+   whenever that note could not be created (a read-only folder, a full
+   disk) — its only copy then a temp-dir backup.
   ══════════════════════════════════════════════════════════════════ */
 export const SWITCH_CANCELLED = Symbol('switch-cancelled');
 const SWITCH_ATTEMPTS = 5;
 
+const unsavedNote = () => S.isDirty && !!S.activeFilePath;
+const hasUnsavedWork = () => unsavedNote() || !!pendingScratchpad();
+
+/* Get the document on screen onto disk: the open note's edits saved, or
+   text typed with no note open put into its note. False when that failed
+   — the user has been told (Save Failed / Could Not Create File) — and the
+   document must stay on screen. */
+async function saveOpenDocument() {
+  if (unsavedNote()) return saveActiveFile();
+  const pending = pendingScratchpad();
+  if (!pending || (await scratchpadToNote(pending))) return true;
+  await tellScratchpadNotSaved(pending);
+  return false;
+}
+
+/** For flows that do not replace the document but must not start while
+    it is unsaved (a new file is created, then opened): saveOpenDocument
+    after any title rename. */
+export async function saveBeforeLeaving() {
+  await waitForTitleRename();
+  return saveOpenDocument();
+}
+
 export async function replaceOpenDocument(prepare, apply) {
+  if (S._projectSwitch) { // switchProject is between clearing and opening
+    if (typeof window.showStatusWarning === 'function') {
+      window.showStatusWarning('fs-busy', window.t('Busy — try again in a moment.'), { priority: 5, ttl: 2500 });
+    }
+    return false;
+  }
   await waitForTitleRename(); // it would retarget the note after the swap
-  const unsaved = () => S.isDirty && !!S.activeFilePath;
   for (let attempt = 0; attempt < SWITCH_ATTEMPTS; attempt++) {
-    if (unsaved() && !(await saveActiveFile())) return false; // failed: stay on the note
+    if (!(await saveOpenDocument())) return false; // failed: stay on the document
     const prepared = prepare ? await prepare() : undefined;
     if (prepared === SWITCH_CANCELLED) return false;
-    if (unsaved()) continue; // edited while saving or preparing: save that too
+    if (hasUnsavedWork()) continue; // edited while saving or preparing: save that too
     apply(prepared);
     return true;
   }
@@ -891,6 +1014,14 @@ export function initSaveEngine() {
       const c = await window.NativeAPI.canonicalEntryPath(newPath);
       if (typeof c === 'string' && c) newPath = c;
     } catch (_) { /* outside the project root: keep as given */ }
+    /* Text typed with no note open (e.g. its note could not be created)
+       now has this file: the session waiting to create a note for it is
+       over. Its placeholder backup goes below, once this note's own backup
+       holds anything Save As did not write. A create still running keeps
+       its session (it detaches and reports where its text went). */
+    const scratch = _scratch && _scratch.gen === currentDocGeneration() && !_scratch.creating
+      && !S.activeFilePath ? _scratch : null;
+    if (scratch) releaseScratchSession(scratch);
     S.activeFilePath = newPath;
     forgetGonePath(newPath);
     /* Only what Save As actually wrote is on disk. If the buffer changed
@@ -906,6 +1037,11 @@ export function initSaveEngine() {
     }
     // Save As wrote `savedContent` (editor text, LF) to the new file.
     rememberDiskContent(typeof savedContent === 'string' ? savedContent : null);
+    if (scratch) {
+      (S.isDirty ? window.NativeAPI.writeVolatileNow(newPath, editor.value) : Promise.resolve())
+        .then(() => window.NativeAPI.deleteVolatileContent(scratch.key))
+        .catch((e) => console.warn('[Sidebar] Save As: scratchpad backup kept:', e));
+    }
     // Non-fatal: the root, title and watcher below must follow regardless.
     await window.NativeAPI.setLastOpenedFile(newPath).catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
 
@@ -977,15 +1113,13 @@ export function initSaveEngine() {
         } catch (e) {
           console.warn('[Sidebar] scratchpad placeholder volatile failed (non-fatal):', e);
         }
-        if (!session.creating && Date.now() >= session.retryAfter) {
-          let baseName = S.previewMediaPath
-            ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, '') // note named after the image
-            : 'untitled';
-          /* An image name the one name rule refuses for a new file (e.g.
-             "aux.png" made on Linux) would make every create attempt fail:
-             such a note is simply called "untitled". */
-          if (checkEntryName(baseName) || checkEntryName(baseName + '.md')) baseName = 'untitled';
-          createNoteFromScratchpad(session, targetDir, baseName);
+        /* Reboot-safe mirror — only while its note could not be created */
+        mirrorDurableWhileExposed();
+        /* During a project switch the note waits for the project being
+           opened (resumeScratchpadAfterSwitch): created now, it would land
+           in the project being left, which the backend is about to drop. */
+        if (!S._projectSwitch && !session.creating && Date.now() >= session.retryAfter) {
+          startScratchpadCreate(session);
         }
         return; // skip normal flow until the file is established
       }

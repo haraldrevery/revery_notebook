@@ -16,7 +16,7 @@ if (!process.versions.electron) {
   process.exit(0);
 }
 
-const { app, dialog, BrowserWindow } = require('electron');
+const { app, dialog, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
@@ -24,6 +24,8 @@ const os   = require('os');
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'revery-deferred-e2e-profile-'));
 const project  = fs.mkdtempSync(path.join(os.tmpdir(), 'revery-deferred-e2e-project-'));
 const project2 = fs.mkdtempSync(path.join(os.tmpdir(), 'revery-deferred-e2e-second-'));
+/* A recent project whose folder is gone (never created). */
+const missingProject = path.join(userData, 'gone-project');
 app.setPath('userData', userData);
 app.setPath('documents', userData);
 
@@ -38,8 +40,24 @@ fs.writeFileSync(path.join(userData, 'revery_settings.json'), JSON.stringify({
   trustedRootsMigrated: true,
   lastRootPath: project,
   lastOpenedFile: path.join(project, 'a.md'),
-  projectHistory: [],
+  projectHistory: [{ path: missingProject, name: 'gone-project', lastOpened: 1 }],
 }));
+
+/* Every reboot-safe (durable) backup the page asks for, as the handler in
+   electron/main.js receives it — the handler itself still runs. */
+const durableWrites = [];
+const realHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, fn) => realHandle(channel, channel !== 'fs:set-durable-backup' ? fn
+  : (event, key, content) => { durableWrites.push({ key: String(key), content: String(content) }); return fn(event, key, content); });
+
+/* The original paths of the durable backups still on disk. */
+function durableLeft() {
+  const dir = path.join(userData, 'crash-backups');
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return []; }
+  return names.filter((n) => n.endsWith('.meta.json'))
+    .map((n) => { try { return JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')).originalPath; } catch (_) { return '?'; } });
+}
 
 const dialogs = [];
 dialog.showMessageBox = async (_win, opts) => {
@@ -77,7 +95,7 @@ function finish(code, line) {
   app.exit(code);
 }
 
-setTimeout(() => finish(1, 'E2E-FAIL: global deadline reached (renderer hung?)'), 60000);
+setTimeout(() => finish(1, 'E2E-FAIL: global deadline reached (renderer hung?)'), 90000);
 
 app.on('browser-window-created', (_event, win) => {
   win.hide();
@@ -85,11 +103,14 @@ app.on('browser-window-created', (_event, win) => {
   win.webContents.once('did-finish-load', async () => {
     try {
       const driver = fs.readFileSync(path.join(__dirname, 'deferred_edits_e2e_driver.js'), 'utf8')
-        .replace(/__PROJECT2__/g, JSON.stringify(path.basename(project2)));
+        .replace(/__PROJECT2__/g, JSON.stringify(path.basename(project2)))
+        .replace(/__MISSING_PROJECT__/g, JSON.stringify(missingProject));
       const facts = await win.webContents.executeJavaScript(driver, true);
       finish(0, 'E2E-RESULT: ' + JSON.stringify({
         ...facts,
         dialogs,
+        durableWrites,
+        durableLeft: durableLeft(),
         disk: readTree(project),
         disk2: readTree(project2),
       }));

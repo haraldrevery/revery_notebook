@@ -120,7 +120,9 @@
   /* 5. Scratchpad race: type in the image preview (no note yet), then open
         another file BEFORE the note exists. The typed text must land in the
         new note; the opened file must stay active and untouched. File
-        creation is slowed down so the race is deterministic. */
+        creation is slowed down so the race is deterministic. The switch
+        waits for the note (save.replaceOpenDocument), so the create never
+        has to detach and announce where the text went. */
   {
     const realCreate = window.NativeAPI.createFile;
     window.NativeAPI.createFile = async (p) => { await sleep(700); return realCreate.call(window.NativeAPI, p); };
@@ -143,7 +145,7 @@
         otherDisk: await disk('other.md'),
         noteDisk: await disk('sub/pic.md'),
         subFiles: await listNames('sub'),
-        told: statusText().includes('pic.md'),
+        detachedNotice: statusText().includes('pic.md'),
       };
     } finally {
       window.NativeAPI.createFile = realCreate;

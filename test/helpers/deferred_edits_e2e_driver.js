@@ -7,6 +7,7 @@
    picker during which an edit arrives) — the wrapped call still runs. */
 (async () => {
   const PROJECT2_NAME = __PROJECT2__;
+  const MISSING_PROJECT = __MISSING_PROJECT__;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const until = async (fn, ms = 8000) => {
     const t0 = Date.now();
@@ -162,6 +163,98 @@
       switched, activeFile: window.sidebarGetActiveFilePath(), editor: editor.value,
       dirty: window.sidebarIsDirty(),
     };
+  }
+
+  /* 7. Text typed with no note open whose note cannot be created (a
+        read-only folder, a full disk — simulated): opening another note must
+        not replace it. It stays, the user is told; once the note can be
+        created, the next switch creates it first. */
+  {
+    const api = window.NativeAPI;
+    const realCreate = api.createFile;
+    let createCalls = 0;
+    api.createFile = async () => { createCalls++; throw new Error('EACCES: permission denied (simulated)'); };
+    typeAt(0, 'UNSAVED-SCRATCH\n');
+    await until(() => createCalls >= 1);
+    await sleep(300);
+    row('other.md').click();
+    await sleep(1200);
+    const blocked = { active: window.sidebarGetActiveFilePath(), editor: editor.value };
+    api.createFile = realCreate;
+    row('other.md').click();
+    const switched = !!(await until(() => active() === 'other.md'));
+    await settled();
+    let note = null;
+    try { note = await api.readFile(window.sidebarGetRootPath() + SEP + 'untitled.md'); } catch (_) { /* null */ }
+    out.scratchUncreatable = {
+      blocked, switched, active: active(), note,
+      scratchBackups: (await api.listVolatileBackups('__revery_scratchpad__/')).length,
+    };
+  }
+
+  /* 8. Text typed into the emptied editor while a project switch runs: its
+        note goes into the project being opened, and saves there (it used to
+        be created in the project being left, where every save then failed
+        as outside the root). */
+  {
+    const api = window.NativeAPI;
+    const realPick = api.openFolderDialog;
+    const realClear = api.clearLastOpenedFile;
+    let hooked = false;
+    api.openFolderDialog = async () => ROOT;
+    api.clearLastOpenedFile = async (...args) => {
+      if (!hooked) { // editor emptied, the new root not taken yet
+        hooked = true;
+        typeAt(0, 'TYPED-IN-GAP\n');
+        await sleep(400);
+      }
+      return realClear.apply(api, args);
+    };
+    document.getElementById('sidebar-open-folder').click();
+    const switched = !!(await until(() => window.sidebarGetRootPath() === ROOT && active() === 'untitled.md'));
+    api.openFolderDialog = realPick;
+    api.clearLastOpenedFile = realClear;
+    typeAt(editor.value.length, 'MORE-AFTER-SWITCH\n');
+    await settled();
+    out.typedDuringSwitch = {
+      hooked, switched,
+      inNewProject: String(window.sidebarGetActiveFilePath()).startsWith(ROOT + SEP),
+      dirty: window.sidebarIsDirty(), note: await disk('untitled.md'),
+    };
+  }
+
+  /* 9. A recent project whose folder is gone: the current project stays,
+        the user is told, and the note that was open comes back. */
+  {
+    const before = { root: window.sidebarGetRootPath(), active: active(), editor: editor.value };
+    document.getElementById('sidebar-projects-btn').click();
+    const item = await until(() => [...document.querySelectorAll('.revery-projects-item')]
+      .find((e) => e.title === MISSING_PROJECT));
+    if (item) item.click();
+    await sleep(1500);
+    out.missingProject = {
+      found: !!item, sameRoot: window.sidebarGetRootPath() === before.root,
+      active: active(), sameEditor: editor.value === before.editor,
+    };
+  }
+
+  /* 10. New File while the open note cannot be saved: nothing is created
+         (an empty "untitled" used to be left behind); the note stays. */
+  {
+    const api = window.NativeAPI;
+    const realWrite = api.writeFile;
+    api.writeFile = async () => { throw new Error('ENOSPC: no space left on device (simulated)'); };
+    const namesBefore = (await names()).sort().join('|');
+    typeAt(editor.value.length, 'WILL-NOT-SAVE\n');
+    await window.sidebarCreateNewFile();
+    const r = {
+      nothingCreated: (await names()).sort().join('|') === namesBefore,
+      active: active(), kept: editor.value.includes('WILL-NOT-SAVE'),
+    };
+    api.writeFile = realWrite;
+    r.savedLater = (await window.sidebarSaveActiveFile()) === true
+      && ((await disk('untitled.md')) || '').includes('WILL-NOT-SAVE');
+    out.newFileSaveFails = r;
   }
 
   out.pageErrors = errors;

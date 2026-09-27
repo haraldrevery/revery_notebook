@@ -11,6 +11,12 @@
         requested: after the watchdog timeout (5 s) the main process offers
         "Force close". (The crash report is a delivered event — see the
         harness for why a real crash is not used.)
+     4. the page answers but its save never ends, closed with the title-bar
+        button: a second close at once is ignored, a status line says what
+        the close waits for, and one after 5 s of saving is reported — the
+        main process asks, and closes on "Close anyway". (That button used
+        to call the close flow directly: no watchdog, and an error in the
+        flow closed the window without saving.)
    Each run is a separate real Electron app (helpers/close_e2e_main.js).
    Skipped when no display server is available (same rule as media_e2e). */
 
@@ -71,4 +77,13 @@ test('close watchdog: the app can always be closed, never silently', { skip: !ha
   const waited = at(crash, 'dialog:Revery Notebook is not responding') - at(crash, 'close');
   assert.ok(waited >= 4500 && waited < 9000,
     `the watchdog waits ~5 s for the page before asking (waited ${waited} ms)\n` + why);
+
+  const stalled = await runScenario('stalled-save');
+  why = JSON.stringify(stalled, null, 2);
+  assert.ok(!stalled.timedOut, 'a close stuck on a save must not leave the window stuck\n' + why);
+  assert.deepEqual(whats(stalled), [
+    'load1', 'booted1', 'close', 'close-again', 'status:saving', 'close-again',
+    'dialog:Revery Notebook could not close normally',
+    'closed',
+  ], 'a second close is ignored at first, then asks; "Close anyway" closes\n' + why);
 });

@@ -83,7 +83,7 @@ test('data-safety end-to-end in the real Electron app', { skip: !hasDisplay, tim
     otherDisk: 'nothing to see here\n',
     noteDisk: '![pic.png](pic.png) typed',
     subFiles: ['pic.md', 'pic.png'],
-    told: true,
+    detachedNotice: false, // the switch waited for the note: nothing detached
   }, 'text typed before the note existed must land in that note; the file opened meanwhile stays active and untouched\n' + why);
 
   // 6. sidebar undo

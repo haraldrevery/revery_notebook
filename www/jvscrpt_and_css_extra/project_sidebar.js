@@ -716,6 +716,11 @@
     /* Serialize async FS operations — prevents simultaneous move/rename/delete
        from corrupting state if the user clicks very quickly. */
     _operationLock: false,
+    /* True from the moment a project switch empties the editor until the new
+       project is open (fileops.switchProject). Text typed meanwhile is only
+       backed up: its note is created once the switch is over, in the project
+       that is then open — not in the one being left. */
+    _projectSwitch: false,
     _externalChangeInProgress: false,
     _replaceGeneration: 0,
     /* Auto-save hold (save.js setAutosaveHold): the held file's path, and why
@@ -1643,16 +1648,42 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (S._scratchpadVolatileKey && _scratch && _scratch.key === S._scratchpadVolatileKey) {
       S._scratchpadVolatileKey = null;
     }
-    _scratch = { gen, key: ensureScratchpadVolatileKey(), latest: "", creating: false, retryAfter: 0 };
+    _scratch = {
+      gen,
+      key: ensureScratchpadVolatileKey(),
+      latest: "",
+      creating: false,
+      promise: null,
+      retryAfter: 0,
+      failed: false,
+      lastError: "",
+      quiet: false
+    };
     return _scratch;
+  }
+  function releaseScratchSession(session) {
+    if (_scratch === session) _scratch = null;
+    if (S._scratchpadVolatileKey === session.key) S._scratchpadVolatileKey = null;
+  }
+  function pendingScratchpad() {
+    if (S.activeFilePath || window._showingUnsupportedFile) return null;
+    const s = _scratch;
+    if (!s || s.gen !== currentDocGeneration()) return null;
+    return editor.value.trim() ? s : null;
   }
   function scratchpadCreateFailed(session, err, emptyFileToRemove) {
     console.error("[Sidebar] scratchpad auto-create failed:", err);
     session.creating = false;
     session.retryAfter = Date.now() + SCRATCHPAD_RETRY_MS;
+    session.failed = true;
+    session.lastError = String(err);
+    writeDurableSnapshot(
+      session.key,
+      currentDocGeneration() === session.gen ? editor.value : session.latest
+    );
     if (emptyFileToRemove) window.NativeAPI.deleteNode(emptyFileToRemove).catch(() => {
     });
-    if (!_scratchpadFailureWarned) {
+    if (!session.quiet && !_scratchpadFailureWarned) {
       _scratchpadFailureWarned = true;
       window.NativeAPI.showMessageBox({
         type: "warning",
@@ -1668,7 +1699,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   function createNoteFromScratchpad(session, targetDir, baseName) {
     session.creating = true;
     const attached = () => currentDocGeneration() === session.gen && !S.activeFilePath && !window._showingUnsupportedFile;
-    (async () => {
+    session.promise = (async () => {
       let newPath = null;
       try {
         newPath = await uniquePath(targetDir, baseName, "md");
@@ -1693,12 +1724,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       }
       session.creating = false;
       _scratchpadFailureWarned = false;
-      const releaseSession = () => {
-        if (_scratch === session) _scratch = null;
-        if (S._scratchpadVolatileKey === session.key) S._scratchpadVolatileKey = null;
-      };
       if (!attached()) {
-        releaseSession();
+        releaseScratchSession(session);
         window.NativeAPI.deleteVolatileContent(session.key).catch(() => {
         });
         expandedDirs.add(targetDir);
@@ -1717,7 +1744,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       forgetGonePath(newPath);
       S.previewMediaPath = null;
       rememberDiskContent(written);
-      releaseSession();
+      releaseScratchSession(session);
       let placeholderStillNeeded = false;
       if (editor.value !== written) {
         markDirty();
@@ -1749,6 +1776,39 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       console.error("[Sidebar] scratchpad create flow failed unexpectedly:", err);
       session.creating = false;
     });
+    return session.promise;
+  }
+  function startScratchpadCreate(session) {
+    const targetDir = pendingNoteDir();
+    if (!targetDir) return null;
+    let baseName = S.previewMediaPath ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, "") : "untitled";
+    if (checkEntryName(baseName) || checkEntryName(baseName + ".md")) baseName = "untitled";
+    return createNoteFromScratchpad(session, targetDir, baseName);
+  }
+  async function scratchpadToNote(session) {
+    session.quiet = true;
+    try {
+      const creating = session.creating ? session.promise : startScratchpadCreate(session);
+      if (creating) await creating;
+    } finally {
+      session.quiet = false;
+    }
+    return pendingScratchpad() !== session;
+  }
+  function tellScratchpadNotSaved(session) {
+    return window.NativeAPI.showMessageBox({
+      type: "warning",
+      title: window.t("Could Not Create File"),
+      message: window.t("Your text could not be saved to a file, so it stays open."),
+      detail: (session.lastError ? session.lastError + "\n\n" : "") + window.t('Use "Save as..." in the File menu to save it somewhere else. Until then a backup is kept, and Revery offers it again at the next start.'),
+      buttons: ["OK"],
+      defaultId: 0
+    }).catch(() => {
+    });
+  }
+  function resumeScratchpadAfterSwitch() {
+    const s = pendingScratchpad();
+    if (s && !s.creating) startScratchpadCreate(s);
   }
   var DURABLE_MIRROR_MS = 5e3;
   var _durableMirrorLast = 0;
@@ -1761,12 +1821,17 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     _durableMirrorLast = Date.now();
     window.NativeAPI.setDurableBackup(path, content).catch((e) => console.warn("[Sidebar] durable backup failed (non-fatal):", e));
   }
+  function _durableMirrorKey() {
+    if (S.activeFilePath) return _durableExposed() && S.isDirty ? S.activeFilePath : null;
+    const s = pendingScratchpad();
+    return s && s.failed ? s.key : null;
+  }
   function _fireDurableMirror() {
-    if (!_durableExposed() || !S.isDirty) return;
-    writeDurableSnapshot(S.activeFilePath, editor.value);
+    const key = _durableMirrorKey();
+    if (key) writeDurableSnapshot(key, editor.value);
   }
   function mirrorDurableWhileExposed() {
-    if (!_durableExposed()) return;
+    if (!_durableMirrorKey()) return;
     clearTimeout(_durableMirrorTimer);
     const since = Date.now() - _durableMirrorLast;
     if (since >= DURABLE_MIRROR_MS) {
@@ -2038,14 +2103,32 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
   var SWITCH_CANCELLED = Symbol("switch-cancelled");
   var SWITCH_ATTEMPTS = 5;
-  async function replaceOpenDocument(prepare, apply) {
+  var unsavedNote = () => S.isDirty && !!S.activeFilePath;
+  var hasUnsavedWork = () => unsavedNote() || !!pendingScratchpad();
+  async function saveOpenDocument() {
+    if (unsavedNote()) return saveActiveFile();
+    const pending = pendingScratchpad();
+    if (!pending || await scratchpadToNote(pending)) return true;
+    await tellScratchpadNotSaved(pending);
+    return false;
+  }
+  async function saveBeforeLeaving() {
     await waitForTitleRename();
-    const unsaved = () => S.isDirty && !!S.activeFilePath;
+    return saveOpenDocument();
+  }
+  async function replaceOpenDocument(prepare, apply) {
+    if (S._projectSwitch) {
+      if (typeof window.showStatusWarning === "function") {
+        window.showStatusWarning("fs-busy", window.t("Busy \u2014 try again in a moment."), { priority: 5, ttl: 2500 });
+      }
+      return false;
+    }
+    await waitForTitleRename();
     for (let attempt = 0; attempt < SWITCH_ATTEMPTS; attempt++) {
-      if (unsaved() && !await saveActiveFile()) return false;
+      if (!await saveOpenDocument()) return false;
       const prepared = prepare ? await prepare() : void 0;
       if (prepared === SWITCH_CANCELLED) return false;
-      if (unsaved()) continue;
+      if (hasUnsavedWork()) continue;
       apply(prepared);
       return true;
     }
@@ -2135,6 +2218,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         if (typeof c === "string" && c) newPath = c;
       } catch (_) {
       }
+      const scratch = _scratch && _scratch.gen === currentDocGeneration() && !_scratch.creating && !S.activeFilePath ? _scratch : null;
+      if (scratch) releaseScratchSession(scratch);
       S.activeFilePath = newPath;
       forgetGonePath(newPath);
       if (typeof savedContent === "string" && editor.value !== savedContent) {
@@ -2144,6 +2229,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         markClean();
       }
       rememberDiskContent(typeof savedContent === "string" ? savedContent : null);
+      if (scratch) {
+        (S.isDirty ? window.NativeAPI.writeVolatileNow(newPath, editor.value) : Promise.resolve()).then(() => window.NativeAPI.deleteVolatileContent(scratch.key)).catch((e) => console.warn("[Sidebar] Save As: scratchpad backup kept:", e));
+      }
       await window.NativeAPI.setLastOpenedFile(newPath).catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
       if (newRoot && newRoot !== S.rootPath) {
         S.rootPath = newRoot;
@@ -2187,10 +2275,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           } catch (e) {
             console.warn("[Sidebar] scratchpad placeholder volatile failed (non-fatal):", e);
           }
-          if (!session.creating && Date.now() >= session.retryAfter) {
-            let baseName = S.previewMediaPath ? baseNameOf(S.previewMediaPath).replace(/\.[^/.]+$/, "") : "untitled";
-            if (checkEntryName(baseName) || checkEntryName(baseName + ".md")) baseName = "untitled";
-            createNoteFromScratchpad(session, targetDir, baseName);
+          mirrorDurableWhileExposed();
+          if (!S._projectSwitch && !session.creating && Date.now() >= session.retryAfter) {
+            startScratchpadCreate(session);
           }
           return;
         }
@@ -3082,11 +3169,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     startWatchingFile(filePath);
   }
   async function createNewFile(targetDir) {
-    if (S._operationLock) {
+    if (S._operationLock || S._projectSwitch) {
       reportBusy();
       return;
     }
-    if (S.isDirty && S.activeFilePath) await saveActiveFile();
+    if (!await saveBeforeLeaving()) return;
     const dir = targetDir || S.selectedDirPath || S.rootPath;
     if (!dir) {
       await window.NativeAPI.showMessageBox({
@@ -3278,6 +3365,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     const canonical = await window.NativeAPI.setRootPath(folderPath);
     if (typeof canonical === "string" && canonical) folderPath = canonical;
     S.rootPath = folderPath;
+    S.selectedDirPath = folderPath;
+    S.cardViewDir = folderPath;
     clearUndoStack();
     try {
       localStorage.setItem("revery_root_path", S.rootPath);
@@ -3288,8 +3377,6 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       });
     }
     await recordProjectOpen(folderPath);
-    S.selectedDirPath = folderPath;
-    S.cardViewDir = folderPath;
     _previewCache.clear();
     const parts = folderPath.replace(/\\/g, "/").split("/");
     folderNameEl.textContent = parts[parts.length - 1] || folderPath;
@@ -3299,6 +3386,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (!S.sidebarOpen) openSidebar();
   }
   function clearEditorForProjectSwitch() {
+    S._projectSwitch = true;
     S.activeFilePath = null;
     S.previewMediaPath = null;
     window._showingUnsupportedFile = false;
@@ -3313,9 +3401,41 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (docTitleEl) docTitleEl.value = "";
   }
   async function switchProject(path) {
-    if (!await replaceOpenDocument(null, clearEditorForProjectSwitch)) return;
-    await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
-    await openFolder(path);
+    const previousNote = S.activeFilePath;
+    const previousRoot = S.rootPath;
+    let began = false;
+    let failure = null;
+    try {
+      if (!await replaceOpenDocument(null, () => {
+        began = true;
+        clearEditorForProjectSwitch();
+      })) return;
+      await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
+      await openFolder(path);
+    } catch (err) {
+      failure = err;
+    } finally {
+      if (began) S._projectSwitch = false;
+    }
+    if (!began) {
+      if (failure) console.error("[Sidebar] project switch failed before it started:", failure);
+      return;
+    }
+    if (failure) {
+      console.error("[Sidebar] project switch failed:", failure);
+      if (S.rootPath === previousRoot) {
+        await window.NativeAPI.showMessageBox({
+          type: "error",
+          title: window.t("Could Not Open Folder"),
+          message: window.t('"{name}" could not be opened. The current project stays open.').replace("{name}", baseNameOf(path) || path),
+          detail: errText(failure)
+        }).catch(() => {
+        });
+        const untouched = !S.activeFilePath && !S.previewMediaPath && !window._showingUnsupportedFile && editor.value === "";
+        if (previousNote && untouched) await openFile(previousNote);
+      }
+    }
+    resumeScratchpadAfterSwitch();
   }
   async function promptOpenFolder() {
     try {
@@ -3337,10 +3457,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         if (typeof executeImport === "function") executeImport();
         return;
       }
-      if (S.isDirty && S.activeFilePath) {
-        const saved = await saveActiveFile();
-        if (!saved) return;
-      }
+      if (!await saveBeforeLeaving()) return;
       const input = document.createElement("input");
       input.type = "file";
       input.accept = ".md,.txt";
@@ -4697,7 +4814,43 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
 
   // src/sidebar/lifecycle.js
+  var CLOSE_STUCK_MS = 5e3;
+  var _closing = null;
   async function sidebarHandleClose() {
+    if (_closing) {
+      const saving = _closing.savingSince ? Date.now() - _closing.savingSince : 0;
+      if (saving >= CLOSE_STUCK_MS) {
+        throw new Error(`Still saving the open note before closing (for ${Math.round(saving / 1e3)} s).`);
+      }
+      return;
+    }
+    const closing = _closing = { savingSince: 0 };
+    const whileSaving = async (work) => {
+      closing.savingSince = Date.now();
+      const notice = setTimeout(() => {
+        if (typeof window.showStatusWarning === "function") {
+          window.showStatusWarning(
+            "closing",
+            window.t("Saving the open note before closing\u2026 If this takes too long, close again."),
+            { priority: 90 }
+          );
+        }
+      }, 1e3);
+      try {
+        return await work();
+      } finally {
+        clearTimeout(notice);
+        closing.savingSince = 0;
+        if (typeof window.clearStatusWarning === "function") window.clearStatusWarning("closing");
+      }
+    };
+    try {
+      await handleCloseRequest(whileSaving);
+    } finally {
+      _closing = null;
+    }
+  }
+  async function handleCloseRequest(whileSaving) {
     cancelPendingAutoSave();
     if (S.activeFilePath) {
       if (S.isDirty) {
@@ -4705,9 +4858,9 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         let outcome = null;
         for (let attempt = 0; attempt < 3 && S.isDirty; attempt++) {
           try {
-            saved = await saveActiveFile({ onOutcome: (o) => {
+            saved = await whileSaving(() => saveActiveFile({ onOutcome: (o) => {
               outcome = o;
-            } });
+            } }));
           } catch (err) {
             console.error("[sidebarHandleClose] Save threw unexpectedly:", err);
             saved = false;
@@ -4740,7 +4893,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       }
       if (S.isDirty && typeof window.NativeAPI.writeVolatileNow === "function") {
         try {
-          await window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value);
+          await whileSaving(() => window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value));
         } catch (_) {
         }
       }

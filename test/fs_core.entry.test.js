@@ -143,14 +143,17 @@ describe('entries inside the project', () => {
     assert.equal(lexists(p('sub', 'real')), false);
   });
 
-  test('EBUSY is NOT turned into a copy: off Windows it fails at once', async () => {
+  test('EBUSY is NOT turned into a copy: retried on every platform, then it fails', async () => {
     const orig = fs.promises.rename;
     let calls = 0;
+    const waits = [];
     fs.promises.rename = async () => { calls++; const e = new Error('busy'); e.code = 'EBUSY'; throw e; };
     try {
-      await assert.rejects(renameEntry(p('real'), p('sub', 'real'), root, { platform: 'linux' }), /busy/);
+      await assert.rejects(renameEntry(p('real'), p('sub', 'real'), root,
+        { platform: 'linux', sleep: async (ms) => { waits.push(ms); } }), /busy/);
     } finally { fs.promises.rename = orig; }
-    assert.equal(calls, 1);
+    assert.equal(calls, 4);
+    assert.deepEqual(waits, [100, 200, 400]);
     assert.equal(lexists(p('sub', 'real')), false);
     assert.equal(fs.readFileSync(p('real', 'inside.md'), 'utf8'), 'inside');
   });
