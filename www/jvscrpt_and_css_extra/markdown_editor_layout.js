@@ -302,17 +302,48 @@ document.addEventListener('mousedown', (e) => {
 
 
 
+/* ── Phone layout view (≤ 820px) ─────────────────────────────────────────
+   The phone layout shows ONE pane, chosen by body[data-view]: editor |
+   preview | sidebar. The rules for that attribute live here:
+     - on the desktop layout it is always 'editor' — live preview's
+       pane rules and the column-edge drag key on [data-view="preview"],
+       so a leftover 'preview' from a narrow window would show a stray
+       preview pane beside the LP editor;
+     - on a phone, reader mode IS the preview view (the sidebar already
+       returns there in reader mode) — otherwise reader mode hid the
+       editor while the phone CSS hid the preview: a blank screen.
+   Called on resize, at boot, and by applyPaneLayout (menus.js) when
+   reader mode toggles. */
+function syncPhoneView() {
+  const body = document.body;
+  const view = body.getAttribute('data-view');
+  let next = view;
+  if (window.innerWidth > 820) next = 'editor';
+  else if (body.classList.contains('reader-mode-active') && view === 'editor') next = 'preview';
+  if (next === view) return;
+  if (next === 'preview' && typeof render === 'function') render(); // the phone skips it while hidden
+  body.setAttribute('data-view', next);
+  const btnMobile = document.getElementById('btn-sidebar-mobile');
+  if (btnMobile) btnMobile.classList.remove('active');
+}
+window.syncPhoneView = syncPhoneView;
+
+/* The view toggle names the view it switches TO. Every writer of
+   data-view (this file, the sidebar, syncPhoneView) goes through the
+   attribute, so the label simply follows it. */
+function syncViewToggleLabel() {
+  btnView.textContent = document.body.getAttribute('data-view') === 'editor'
+    ? window.t('Preview') : window.t('Editor');
+}
+new MutationObserver(syncViewToggleLabel)
+  .observe(document.body, { attributes: true, attributeFilter: ['data-view'] });
+
 /* ── Mobile view toggle ── */
 let lastWasNarrow = window.innerWidth <= 820;
 function updateMobileBtn() {
   const narrow = window.innerWidth <= 820;
   btnView.style.display = narrow ? 'block' : 'none';
-  
-  if (!narrow && document.body.getAttribute('data-view') === 'sidebar') {
-    document.body.setAttribute('data-view', 'editor');
-    const btnMobile = document.getElementById('btn-sidebar-mobile');
-    if (btnMobile) btnMobile.classList.remove('active');
-  }
+  syncPhoneView();
 
   // If transitioning from mobile (narrow) to desktop (!narrow), ensure preview is up-to-date
   if (!narrow && lastWasNarrow) {
@@ -338,8 +369,7 @@ btnView.addEventListener('click', () => {
     if (typeof render === 'function') render();
   }
   
-  document.body.setAttribute('data-view', isEditor ? 'preview' : 'editor');
-  btnView.textContent = isEditor ? window.t('Preview') : window.t('Editor');
+  document.body.setAttribute('data-view', isEditor ? 'preview' : 'editor'); // label: syncViewToggleLabel
   
   const btnMobile = document.getElementById('btn-sidebar-mobile');
   if (btnMobile) btnMobile.classList.remove('active');

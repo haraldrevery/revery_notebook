@@ -539,8 +539,17 @@ button groups and applies the first state that fits: hide Export →
 narrower title → short labels → minimal title → hide Outline, with the
 logo centred while possible and slid aside otherwise; the last resort
 narrows the title to the exact shortfall and right-aligns the row so the
-window controls stay visible. In the desktop app the phone layout
-(≤ 820px, the window's minimum is 640) keeps the window controls.
+window controls stay visible.
+
+**Phone layout** (≤ 820px; also the desktop app, whose minimum window is
+640). One pane at a time, chosen by `body[data-view]` (editor | preview |
+sidebar). Its rules live in one place, `syncPhoneView()` in layout.js: on
+the desktop layout the view is always `editor` (live preview's pane rules
+key on `[data-view="preview"]`), and on a phone reader mode is always the
+preview view. The view toggle names the view it switches to and follows
+the attribute. The desktop app keeps its window controls in this layout;
+the project-sidebar button exists only there. `test/phone_e2e.test.js`
+covers it at 390px.
 
 ---
 

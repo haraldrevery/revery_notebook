@@ -38,6 +38,11 @@ if (process.env.E2E_COLOR_SCHEME === 'light' || process.env.E2E_COLOR_SCHEME ===
   nativeTheme.themeSource = process.env.E2E_COLOR_SCHEME;
 }
 
+/* Optional window size, E2E_WINDOW_SIZE=<w>x<h> (the phone-layout suite
+   runs at 390x780). Default 1100x700. */
+const [winW, winH] = /^\d+x\d+$/.test(process.env.E2E_WINDOW_SIZE || '')
+  ? process.env.E2E_WINDOW_SIZE.split('x').map(Number) : [1100, 700];
+
 /* A hung renderer is a failure mode under test; the main process stays
    responsive, so a global deadline can always fire. Keep it below the
    node:test timeout so this message, not a bare timeout, is reported. */
@@ -47,7 +52,7 @@ setTimeout(() => {
 }, deadlineMs);
 
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ show: false, width: 1100, height: 700 });
+  const win = new BrowserWindow({ show: false, width: winW, height: winH });
   /* Hidden windows throttle requestAnimationFrame, which CodeMirror's
      measure cycle (scroll effects, layout reads) depends on. */
   win.webContents.setBackgroundThrottling(false);

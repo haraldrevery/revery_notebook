@@ -1706,6 +1706,10 @@ function applyPaneLayout() {
   const readerChanged = document.body.classList.contains('reader-mode-active') !== readerMode;
   document.body.classList.toggle('reader-mode-active', readerMode);
   document.body.classList.toggle('preview-hidden', !previewVisible);
+  /* Phone layout: reader mode shows the preview view (layout.js — loads
+     after this file, so absent during the very first boot call; its own
+     boot call covers that). */
+  if (typeof window.syncPhoneView === 'function') window.syncPhoneView();
   /* The preview's Properties sheet folds only in reader mode: redraw it
      with (or without) its toggle. */
   if (readerChanged && typeof render === 'function') render();
