@@ -125,20 +125,51 @@ function tempSiblingPath(target, uniqueSuffix, tag) {
   return path.join(path.dirname(target), `${tempNamePrefix(path.basename(target))}.${uniqueSuffix}.${tag}`);
 }
 
+/* ── Windows: a lock that lets go in a moment ───────────────────────────
+   Another program that briefly holds a file — antivirus scanning the temp
+   file we just wrote, a sync client, the search indexer — makes a rename
+   on Windows fail with EPERM, EACCES or EBUSY. A rename happens completely
+   or not at all, so trying again a few times can never leave a partial
+   state. ONE policy for every rename here: the atomic write's final step
+   and renameEntry. MIRROR of classify_rename_error / LOCK_RETRY_DELAYS_MS
+   in tauri/src/main.rs. */
+const LOCK_RETRY_DELAYS_MS = [100, 200, 400];
+
+function isTransientLock(err, platform = process.platform) {
+  return platform === 'win32' && !!err
+    && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES');
+}
+
+/* atomicWriteFile is synchronous (every IPC handler that writes relies on
+   it finishing before the next message is handled), so its retry waits
+   synchronously: at most 0.7 s, and only while a lock persists. */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /* ── Atomic file write ──────────────────────────────────────────────────
    Strategy: write to a unique sibling temp file (same directory → same
    filesystem), fsync it, then rename over the destination. A crash at any
    point leaves the destination either untouched or fully replaced — never
    truncated.
 
-   On EXDEV/EBUSY (exotic mounts, or a sync agent briefly locking the
-   destination) rename is impossible, so we fall back to copy. A copy can
-   be interrupted mid-write, so the existing destination is snapshotted to
-   a .revery_bak first; the snapshot is deleted only after the copy (or the
+   A rename blocked by a transient Windows lock is retried (see above).
+   When the lock does not let go, the save FAILS with the old file intact.
+   It used to fall back to copying over the file in place on EBUSY — the
+   error Windows gives for exactly these locks — which a crash could leave
+   half-written.
+
+   Only EXDEV (another filesystem — cannot happen for a sibling temp file
+   on any ordinary mount) still falls back to a copy. A copy can be
+   interrupted mid-write, so the existing destination is snapshotted to a
+   .revery_bak first; the snapshot is deleted only after the copy (or the
    restore from it) verifiably succeeded. A kept .revery_bak is the only
    intact copy of the previous content and must survive for manual
-   recovery. */
-function atomicWriteFile(safe, content) {
+   recovery.
+   `opts.platform` / `opts.sleepSync` exist for the unit tests. */
+function atomicWriteFile(safe, content, opts = {}) {
+  const platform = opts.platform || process.platform;
+  const sleep = opts.sleepSync || sleepSync;
   const uniqueSuffix = Date.now() + '_' + crypto.randomBytes(4).toString('hex');
   const tmp = tempSiblingPath(safe, uniqueSuffix, 'revery_tmp');
   const bak = tempSiblingPath(safe, uniqueSuffix, 'revery_bak');
@@ -150,62 +181,81 @@ function atomicWriteFile(safe, content) {
     throw err;
   }
 
-  try {
-    fs.renameSync(tmp, safe);
-    syncParentDir(safe);
-  } catch (err) {
-    if (err.code === 'EXDEV' || err.code === 'EBUSY') {
-      // Step A: Snapshot the existing destination so we can restore it if
-      //         the cross-device copy is interrupted mid-write.
-      let hasBak = false;
-      if (fs.existsSync(safe)) {
-        try {
-          fs.copyFileSync(safe, bak);
-          hasBak = true;
-        } catch (bakErr) {
-          try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-          throw new Error(`EXDEV fallback aborted: cannot create backup: ${bakErr.message}`);
-        }
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(tmp, safe);
+      syncParentDir(safe);
+      return;
+    } catch (err) {
+      if (isTransientLock(err, platform) && attempt < LOCK_RETRY_DELAYS_MS.length) {
+        sleep(LOCK_RETRY_DELAYS_MS[attempt]);
+        continue;
       }
-
-      // Step B: Overwrite destination from the fully-written temp file.
-      try {
-        fs.copyFileSync(tmp, safe);
-        // copyFileSync does not fsync the destination. Without this, power
-        // loss between the copy and the OS flushing its buffers can leave
-        // `safe` truncated. Mirrors sync_data() in Tauri's atomic_write_file.
-        try {
-          const fd = fs.openSync(safe, 'r');
-          try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        } catch (_) { /* non-fatal: best-effort sync */ }
-        syncParentDir(safe);
+      if (err.code !== 'EXDEV') {
         try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-        if (hasBak) { try { fs.rmSync(bak, { force: true }); } catch (_) {} }
-      } catch (fallbackErr) {
-        /* Only delete the snapshot if the restore actually succeeded —
-           otherwise the .revery_bak is the only intact copy of the previous
-           content (dest may be truncated). */
-        let restored = false;
-        if (hasBak) {
-          try { fs.copyFileSync(bak, safe); restored = true; } catch (_) {}
-          if (restored) {
-            try { fs.rmSync(bak, { force: true }); } catch (_) {}
-          }
+        if (isTransientLock(err, platform)) {
+          const why = new Error(
+            `"${path.basename(safe)}" could not be replaced: another program is using it, ` +
+            `or it is read-only (${err.code}). The file on disk was not changed.`);
+          why.code = err.code;
+          throw why;
         }
-        try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-        if (hasBak && !restored) {
-          throw new Error(
-            `${fallbackErr.message} — the file may be incomplete. A snapshot of ` +
-            `the previous content was preserved at "${bak}". Rename it over the ` +
-            `original to recover.`
-          );
-        }
-        throw fallbackErr;
+        throw err;
       }
-    } else {
-      try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-      throw err;
+      copyOverDestination(safe, tmp, bak);
+      return;
     }
+  }
+}
+
+/* The EXDEV fallback of atomicWriteFile: snapshot → copy → clean up. */
+function copyOverDestination(safe, tmp, bak) {
+  // Step A: Snapshot the existing destination so we can restore it if
+  //         the cross-device copy is interrupted mid-write.
+  let hasBak = false;
+  if (fs.existsSync(safe)) {
+    try {
+      fs.copyFileSync(safe, bak);
+      hasBak = true;
+    } catch (bakErr) {
+      try { fs.rmSync(tmp, { force: true }); } catch (_) {}
+      throw new Error(`EXDEV fallback aborted: cannot create backup: ${bakErr.message}`);
+    }
+  }
+
+  // Step B: Overwrite destination from the fully-written temp file.
+  try {
+    fs.copyFileSync(tmp, safe);
+    // copyFileSync does not fsync the destination. Without this, power
+    // loss between the copy and the OS flushing its buffers can leave
+    // `safe` truncated. Mirrors sync_data() in Tauri's atomic_write_file.
+    try {
+      const fd = fs.openSync(safe, 'r');
+      try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    } catch (_) { /* non-fatal: best-effort sync */ }
+    syncParentDir(safe);
+    try { fs.rmSync(tmp, { force: true }); } catch (_) {}
+    if (hasBak) { try { fs.rmSync(bak, { force: true }); } catch (_) {} }
+  } catch (fallbackErr) {
+    /* Only delete the snapshot if the restore actually succeeded —
+       otherwise the .revery_bak is the only intact copy of the previous
+       content (dest may be truncated). */
+    let restored = false;
+    if (hasBak) {
+      try { fs.copyFileSync(bak, safe); restored = true; } catch (_) {}
+      if (restored) {
+        try { fs.rmSync(bak, { force: true }); } catch (_) {}
+      }
+    }
+    try { fs.rmSync(tmp, { force: true }); } catch (_) {}
+    if (hasBak && !restored) {
+      throw new Error(
+        `${fallbackErr.message} — the file may be incomplete. A snapshot of ` +
+        `the previous content was preserved at "${bak}". Rename it over the ` +
+        `original to recover.`
+      );
+    }
+    throw fallbackErr;
   }
 }
 
@@ -400,8 +450,7 @@ const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
        that can never lose or duplicate data;
      • Windows only: a rename refused because something briefly holds a
        handle (antivirus, the indexer, a watcher being closed) is retried
-       a few times. A rename either happens completely or not at all, so
-       retrying cannot leave a partial state.
+       (isTransientLock / LOCK_RETRY_DELAYS_MS — the atomic write's policy).
    `opts.platform` / `opts.sleep` exist for the unit tests. */
 async function renameEntry(oldRaw, newRaw, rootPath, opts = {}) {
   const platform = opts.platform || process.platform;
@@ -433,10 +482,8 @@ async function renameEntry(oldRaw, newRaw, rootPath, opts = {}) {
       if (err && err.code === 'EXDEV') {
         throw new Error(`"${path.basename(safeOld)}" cannot be moved to another drive or volume from Revery (nothing was changed). Use your file manager for that move.`);
       }
-      const transient = platform === 'win32'
-        && err && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES');
-      if (!transient || attempt >= 3) throw err;
-      await sleep(100 * 2 ** attempt);
+      if (!isTransientLock(err, platform) || attempt >= LOCK_RETRY_DELAYS_MS.length) throw err;
+      await sleep(LOCK_RETRY_DELAYS_MS[attempt]);
       if (!lexists(safeOld)) throw new Error(`Source not found: ${safeOld}`);
       if (destinationTaken()) throw new Error(`Destination already exists: ${safeNew}`);
     }
@@ -817,6 +864,8 @@ module.exports = {
   tempSiblingPath,
   TEMP_NAME_PREFIX_BYTES,
   syncParentDir,
+  LOCK_RETRY_DELAYS_MS,
+  isTransientLock,
   atomicWriteFile,
   readUtf8TextStrict,
   NOT_UTF8_MESSAGE,

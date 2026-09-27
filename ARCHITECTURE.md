@@ -289,6 +289,16 @@ One ingest, one path module, one drop transport per platform:
   note in (selected folder → project root). The inserted link is a normal
   undoable transaction, so it flows through autosave and, with no note open,
   through the scratchpad auto-create, which uses the same `pendingNoteDir()`.
+  The copy runs BEFORE the link is inserted and can take seconds, so the
+  drop/paste position is held by an editor anchor
+  (`window.anchorEditorRange`, cm_setup.js section 1b), not by offsets: it
+  follows every edit made meanwhile and dies with its document. A note
+  replaced meanwhile gets no link (a status message names the added files);
+  a pasted-over selection is replaced only while it still holds the text it
+  held at paste time, otherwise the link is inserted beside it. Plain
+  offsets used to put the link into the note opened meanwhile, and to
+  replace whatever text had moved under the old selection (typing after a
+  paste destroyed text). `test/deferred_edits_e2e.test.js` pins both.
 - **Editor drops** are handled in the capture phase on the CodeMirror
   wrapper, so CodeMirror's own drop handler never sees them (it would insert
   a text file's contents or a `file://` URL). The editor accepts images only;
@@ -398,7 +408,19 @@ title bar) follows the same rules; the backends enforce them again
 
 There is no "save first?" dialog: opening another file, previewing an
 image, switching project or closing SAVES the open note first (through the
-save queue) and aborts the switch if that save fails. A rename, move or
+save queue) and aborts the switch if that save fails. Every opener goes
+through ONE function, `replaceOpenDocument(prepare, apply)` (save.js): save
+the open note, run the opener's own awaiting (`prepare`, e.g. reading the
+next note), then swap the document in a SYNCHRONOUS `apply` — right after a
+last check that the open note has no unsaved edits. An edit that arrived
+while saving or preparing (a dropped image's link landing after its copy,
+an edit while the folder picker is open) is saved and the switch prepared
+again; it used to be replaced unseen, kept only in a crash backup that is
+never offered for a note that is not the last one opened. The folder
+picker (`dialog:open-folder` / `open_folder_dialog`) only AUTHORIZES the
+chosen folder; `setRootPath` switches the root after the old note is saved
+(the picker used to switch it at once, so that save failed with "escapes
+project root"). A rename, move or
 undo that affects the open note also lets pending saves finish first (so
 no save can land on the old name), then hands over to the ONE retarget
 function (`retargetActiveFile`, save.js): the path, watcher, crash backups
@@ -781,6 +803,20 @@ note name falls back to plain `recovered.md`).
 A crash mid-write leaves the original file intact; a leftover
 `.revery_tmp` is harmless.
 
+**Windows locks are retried, never copied over.** Another program that
+briefly holds the file (antivirus scanning the new temp file, a sync
+client, the indexer) makes the rename fail with EPERM/EACCES/EBUSY (raw
+5/32/33). The rename is retried after 0.1/0.2/0.4 s — the same policy as
+entry renames (`fs_core.isTransientLock` + `LOCK_RETRY_DELAYS_MS`, Rust
+`classify_rename_error` + `retry_rename_on_lock`). A lock that does not let
+go fails the save with the old file intact ("another program is using it,
+or it is read-only"). Both wrappers used to answer EBUSY / sharing
+violation with the cross-device fallback — an in-place copy that a crash
+can leave half-written — and failed at once on EPERM. Only a real
+cross-device error (EXDEV; Windows ERROR_NOT_SAME_DEVICE) still copies,
+with the `.revery_bak` snapshot described below; for a sibling temp file it
+cannot occur on ordinary mounts.
+
 Every byte is written before the fsync: `write(2)` may write fewer bytes
 than asked on a nearly full disk, and `fs.writeSync` then just returns the
 smaller count. Electron's `writeAllSync` (fs_core.js) keeps writing until
@@ -1097,7 +1133,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 
 | Suite | What it proves |
 |---|---|
-| `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails; short writes are completed, a short write followed by ENOSPC fails with the target untouched, a zero-progress write cannot loop, and a REAL kernel short write (`ulimit -f`, Linux) is reported instead of truncating; a note name near the 255-byte limit saves (bounded temp names, whole characters), and the permission bits of the replaced file are kept |
+| `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails; a Windows lock is retried (0.1/0.2/0.4 s) and one that does not let go fails with the old file intact — EBUSY is never answered with a copy, on any platform; short writes are completed, a short write followed by ENOSPC fails with the target untouched, a zero-progress write cannot loop, and a REAL kernel short write (`ulimit -f`, Linux) is reported instead of truncating; a note name near the 255-byte limit saves (bounded temp names, whole characters), and the permission bits of the replaced file are kept |
 | `test/fs_core.paths.test.js` | Path traversal / symlink-escape rejection, dropped-filename sanitisation |
 | `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
 | `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup |
@@ -1123,11 +1159,12 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/block_insert.test.js` | The pure paragraph inserter behind live-preview drops: blank line on each side only where missing, never glued onto text (also from a stale mid-line point), document start/end, multi-link blocks, cursor on the blank line after |
 | `test/paths.test.js` | The single path-rule module behind preview, export, link rewriting, autocomplete and media ingest: normalisation, resolve/relative (incl. Windows case-insensitivity), encode/decode round-trips, root containment (sibling-prefix attack, verbatim prefix) |
 | `test/tauri_config.test.js` | Pins the per-platform file-drop transport to the Tauri config: the Windows override mirrors the main window except `dragDropEnabled:false`, `drop_transport.js` agrees with it, and every npm `tauri build`/`dev` script produces that window once its `--config` arguments are merged the way tauri-codegen does; plus the sidebar drag payload's encode/decode |
+| `test/deferred_edits_e2e.test.js` | Boots the REAL desktop app and pins edits that land after an await: an image dropped on a note, then another note opened before its copy finished — the link never goes into the other note and the user is told; an image pasted over a selection, then typing elsewhere or over it — exactly the selection is replaced, typed text is kept; an edit landing while the next note is read is saved into its own note before the switch; an edit arriving while the folder picker is open is saved into the OLD project; a note that cannot be read leaves the open note in place. Paths use the root's own separator (runs on Windows) |
 | `test/media_e2e.test.js` | Boots the REAL Electron main (preload, IPC, atomic writes) on a temporary project and drives real DragEvent/ClipboardEvent drops: one encoded link per image, preview resolves it, non-media never copied, sidebar payload inserts once, a Ctrl+click multi-selection dragged from the real tree inserts one link per image on consecutive lines in tree order, image click previews from its own folder, media dropped while previewing lands beside the note it creates with every link resolving, paste, autosave, no native dialog; in live preview a sidebar image dropped on a rendered list item / code line / paragraph lands as its own paragraph after that item / after the whole fence / after the paragraph; in card view a media card owns the drag (its thumbnail `<img>` is non-draggable), so grabbing the picture carries the card payload |
 | `test/livepreview_e2e.test.js` | Boots the REAL app in Electron (web mode, via the generic `test/helpers/web_e2e_main.js` + `lp_e2e_driver.js`) and drives the live preview with DOM mouse events: a click on rendered text lands on THAT word of the source (paragraph, list item, code line, table cell, lower row of a wrapped paragraph) the layout never changes while the button is down (a click's block reveals on release, and a few px of pointer jitter during a click selects nothing), CodeMirror's height map matches the screen below lists/quotes/code/tables, a click on the blank line at a block's edge reveals nothing and never scrolls, a click beside a block lands on the row at that height, a click that changes a block's height moves the side with less visible text (low on the screen it changes downward, high on the screen upward, a block taller than the screen keeps the clicked row under the pointer; also when the previously edited block re-renders above — on screen or scrolled out of view), typing and arrow keys keep the caret's line in place when blocks switch (a lazy-continuation merge, leaving a revealed block, ArrowUp into a tall paragraph without a jump), the block being edited keeps its rendered height (headings, a tight and a nested list, a quote, a wrapped paragraph — at two text sizes), images and `$$` math stay rendered under their source while edited, undrawn blocks keep their measured heights, a drag started on a rendered block selects text, a drag into a rendered block extends character by character with the covered rendered text painted (CSS Custom Highlight) while the block stays rendered, a block the range spans is marked as a unit, heads stay stable over widgets, double-click selects the word, shift-click extends, right-click places the cursor without dragging, select-all keeps spanned blocks rendered, Shift+Arrow into a rendered block paints exactly the selected characters and typing replaces them in the source, arrow keys still reveal, checkboxes and YAML pills keep their behaviour |
 | `test/custom_theme.test.js` | The custom theme generator (theme.js in a vm): it sets exactly the variables every palette block defines; stored values are normalized or rejected (the earlier offset layout is converted); saturation 0 is neutral gray; each control changes only what it names (text sliders never touch a background variable and vice versa; Vivid text changes only `--doc-text`); no part of the Text saturation slider is flat; Vivid text makes dark red red; for every control combination (exact, via the extreme text and surface luminances, since any text color can meet any surface): text ≥ 7:1, muted text ≥ 4.5:1 (4:1 on hover), highlight ≥ 4.5:1 (3:1 on hover), vivid document text ≥ 4.5:1 on bg and both gradient ends, editor gradient visible but gentle (≥ 1.12:1 on dark bases); selection tint visible on a dense grid; the text-slider tracks paint with the generator; boot and live switching never leave an empty palette |
 | `test/theme_e2e.test.js` | Boots the REAL app (web mode) once with the OS in light mode and once in dark: every built-in palette and six custom ones are measured on screen (html.dark matches the actual background, body/footnote/editor-code contrast, visible selection, background-image overlay tinted with the palette's own `--bg`, click flashes yellow in built-ins and the highlight color in custom themes, one text color everywhere in a custom theme — the document on `--doc-text`, menus on `--text`, separate only with Vivid text — and the solid editor background equals `--bg`), identical under both OS settings; in-app PDF print stays dark-on-white under every palette, Vivid text included; plus the custom theme dialog through the real menu: the text sliders apply the generator's color without moving the background and the background sliders leave the text alone, Vivid text changes only the document text, live preview, Escape/outside click/Cancel restore, Save stores the base + custom values, Reset, the Background opacity override stays independent |
-| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `safe_entry_inside` (links as links, symlinked root), `rename_entry_blocking` (no overwrite, dangling link kept, relative link refused, into-itself/bad names), `case_only_alias_in_listing`, `classify_rename_error` (pins errno 17 = EEXIST on Unix), `check_entry_name` (same table as the renderer), `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `is_cross_device_err`, zip export roundtrip/symlink-skip/self-exclusion |
+| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `safe_entry_inside` (links as links, symlinked root), `rename_entry_blocking` (no overwrite, dangling link kept, relative link refused, into-itself/bad names), `case_only_alias_in_listing`, `classify_rename_error` (pins errno 17 = EEXIST on Unix), `check_entry_name` (same table as the renderer), `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `retry_rename_on_lock` (a brief Windows lock is retried, a lasting one ends as a failure, nothing retried off Windows), zip export roundtrip/symlink-skip/self-exclusion |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side
 atomic-write strategy — both `fs:write-file` and `dialog:save-file` call
@@ -1378,10 +1415,15 @@ hit that.
    in electron/main.js and `tauri-plugin-single-instance` in the Tauri
    builder; a second launch exits and focuses the existing window.
 
-4. **Windows atomic rename** — ✅ RESOLVED: `atomicWriteFile` in
-   electron/fs_core.js (and `atomic_write_file` in tauri/src/main.rs) fall
-   back on EXDEV/EBUSY to a copy with a `.revery_bak` snapshot that is only
-   deleted after the copy verifiably succeeded; covered by unit tests.
+4. **Windows atomic rename** — ✅ RESOLVED (revised 2026-09-27): a rename
+   blocked by another program is retried and then FAILS with the old file
+   intact (see Atomic Writes). The earlier "resolution" answered EBUSY /
+   sharing violation with an in-place copy — the lock Windows reports when
+   antivirus scans the fresh temp file — which a crash could leave
+   half-written. Only real cross-device errors still copy (with the
+   `.revery_bak` snapshot). A program that holds a note open for long
+   without FILE_SHARE_DELETE therefore blocks saving it until it lets go
+   (the save failure is shown; autosave pauses 30 s).
 
 5. **Tauri v1 compatibility**: The Rust code targets Tauri v2. For v1,
    replace `app.path().app_config_dir()` with `app.path_resolver().app_config_dir()`,

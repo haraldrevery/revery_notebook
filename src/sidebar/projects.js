@@ -1,8 +1,7 @@
 /* projects.js — recent-projects history, switcher dropdown, manage modal. */
-import { S, btnProjectsBtn, docTitleEl } from './state.js';
+import { S, btnProjectsBtn } from './state.js';
 import { showInputDialog } from './dialogs.js';
-import { saveActiveFile, markClean, waitForTitleRename } from './save.js';
-import { openFolder, promptOpenFolder } from './fileops.js';
+import { switchProject, promptOpenFolder } from './fileops.js';
 import { icon } from './icons.js';
 
   /* ══════════════════════════════════════════════════════════════════
@@ -100,33 +99,8 @@ async function saveProjects(arr) {
        item.addEventListener('click', async () => {
           menu.remove();
           if (isActive) return; // Already the current project
-
-          /* A title rename still running finishes first (see fileops openFile). */
-          await waitForTitleRename();
-
-          /* Save any unsaved work in the current file */
-          if (S.isDirty && S.activeFilePath) {
-            const saved = await saveActiveFile();
-            if (!saved) return; // FIX: Abort the switch to prevent data loss
-          }
-
-          /* Clear the editor BEFORE setting the new root to prevent path-escape races */
-          S.activeFilePath = null;
-          // Prevent a stale file on next boot. Non-fatal: the old note must
-          // leave the editor even if this settings write fails.
-          await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
-          markClean();
-          if (typeof window.replaceEditorContent === 'function') {
-            window.replaceEditorContent('');
-          } else {
-            editor.value = '';
-            if (typeof render === 'function') render();
-          }
-          if (typeof countWords === 'function') countWords();
-          if (docTitleEl) docTitleEl.value = '';
-
-          /* Switch to the chosen project */
-          await openFolder(proj.path);
+          /* Saves the open note first; a failed save keeps this project. */
+          await switchProject(proj.path);
         });
 
         menu.appendChild(item);

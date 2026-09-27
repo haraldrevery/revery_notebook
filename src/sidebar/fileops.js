@@ -7,7 +7,7 @@ import { getFileCategory, mediaMarkdown, uniquePath, uniqueDestPath } from './he
 import { saveActiveFile, markClean, scheduleAutoSave, cancelPendingAutoSave,
          retargetActiveFile, waitForSaveChainIdle, rememberDiskContent,
          _enqueueDiskOp, markActivePathGone, forgetGonePath,
-         waitForTitleRename } from './save.js';
+         replaceOpenDocument, SWITCH_CANCELLED } from './save.js';
 import { renderTree, updateMultiSelectHighlight, updateSelectedDirHighlight, highlightActiveFile } from './tree.js';
 import { openSidebar, switchFromMobileSidebar } from './panel.js';
 import { startWatchingFile, stopWatchingFile, watchedPath } from './watcher.js';
@@ -125,9 +125,11 @@ import { decodeImportedText } from './import_text.js';
   async function closeDeletedActiveFile() {
     markActivePathGone(S.activeFilePath);
     cancelPendingAutoSave();
+    /* One synchronous block: with no note open, an edit arriving before the
+       buffer is cleared would start a NEW note holding the deleted one's
+       text (the scratchpad). */
     S.activeFilePath = null;
     markClean();
-    await window.NativeAPI.clearLastOpenedFile().catch(() => {});
     if (typeof window.replaceEditorContent === 'function') {
       window.replaceEditorContent('');
     } else {
@@ -135,6 +137,7 @@ import { decodeImportedText } from './import_text.js';
       if (typeof render     === 'function') render();
       if (typeof countWords === 'function') countWords();
     }
+    await window.NativeAPI.clearLastOpenedFile().catch(() => {});
   }
 
   /* Items of which another item in the list is an ancestor travel with
@@ -759,48 +762,44 @@ import { decodeImportedText } from './import_text.js';
   ══════════════════════════════════════════════════════════════════ */
 
   async function openMediaFile(filePath) {
-    await waitForTitleRename(); // see openFile
-    /* Save any dirty text file before switching away */
-    if (S.isDirty && S.activeFilePath) {
-      const saved = await saveActiveFile();
-      if (!saved) return;
-    }
+    /* The open note is saved first (save.replaceOpenDocument). */
+    const switched = await replaceOpenDocument(null, () => {
+      S.activeFilePath               = null;
+      window._showingUnsupportedFile = false;
+      S.previewMediaPath             = filePath;
 
-    S.activeFilePath               = null;
-    window._showingUnsupportedFile = false;
-    S.previewMediaPath             = filePath;
+      /* Relative to pendingNoteDir(), i.e. the image's own folder — where
+         the note this preview may become will be created. */
+      const mdText = mediaMarkdown(filePath);
 
-    /* Relative to pendingNoteDir(), i.e. the image's own folder — where
-       the note this preview may become will be created. */
-    const mdText = mediaMarkdown(filePath);
+      /* Use replaceEditorContent (via setState) rather than performTextChange
+         (via dispatch) so that:
+           1. The CM history is wiped — Ctrl+Z won't undo back into whatever
+              file was open before.
+           2. The updateListener is NOT fired, so _inputListeners are skipped
+              and the scratchpad auto-create doesn't trigger on our own
+              programmatic content change.                                   */
+      if (typeof window.replaceEditorContent === 'function') {
+        window.replaceEditorContent(mdText);
+      } else {
+        editor.value = mdText;
+        if (typeof render === 'function') render();
+      }
 
-    /* Use replaceEditorContent (via setState) rather than performTextChange
-       (via dispatch) so that:
-         1. The CM history is wiped — Ctrl+Z won't undo back into whatever
-            file was open before.
-         2. The updateListener is NOT fired, so _inputListeners are skipped
-            and the scratchpad auto-create doesn't trigger on our own
-            programmatic content change.                                   */
-    if (typeof window.replaceEditorContent === 'function') {
-      window.replaceEditorContent(mdText);
-    } else {
-      editor.value = mdText;
-      if (typeof render === 'function') render();
-    }
+      /* Update doc-title */
+      if (docTitleEl) {
+        const base = filePath.replace(/\\/g, '/').split('/').pop().replace(/\.[^/.]+$/, '');
+        docTitleEl.value = base;
+      }
 
-    /* Update doc-title */
-    if (docTitleEl) {
-      const base = filePath.replace(/\\/g, '/').split('/').pop().replace(/\.[^/.]+$/, '');
-      docTitleEl.value = base;
-    }
+      /* Highlight the media item in the tree */
+      treeEl.querySelectorAll('.sidebar-media-active').forEach(el => el.classList.remove('sidebar-media-active'));
+      const mediaEl = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(filePath)}"]`);
+      if (mediaEl) mediaEl.classList.add('sidebar-media-active');
 
-    /* Highlight the media item in the tree */
-    treeEl.querySelectorAll('.sidebar-media-active').forEach(el => el.classList.remove('sidebar-media-active'));
-    const mediaEl = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(filePath)}"]`);
-    if (mediaEl) mediaEl.classList.add('sidebar-media-active');
-
-    markClean();
-    switchFromMobileSidebar();
+      markClean();
+    });
+    if (switched) switchFromMobileSidebar();
   }
 
 
@@ -809,37 +808,34 @@ import { decodeImportedText } from './import_text.js';
   ══════════════════════════════════════════════════════════════════ */
 
   async function openUnsupportedFile(filePath) {
-    await waitForTitleRename(); // see openFile
-    if (S.isDirty && S.activeFilePath) {
-      const saved = await saveActiveFile();
-      if (!saved) return;
-    }
+    /* The open note is saved first (save.replaceOpenDocument). */
+    const switched = await replaceOpenDocument(null, () => {
+      S.activeFilePath               = null;
+      S.previewMediaPath             = null;
+      window._showingUnsupportedFile = true;
 
-    S.activeFilePath               = null;
-    S.previewMediaPath             = null;
-    window._showingUnsupportedFile = true;
-    switchFromMobileSidebar();
+      /* Clear editor with a fresh history. replaceEditorContent uses setState,
+         which does NOT fire updateListener, so no input side-effects occur.  */
+      if (typeof window.replaceEditorContent === 'function') {
+        window.replaceEditorContent('');
+      } else {
+        editor.value = '';
+      }
 
-    /* Clear editor with a fresh history. replaceEditorContent uses setState,
-       which does NOT fire updateListener, so no input side-effects occur.  */
-    if (typeof window.replaceEditorContent === 'function') {
-      window.replaceEditorContent('');
-    } else {
-      editor.value = '';
-    }
+      if (docTitleEl) {
+        docTitleEl.value = filePath.replace(/\\/g, '/').split('/').pop();
+      }
 
-    if (docTitleEl) {
-      docTitleEl.value = filePath.replace(/\\/g, '/').split('/').pop();
-    }
-
-    /* replaceEditorContent already called render() and countWords() with
-       _showingUnsupportedFile=true, so the unsupported-file message is shown.
-       Only call them again if we fell back to the else branch above.     */
-    if (typeof window.replaceEditorContent !== 'function') {
-      if (typeof render === 'function') render();
-      if (typeof countWords === 'function') countWords();
-    }
-    markClean();
+      /* replaceEditorContent already called render() and countWords() with
+         _showingUnsupportedFile=true, so the unsupported-file message is shown.
+         Only call them again if we fell back to the else branch above.     */
+      if (typeof window.replaceEditorContent !== 'function') {
+        if (typeof render === 'function') render();
+        if (typeof countWords === 'function') countWords();
+      }
+      markClean();
+    });
+    if (switched) switchFromMobileSidebar();
   }
 
 
@@ -848,66 +844,62 @@ import { decodeImportedText } from './import_text.js';
   ══════════════════════════════════════════════════════════════════ */
 
   async function openFile(filePath) {
-    /* A title rename still running (the title field lost focus to this
-       very click) finishes first: it moves the open note to its new name,
-       and must not do that after this function has put another note in
-       the editor — autosave then wrote that note into the renamed file. */
-    await waitForTitleRename();
+    /* save.replaceOpenDocument first lets a title rename still running
+       finish (the title field lost focus to this very click — it must not
+       retarget the note after another one is in the editor), then saves
+       the open note. */
+    const switched = await replaceOpenDocument(async () => {
+      /* The open note's identity is the spelling the folder listings use
+         (parent folder resolved, own name untouched): every "is this the
+         open note?" check of the file operations compares against it. */
+      let path = filePath;
+      try {
+        const c = await window.NativeAPI.canonicalEntryPath(path);
+        if (typeof c === 'string' && c) path = c;
+      } catch (_) { /* keep as given — the read below reports real problems */ }
 
-    /* Clear any special viewing modes */
-    S.previewMediaPath             = null;
-    window._showingUnsupportedFile = false;
+      try {
+        return { path, content: await window.NativeAPI.readFile(path) };
+      } catch (err) {
+        await window.NativeAPI.showMessageBox({
+          type: 'error', title: window.t('Open Failed'),
+          message: window.t('Could not read:') + '\n' + path,
+          detail: String(err)
+        });
+        return SWITCH_CANCELLED;
+      }
+    }, ({ path, content }) => {
+      filePath = path;
+      /* Clear any special viewing modes */
+      S.previewMediaPath             = null;
+      window._showingUnsupportedFile = false;
 
-    /* Auto-save current file first — no modal, no friction */
-    if (S.isDirty && S.activeFilePath) {
-      const saved = await saveActiveFile();
-      if (!saved) return; /* save failed; don't abandon current file */
-    }
+      /* Load into editor with a fresh history so Ctrl+Z in this file
+         can never undo back to content from any previously opened file. */
+      if (typeof window.replaceEditorContent === 'function') {
+        window.replaceEditorContent(content);
+      } else {
+        editor.value = content;
+        if (typeof render     === 'function') render();
+        if (typeof countWords === 'function') countWords();
+      }
 
-    /* The open note's identity is the spelling the folder listings use
-       (parent folder resolved, own name untouched): every "is this the
-       open note?" check of the file operations compares against it. */
-    try {
-      const c = await window.NativeAPI.canonicalEntryPath(filePath);
-      if (typeof c === 'string' && c) filePath = c;
-    } catch (_) { /* keep as given — the read below reports real problems */ }
+      S.activeFilePath = path;
+      forgetGonePath(path);
+      markClean();
+      rememberDiskContent(content);
 
-    let content;
-    try {
-      content = await window.NativeAPI.readFile(filePath);
-    } catch (err) {
-      await window.NativeAPI.showMessageBox({
-        type: 'error', title: window.t('Open Failed'),
-        message: window.t('Could not read:') + '\n' + filePath,
-        detail: String(err)
-      });
-      return;
-    }
+      /* The title belongs to the document on screen from the same moment. */
+      if (docTitleEl) {
+        docTitleEl.value = baseNameOf(path).replace(/\.(md|txt)$/, '');
+      }
+    });
+    if (!switched) return;
 
-    /* Load into editor with a fresh history so Ctrl+Z in this file
-       can never undo back to content from any previously opened file. */
-    if (typeof window.replaceEditorContent === 'function') {
-      window.replaceEditorContent(content);
-    } else {
-      editor.value = content;
-      if (typeof render     === 'function') render();
-      if (typeof countWords === 'function') countWords();
-    }
-
-    S.activeFilePath = filePath;
-    forgetGonePath(filePath);
-    markClean();
-    rememberDiskContent(content);
     /* Non-fatal, like every other pointer update: a failing settings write
        (a full disk now reports it) must not stop the switch half way — the
-       title, the watcher and the highlight below belong to this note. */
+       watcher and the highlight below belong to this note. */
     await window.NativeAPI.setLastOpenedFile(filePath).catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
-
-    /* Update doc-title */
-    if (docTitleEl) {
-      const base = filePath.replace(/\\/g, '/').split('/').pop();
-      docTitleEl.value = base.replace(/\.(md|txt)$/, '');
-    }
 
     /* Re-run image fixup now that S.activeFilePath is current.
       render() fired above (via replaceEditorContent) before this assignment,
@@ -1184,36 +1176,40 @@ async function openFolder(folderPath) {
   }
 
 
-async function promptOpenFolder() {
-      await waitForTitleRename(); // see openFile
+/* Leave the current project: the editor is emptied and no note is open.
+   The apply step of save.replaceOpenDocument (synchronous), for both
+   project switches (this dialog, the recent-projects menu). */
+function clearEditorForProjectSwitch() {
+  S.activeFilePath               = null;
+  S.previewMediaPath             = null;
+  window._showingUnsupportedFile = false;
+  markClean();
+  if (typeof window.replaceEditorContent === 'function') {
+    window.replaceEditorContent('');
+  } else {
+    editor.value = '';
+    if (typeof render === 'function') render();
+  }
+  if (typeof countWords === 'function') countWords();
+  if (docTitleEl) docTitleEl.value = '';
+}
 
-      /* Auto-save current file before switching folders */
-      if (S.isDirty && S.activeFilePath) {
-        const saved = await saveActiveFile();
-        if (!saved) return; // FIX: Abort to prevent data loss
-      }
+/* Switch to another project folder once the open note is saved. The
+   backend makes `path` the root only here (openFolder → setRootPath): the
+   picker merely authorizes it, so the old note can still be saved after
+   the picker closed. */
+async function switchProject(path) {
+  if (!(await replaceOpenDocument(null, clearEditorForProjectSwitch))) return;
+  // Non-fatal: the old note has left the editor even if this fails.
+  await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
+  await openFolder(path);
+}
+
+async function promptOpenFolder() {
     try {
       const path = await window.NativeAPI.openFolderDialog();
       if (!path) return;
-
-      /* Clear the editor BEFORE setting the new root to prevent path-escape races */
-      S.activeFilePath   = null;
-      S.previewMediaPath = null;
-      // Non-fatal: the old note must leave the editor even if this fails.
-      await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
-      markClean();
-      if (typeof window.replaceEditorContent === 'function') {
-        window.replaceEditorContent('');
-      } else {
-        editor.value = '';
-        if (typeof render === 'function') render();
-      }
-      if (typeof countWords === 'function') countWords();
-      if (docTitleEl) docTitleEl.value = '';
-
-      /* Switch to the chosen project */
-      await openFolder(path);
-
+      await switchProject(path);
     } catch (err) {
       console.error('[Sidebar] openFolderDialog failed:', err);
     }
@@ -1223,7 +1219,7 @@ export { pushUndo, hasUndoOperations, undoLastOperation, clearUndoStack, moveNod
          moveItemsTo, moveItemsUp, moveUpTarget, renameSelectedNodes,
          deleteSelectedNodes, openMediaFile, openUnsupportedFile, openFile,
          createNewFile, createNewFolder, renameNode, deleteNode, itemInfo,
-         showNameProblem, openFolder, promptOpenFolder };
+         showNameProblem, openFolder, promptOpenFolder, switchProject };
 
 export function initFileOps() {
   if (btnOpenFolder) btnOpenFolder.addEventListener('click', promptOpenFolder);

@@ -161,19 +161,33 @@ function insertAtTarget(target, links) {
 
 /** Media pasted on the EDITOR: replace [from, to) with the links. */
 export function ingestMediaAt(sources, from, to = from) {
-  return ingestMedia(sources, (links) => window.insertWithUndo(from, to, links + '\n')); // cursor lands after the links
+  return ingestMedia(sources, { from, to, paragraph: false });
 }
 
 /** Media dropped on the EDITOR at a dropTargetAt() target. */
 export function ingestMediaAtDrop(sources, target) {
-  return ingestMedia(sources, (links) => insertAtTarget(target, links));
+  return ingestMedia(sources, { from: target.pos, to: target.pos, paragraph: target.paragraph });
 }
 
-/* Copy into the folder the link will live in, then hand one
-   `![name](relative)` line per file to `insert`. Non-media sources are
-   ignored here by design — the editor takes images; other files are
-   copied by dropping them on the file panel. */
-function ingestMedia(sources, insert) {
+/* The note the media was dropped or pasted on was replaced while the files
+   were copied (another note opened, a reload from disk): its links are not
+   put into whatever is on screen now. The files are in the project. */
+function tellLinksNotInserted(finals) {
+  if (typeof window.showStatusWarning !== 'function') return;
+  window.showStatusWarning('media-link-skipped',
+    window.t('Added {names} to the project. The note it was dropped on is no longer open, so no link was inserted.')
+      .replace('{names}', finals.map(baseNameOf).join(', ')),
+    { priority: 30, ttl: 8000 });
+}
+
+/* Copy into the folder the link will live in, then insert one
+   `![name](relative)` line per file `where` the drop or paste aimed —
+   { from, to, paragraph } in the document of that moment, held by an
+   editor anchor across the copy (anchorEditorRange, cm_setup.js): the
+   copy can take seconds, and the note can be edited or replaced meanwhile.
+   Non-media sources are ignored here by design — the editor takes images;
+   other files are copied by dropping them on the file panel. */
+function ingestMedia(sources, where) {
   const media = sources.filter(isMediaSource);
   if (!media.length) {
     if (sources.length) explainNonMediaDrop(); // same answer on every transport
@@ -189,13 +203,22 @@ function ingestMedia(sources, insert) {
     return Promise.resolve(false);
   }
   return withOperationLock(async () => {
-    const { finals, errors } = await copySources(media, dir);
-    if (finals.length) {
-      insert(finals.map((p) => mediaMarkdown(p, dir)).join('\n'));
-      expandedDirs.add(dir);
-      await renderTree();
+    const anchor = window.anchorEditorRange(where.from, where.to);
+    try {
+      const { finals, errors } = await copySources(media, dir);
+      if (finals.length) {
+        const links = finals.map((p) => mediaMarkdown(p, dir)).join('\n');
+        const at = anchor.take();
+        if (!at) tellLinksNotInserted(finals);
+        else if (where.paragraph) insertAtTarget({ pos: at.from, paragraph: true }, links);
+        else window.insertWithUndo(at.from, at.to, links + '\n'); // cursor lands after the links
+        expandedDirs.add(dir);
+        await renderTree();
+      }
+      reportCopyIssues(errors, '{n} file(s) could not be added:');
+    } finally {
+      anchor.release();
     }
-    reportCopyIssues(errors, '{n} file(s) could not be added:');
   });
 }
 

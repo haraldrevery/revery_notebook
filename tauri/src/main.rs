@@ -562,10 +562,14 @@ fn is_allowed_navigation(url: &tauri::Url) -> bool {
 
 /// keep async
 /// Prompt the user to select a folder.  Returns the chosen path or null.
+/// The folder is AUTHORIZED (trusted root) but not yet the project root:
+/// the renderer first saves the note that is open in the current project,
+/// then switches with set_root_path. Switching here made that save fail
+/// ("escapes project root") for edits that arrived while the dialog was
+/// open. Mirrors dialog:open-folder (Electron).
 #[tauri::command]
 async fn open_folder_dialog(
     app: AppHandle,
-    root_state: State<'_, RootPath>,
     lock: State<'_, SettingsLock>,
 ) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -609,8 +613,6 @@ async fn open_folder_dialog(
                 true
             });
         }
-
-        *root_state.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.clone());
     }
     Ok(chosen)
 }
@@ -1100,14 +1102,42 @@ fn keep_permissions_of(dest: &Path, f: &fs::File) {
     }
 }
 
+/// Run `rename` again while it fails with a transient Windows lock, waiting
+/// LOCK_RETRY_DELAYS_MS in between; the last error is returned for the
+/// caller to classify. A rename happens completely or not at all, so a
+/// retry can never leave a partial state. `sleep` exists for the tests.
+fn retry_rename_on_lock(
+    mut rename: impl FnMut() -> std::io::Result<()>,
+    windows: bool,
+    mut sleep: impl FnMut(u64),
+) -> std::io::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match rename() {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < LOCK_RETRY_DELAYS_MS.len()
+                && classify_rename_error(e.raw_os_error(), windows) == RenameErrorKind::TransientLock =>
+            {
+                sleep(LOCK_RETRY_DELAYS_MS[attempt]);
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Atomically write a text file.
 // ── Atomic write helper ───────────────────────────────────────────────────
 //
 // Writes `content` to `dest` atomically by:
 //   1. Writing to a sibling temp file `tmp` (same directory → same filesystem).
-//   2. Renaming `tmp` → `dest` (atomic on all local FSes).
-//   3. On EXDEV (cross-device rename, e.g. network share or FUSE mount),
-//      falling back to: copy `tmp` → `dest`, then delete `tmp`.
+//   2. Renaming `tmp` → `dest` (atomic on all local FSes). A transient
+//      Windows lock (antivirus scanning the temp file, a sync client) is
+//      retried; one that does not let go FAILS the write, old file intact.
+//      It used to be answered with an in-place copy (ERROR_SHARING_VIOLATION
+//      counted as "cross-device"), which a crash could leave half-written.
+//   3. Only on a real cross-device error (classify_rename_error), falling
+//      back to: copy `tmp` → `dest`, then delete `tmp`.
 //
 // SAFETY: On fallback copy failure, we clean up `tmp` but NEVER delete `dest`.
 // If `dest` was an existing file, deleting it on a failed overwrite would
@@ -1128,19 +1158,34 @@ fn atomic_write_file(tmp: &Path, dest: &Path, content: &[u8]) -> Result<(), Stri
     }
 
 // Step 2: Try atomic rename.
-    match fs::rename(tmp, dest) {
-        Ok(_) => {
+    let renamed = retry_rename_on_lock(
+        || fs::rename(tmp, dest),
+        cfg!(windows),
+        |ms| std::thread::sleep(std::time::Duration::from_millis(ms)),
+    );
+    match renamed {
+        Ok(()) => {
             // Persist the directory entry change. See sync_parent_dir().
             sync_parent_dir(dest);
             return Ok(());
         }
-        Err(ref e) if is_cross_device_err(e) => {
-            // Fall through to copy fallback.
-        }
-        Err(e) => {
-            let _ = fs::remove_file(tmp);
-            return Err(format!("Rename failed: {e}"));
-        }
+        Err(e) => match classify_rename_error(e.raw_os_error(), cfg!(windows)) {
+            RenameErrorKind::CrossDevice => {
+                // Fall through to copy fallback.
+            }
+            RenameErrorKind::TransientLock => {
+                let _ = fs::remove_file(tmp);
+                let name = dest.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                return Err(format!(
+                    "\"{name}\" could not be replaced: another program is using it, or it \
+                     is read-only ({e}). The file on disk was not changed."
+                ));
+            }
+            RenameErrorKind::Other => {
+                let _ = fs::remove_file(tmp);
+                return Err(format!("Rename failed: {e}"));
+            }
+        },
     }
 
     // Step 3 (EXDEV fallback): backup → overwrite → clean up.
@@ -1232,19 +1277,6 @@ fn sync_parent_dir(file_path: &Path) {
     }
 }
 
-/// Returns true when the OS error indicates a cross-device rename (EXDEV).
-/// errno 18 on Unix; 17 is a rare alias included for safety.
-#[inline]
-fn is_cross_device_err(e: &std::io::Error) -> bool {
-    // 18 = EXDEV on Unix.  17 = ERROR_NOT_SAME_DEVICE on Windows.
-    // (17 is also EEXIST on Linux, but fs::rename overwrites there
-    //  so it cannot return EEXIST in this path.)
-    // 32 = ERROR_SHARING_VIOLATION on Windows (antivirus / sync agent
-    //      briefly holding a lock on the destination file). Safe to
-    //      fall back to a copy in atomic_write_file because tmp and dest
-    //      are always on the same filesystem.
-    matches!(e.raw_os_error(), Some(18) | Some(17) | Some(32))
-}
 /// Atomically write a text file.
 #[tauri::command]
  async fn write_file(path: String, content: String, root_state: State<'_, RootPath>) -> Result<(), String> {
@@ -1497,6 +1529,11 @@ fn classify_rename_error(raw: Option<i32>, windows: bool) -> RenameErrorKind {
     }
 }
 
+/// Waits between attempts when a rename meets a TransientLock — the ONE
+/// policy for every rename (atomic_write_file, rename_entry_blocking).
+/// MIRROR of LOCK_RETRY_DELAYS_MS in electron/fs_core.js.
+const LOCK_RETRY_DELAYS_MS: [u64; 3] = [100, 200, 400];
+
 /// Rename or move one entry inside the project. Never overwrites, never
 /// copies, never deletes (mirror of fs_core.renameEntry):
 ///   • both paths are ENTRIES: a link moves as a link, its target untouched;
@@ -1537,7 +1574,7 @@ fn rename_entry_blocking(old_path: &str, new_path: &str, root: &Path) -> Result<
         ));
     }
 
-    let mut attempt: u32 = 0;
+    let mut attempt = 0;
     loop {
         match fs::rename(&old, &target) {
             Ok(()) => return Ok(()),
@@ -1547,8 +1584,8 @@ fn rename_entry_blocking(old_path: &str, new_path: &str, root: &Path) -> Result<
                         "\"{shown}\" cannot be moved to another drive or volume from Revery (nothing was changed). Use your file manager for that move."
                     ));
                 }
-                RenameErrorKind::TransientLock if attempt < 3 => {
-                    std::thread::sleep(std::time::Duration::from_millis(100u64 << attempt));
+                RenameErrorKind::TransientLock if attempt < LOCK_RETRY_DELAYS_MS.len() => {
+                    std::thread::sleep(std::time::Duration::from_millis(LOCK_RETRY_DELAYS_MS[attempt]));
                     attempt += 1;
                     if !lexists(&old) {
                         return Err(format!("Source not found: {}", old.display()));
@@ -3631,12 +3668,40 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    /* ── is_cross_device_err ───────────────────────────────────────── */
+    /* ── retry_rename_on_lock (atomic_write_file's publish step) ───── */
+
+    fn failing(raws: Vec<i32>) -> impl FnMut() -> std::io::Result<()> {
+        let mut left = raws.into_iter();
+        move || match left.next() {
+            Some(raw) => Err(std::io::Error::from_raw_os_error(raw)),
+            None => Ok(()),
+        }
+    }
 
     #[test]
-    fn cross_device_detection() {
-        assert!(is_cross_device_err(&std::io::Error::from_raw_os_error(18))); // EXDEV
-        assert!(!is_cross_device_err(&std::io::Error::from_raw_os_error(13))); // EACCES
+    fn a_brief_windows_lock_is_retried_until_the_rename_happens() {
+        let mut waits = Vec::new();
+        let r = retry_rename_on_lock(failing(vec![32, 5]), true, |ms| waits.push(ms));
+        assert!(r.is_ok());
+        assert_eq!(waits, vec![100, 200]);
+    }
+
+    #[test]
+    fn a_lock_that_does_not_let_go_ends_as_a_transient_lock_error() {
+        let mut waits = Vec::new();
+        let err = retry_rename_on_lock(failing(vec![32; 9]), true, |ms| waits.push(ms)).unwrap_err();
+        assert_eq!(waits, LOCK_RETRY_DELAYS_MS.to_vec());
+        // ...which atomic_write_file reports as a failure — never a copy.
+        assert_eq!(classify_rename_error(err.raw_os_error(), true), RenameErrorKind::TransientLock);
+    }
+
+    #[test]
+    fn no_retry_off_windows_or_for_other_errors() {
+        let mut waits = Vec::new();
+        assert!(retry_rename_on_lock(failing(vec![32]), false, |ms| waits.push(ms)).is_err());
+        assert!(retry_rename_on_lock(failing(vec![18]), false, |ms| waits.push(ms)).is_err());
+        assert!(retry_rename_on_lock(failing(vec![17]), true, |ms| waits.push(ms)).is_err());
+        assert!(waits.is_empty());
     }
 
     /* ── is_allowed_navigation ─────────────────────────────────────── */
@@ -3892,6 +3957,11 @@ mod tests {
         let (base, root) = entry_fixture("rt-clash");
         fs::write(root.join("Note.md"), "one").unwrap();
         fs::write(root.join("note.md"), "two").unwrap();
+        if fs::read_to_string(root.join("Note.md")).unwrap() == "two" {
+            // Case-insensitive filesystem (Windows, macOS): one file, not two.
+            fs::remove_dir_all(&base).ok();
+            return;
+        }
         let err = rename_entry_blocking(&s(&root.join("Note.md")), &s(&root.join("note.md")), &root);
         assert!(err.is_err());
         assert_eq!(fs::read_to_string(root.join("note.md")).unwrap(), "two");

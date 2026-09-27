@@ -4,6 +4,8 @@
    FACTS; test/save_race_e2e.test.js holds the assertions. */
 (async () => {
   const PROJECT = __PROJECT__;
+  /* A path inside the project in the project's own spelling (Windows: '\'). */
+  const inProject = (rel) => [PROJECT, ...String(rel).split('/')].join(PROJECT.includes('\\') ? '\\' : '/');
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const until = async (fn, ms = 8000) => {
     const t0 = Date.now();
@@ -18,10 +20,10 @@
   const rel = () => activeFile().replace(norm(PROJECT) + '/', '');
   const row = (p) => document.querySelector(`.sidebar-item[data-path="${CSS.escape(p)}"]`);
   const disk = async (name) => {
-    try { return await window.NativeAPI.readFile(PROJECT + '/' + name); } catch (_) { return null; }
+    try { return await window.NativeAPI.readFile(inProject(name)); } catch (_) { return null; }
   };
   const openViaTree = async (name) => {
-    const r = await until(() => row(PROJECT + '/' + name));
+    const r = await until(() => row(inProject(name)));
     if (!r) return false;
     r.click();
     return !!(await until(() => rel() === name));
@@ -50,7 +52,7 @@
         overwritten: the editor showed x.md, but autosave targeted the
         renamed file. */
   {
-    const xRow = await until(() => row(PROJECT + '/x.md'));
+    const xRow = await until(() => row(inProject('x.md')));
     title().value = 'Renamed';
     title().dispatchEvent(new Event('change'));
     xRow.click();
@@ -76,7 +78,7 @@
     const opened = await openViaTree('ext.md');
     await sleep(300);
     typeAtEnd('typed in Revery\n');
-    await window.NativeAPI.writeFile(PROJECT + '/ext.md', 'ext: EXTERNAL EDIT\n'); // "another program"
+    await window.NativeAPI.writeFile(inProject('ext.md'), 'ext: EXTERNAL EDIT\n'); // "another program"
     await sleep(100);
     const saved = await window.sidebarSaveActiveFile({ auto: true });            // the autosave timer
     const held = !!(await until(() => statusText().includes('Auto-save is paused'), 5000));
@@ -100,7 +102,7 @@
     const opened = await openViaTree('gone.md');
     await sleep(300);
     typeAtEnd('typed before the move\n');
-    await window.NativeAPI.renameNode(PROJECT + '/gone.md', PROJECT + '/gone-elsewhere.md'); // "another program"
+    await window.NativeAPI.renameNode(inProject('gone.md'), inProject('gone-elsewhere.md')); // "another program"
     const saved = await window.sidebarSaveActiveFile({ auto: true });
     await sleep(2500);
     const r = {
@@ -120,7 +122,7 @@
     const opened = await openViaTree('ctrls.md');
     await sleep(300);
     typeAtEnd('my edit\n');
-    await window.NativeAPI.writeFile(PROJECT + '/ctrls.md', 'ctrls: EXTERNAL\n'); // "another program"
+    await window.NativeAPI.writeFile(inProject('ctrls.md'), 'ctrls: EXTERNAL\n'); // "another program"
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true }));
     const held = !!(await until(() => statusText().includes('Auto-save is paused'), 5000));
     await sleep(500);
@@ -139,7 +141,7 @@
     const opened = await openViaTree('close.md');
     await sleep(300);
     typeAtEnd('edit before closing\n');
-    await window.NativeAPI.writeFile(PROJECT + '/close.md', 'close: EXTERNAL\n'); // "another program"
+    await window.NativeAPI.writeFile(inProject('close.md'), 'close: EXTERNAL\n'); // "another program"
     await window.sidebarHandleClose();                                            // the user closes
     const held = !!(await until(() => statusText().includes('Auto-save is paused'), 5000));
     await sleep(300);

@@ -711,6 +711,46 @@ export function waitForSaveChainIdle() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+     PUTTING ANOTHER DOCUMENT IN THE EDITOR
+   Every opener goes through here: a note, an image preview, an
+   unsupported file, another project. The open note is saved; `prepare`
+   (optional) does the opener's own waiting, e.g. reading the next note;
+   then `apply(prepared)` swaps the document. `apply` must be SYNCHRONOUS:
+   it runs right after the last check that the open note has no unsaved
+   edits, with no await in between, so nothing can edit the old document
+   between that check and the swap.
+   The openers used to save, await, then swap unconditionally: an edit
+   that landed in between (a dropped image's link arriving after its copy)
+   was replaced unseen — kept only in a crash backup that is never offered
+   for a note that is not the last one opened. Such an edit is now saved
+   and the switch prepared again. `prepare` returns SWITCH_CANCELLED to
+   stop (after telling the user why). Resolves true when `apply` ran.
+  ══════════════════════════════════════════════════════════════════ */
+export const SWITCH_CANCELLED = Symbol('switch-cancelled');
+const SWITCH_ATTEMPTS = 5;
+
+export async function replaceOpenDocument(prepare, apply) {
+  await waitForTitleRename(); // it would retarget the note after the swap
+  const unsaved = () => S.isDirty && !!S.activeFilePath;
+  for (let attempt = 0; attempt < SWITCH_ATTEMPTS; attempt++) {
+    if (unsaved() && !(await saveActiveFile())) return false; // failed: stay on the note
+    const prepared = prepare ? await prepare() : undefined;
+    if (prepared === SWITCH_CANCELLED) return false;
+    if (unsaved()) continue; // edited while saving or preparing: save that too
+    apply(prepared);
+    return true;
+  }
+  /* Still being edited after every round: stay on the open note. Nothing
+     is lost, and the next attempt switches. */
+  if (typeof window.showStatusWarning === 'function') {
+    window.showStatusWarning('switch-busy',
+      window.t('The open note is still being changed. Try again in a moment.'),
+      { priority: 20, ttl: 4000 });
+  }
+  return false;
+}
+
+/* ══════════════════════════════════════════════════════════════════
      RETARGET — the active file moved on disk (rename / move / undo)
    The ONE place that updates every piece of state tied to the active
    file's path. A path change does not change the content, so the dirty

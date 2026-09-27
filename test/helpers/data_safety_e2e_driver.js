@@ -7,6 +7,8 @@
    find_e2e_driver.js. */
 (async () => {
   const PROJECT = __PROJECT__;
+  /* A path inside the project in the project's own spelling (Windows: '\'). */
+  const inProject = (rel) => [PROJECT, ...String(rel).split('/')].join(PROJECT.includes('\\') ? '\\' : '/');
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const until = async (fn, ms = 8000) => {
     const t0 = Date.now();
@@ -20,12 +22,12 @@
   const activeFile = () => norm(window.sidebarGetActiveFilePath());
   const row = (p) => document.querySelector(`.sidebar-item[data-path="${CSS.escape(p)}"]`);
   const disk = async (rel) => {
-    try { return await window.NativeAPI.readFile(PROJECT + '/' + rel); } catch (_) { return null; }
+    try { return await window.NativeAPI.readFile(inProject(rel)); } catch (_) { return null; }
   };
   const listNames = async (rel) =>
-    (await window.NativeAPI.readDirectory(rel ? PROJECT + '/' + rel : PROJECT)).map((e) => e.name).sort();
+    (await window.NativeAPI.readDirectory(rel ? inProject(rel) : PROJECT)).map((e) => e.name).sort();
   const openViaTree = async (rel) => {
-    const p = PROJECT + '/' + rel;
+    const p = inProject(rel);
     const r = await until(() => row(p));
     if (!r) return false;
     r.click();
@@ -123,15 +125,15 @@
     const realCreate = window.NativeAPI.createFile;
     window.NativeAPI.createFile = async (p) => { await sleep(700); return realCreate.call(window.NativeAPI, p); };
     try {
-      const subRow = await until(() => row(PROJECT + '/sub'));
+      const subRow = await until(() => row(inProject('sub')));
       if (subRow && !subRow.classList.contains('expanded')) subRow.click();
-      const picRow = await until(() => row(PROJECT + '/sub/pic.png'));
+      const picRow = await until(() => row(inProject('sub/pic.png')));
       if (picRow) picRow.click();
       await until(() => window.sidebarGetActiveFilePath() === null && editor.value.includes('pic.png'));
       const len = editor.value.length;
       window.insertWithUndo(len, len, ' typed');
       const typed = editor.value;
-      row(PROJECT + '/other.md').click(); // no await: the create is still in flight
+      row(inProject('other.md')).click(); // no await: the create is still in flight
       await until(() => activeFile() === norm(PROJECT + '/other.md'), 4000);
       await sleep(2500);
       out.scratchRace = {
@@ -151,8 +153,8 @@
   /* 6. Sidebar Ctrl+Z undoes a move made in the tree (it used to throw a
         ReferenceError from a variable that only existed in another module). */
   {
-    const moveRow = await until(() => row(PROJECT + '/move.md'));
-    const subRow  = row(PROJECT + '/sub');
+    const moveRow = await until(() => row(inProject('move.md')));
+    const subRow  = row(inProject('sub'));
     const dt = new DataTransfer();
     moveRow.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
     subRow.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
@@ -168,7 +170,7 @@
 
   /* Sidebar helpers: context-menu Rename through the real HTML dialogs. */
   const renameViaSidebar = async (rel, newName) => {
-    const r = await until(() => row(PROJECT + '/' + rel));
+    const r = await until(() => row(inProject(rel)));
     if (!r) return false;
     r.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 60 }));
     const btn = await until(() => Array.from(document.querySelectorAll('#context-menu .menu-item'))
@@ -192,7 +194,7 @@
     await sleep(2600); // past every save and the watcher's own-write window
     const len = editor.value.length;
     window.insertWithUndo(len, len, 'my local words\n');            // dirty
-    await window.NativeAPI.writeFile(PROJECT + '/note.md', 'external version\n'); // "another program"
+    await window.NativeAPI.writeFile(inProject('note.md'), 'external version\n'); // "another program"
     const held = !!(await until(async () => window.sidebarIsDirty()
       && (await disk('note.md')) === 'external version\n', 5000));
     await sleep(800);
@@ -200,7 +202,7 @@
     const renamed = !!(await until(() => activeFile() === norm(PROJECT + '/renamed.md'), 4000));
     await sleep(2500); // well past the autosave debounce: nothing may be written
     let backup = null;
-    try { backup = await window.NativeAPI.getVolatileContent(PROJECT + '/renamed.md'); } catch (_) { /* null */ }
+    try { backup = await window.NativeAPI.getVolatileContent(inProject('renamed.md')); } catch (_) { /* null */ }
     const r = {
       held, started, renamed,
       dirty: window.sidebarIsDirty(),
@@ -250,7 +252,7 @@
     const want = 'line one\r\nline two\r\nline three\r\n';
     const saved = !!(await until(async () => (await disk('crlf.md')) === want, 5000));
     await sleep(300);
-    await window.NativeAPI.writeFile(PROJECT + '/crlf.md', want); // identical rewrite by "another program"
+    await window.NativeAPI.writeFile(inProject('crlf.md'), want); // identical rewrite by "another program"
     await sleep(1200);
     out.crlf = {
       opened, saved,
@@ -273,7 +275,7 @@
     window.insertWithUndo(len, len, 'typing here\n');
     const expected = editor.value;
     await until(async () => (await disk('other.md')) === expected, 5000); // our autosave landed
-    await window.NativeAPI.writeFile(PROJECT + '/other.md', 'synced from another device\n');
+    await window.NativeAPI.writeFile(inProject('other.md'), 'synced from another device\n');
     const asked = !!(await until(() => statusText().includes('Auto-save is paused'), 4000));
     const len2 = editor.value.length;
     window.insertWithUndo(len2, len2, 'more\n');
@@ -295,7 +297,7 @@
   {
     await openViaTree('target2.md');
     await sleep(300);
-    await window.NativeAPI.renameNode(PROJECT + '/target2.md', PROJECT + '/sub/moved-away.md'); // "another program"
+    await window.NativeAPI.renameNode(inProject('target2.md'), inProject('sub/moved-away.md')); // "another program"
     const told = !!(await until(() => statusText().includes('deleted or moved'), 4000));
     const len = editor.value.length;
     window.insertWithUndo(len, len, 'still typing\n');

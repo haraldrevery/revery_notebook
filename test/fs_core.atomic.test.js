@@ -188,7 +188,69 @@ describe('atomicWriteFile', () => {
       e.code = 'EPERM';
       throw e;
     };
-    assert.throws(() => atomicWriteFile(target, 'NEW'), /EPERM/);
+    assert.throws(() => atomicWriteFile(target, 'NEW', { platform: 'linux' }), /EPERM/);
+    fs.renameSync = realRenameSync;
+    assert.equal(fs.readFileSync(target, 'utf8'), 'OLD');
+    assert.deepEqual(siblings(dir, 'note.md'), []);
+  });
+
+  /* A rename blocked by another program (antivirus, sync client, indexer). */
+  function lockedFor(times, code) {
+    let calls = 0;
+    fs.renameSync = (src, dest) => {
+      if (++calls <= times) { const e = new Error(`${code}: locked`); e.code = code; throw e; }
+      return realRenameSync(src, dest);
+    };
+    return () => calls;
+  }
+  function noCopies() {
+    let copies = 0;
+    fs.copyFileSync = (...a) => { copies++; return realCopyFileSync(...a); };
+    return () => copies;
+  }
+
+  test('Windows: a briefly locked target is retried, then replaced atomically', () => {
+    fs.writeFileSync(target, 'OLD');
+    const calls = lockedFor(2, 'EBUSY');
+    const copies = noCopies();
+    const waits = [];
+    atomicWriteFile(target, 'NEW', { platform: 'win32', sleepSync: (ms) => waits.push(ms) });
+    assert.equal(fs.readFileSync(target, 'utf8'), 'NEW');
+    assert.equal(calls(), 3);
+    assert.deepEqual(waits, [100, 200]);
+    assert.equal(copies(), 0, 'a lock is never answered with an in-place copy');
+    assert.deepEqual(siblings(dir, 'note.md'), []);
+  });
+
+  test('Windows: a lock that does not let go fails cleanly — old file kept, no copy, no leftovers', () => {
+    fs.writeFileSync(target, 'OLD');
+    const calls = lockedFor(Infinity, 'EPERM');
+    const copies = noCopies();
+    const waits = [];
+    let err;
+    try {
+      atomicWriteFile(target, 'NEW', { platform: 'win32', sleepSync: (ms) => waits.push(ms) });
+    } catch (e) { err = e; }
+    fs.renameSync = realRenameSync;
+    assert.ok(err, 'the save must fail');
+    assert.equal(err.code, 'EPERM');
+    assert.match(err.message, /another program is using it.*not changed/);
+    assert.equal(calls(), 4);
+    assert.deepEqual(waits, [100, 200, 400]);
+    assert.equal(copies(), 0);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'OLD');
+    assert.deepEqual(siblings(dir, 'note.md'), []);
+  });
+
+  test('EBUSY is never answered with a copy, on any platform', () => {
+    fs.writeFileSync(target, 'OLD');
+    for (const platform of ['linux', 'darwin']) {
+      const calls = lockedFor(Infinity, 'EBUSY');
+      const copies = noCopies();
+      assert.throws(() => atomicWriteFile(target, 'NEW', { platform, sleepSync: () => assert.fail('no wait off Windows') }), /EBUSY/);
+      assert.equal(calls(), 1, platform);
+      assert.equal(copies(), 0, platform);
+    }
     fs.renameSync = realRenameSync;
     assert.equal(fs.readFileSync(target, 'utf8'), 'OLD');
     assert.deepEqual(siblings(dir, 'note.md'), []);

@@ -5,6 +5,8 @@
    reloads the page into user_ops_after_reset_driver.js. */
 (async () => {
   const PROJECT = __PROJECT__;
+  /* A path inside the project in the project's own spelling (Windows: '\'). */
+  const inProject = (rel) => [PROJECT, ...String(rel).split('/')].join(PROJECT.includes('\\') ? '\\' : '/');
   const READONLY_TESTABLE = __READONLY_TESTABLE__;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const until = async (fn, ms = 8000) => {
@@ -20,12 +22,12 @@
     const a = window.sidebarGetActiveFilePath();
     return a ? norm(a).replace(norm(PROJECT) + '/', '') : null;
   };
-  const row = (name) => document.querySelector(`.sidebar-item[data-path="${CSS.escape(PROJECT + '/' + name)}"]`);
+  const row = (name) => document.querySelector(`.sidebar-item[data-path="${CSS.escape(inProject(name))}"]`);
   const disk = async (name) => {
-    try { return await window.NativeAPI.readFile(PROJECT + '/' + name); } catch (_) { return null; }
+    try { return await window.NativeAPI.readFile(inProject(name)); } catch (_) { return null; }
   };
   const names = async (sub) =>
-    (await window.NativeAPI.readDirectory(sub ? PROJECT + '/' + sub : PROJECT)).map((e) => e.name).sort();
+    (await window.NativeAPI.readDirectory(sub ? inProject(sub) : PROJECT)).map((e) => e.name).sort();
   const openViaTree = async (name) => {
     const r = await until(() => row(name));
     if (!r) return false;
@@ -87,7 +89,7 @@
     const opened = await openViaTree('held.md');
     await sleep(300);
     typeAtEnd('my edit\n');
-    await window.NativeAPI.writeFile(PROJECT + '/held.md', 'held: EXTERNAL\n'); // "another program"
+    await window.NativeAPI.writeFile(inProject('held.md'), 'held: EXTERNAL\n'); // "another program"
     const held = !!(await until(() => statusText().includes('Auto-save is paused'), 5000));
     const started = await menu('held.md', 'Delete');
     const told = !!(await until(() => statusText().includes('Nothing was deleted'), 4000));
@@ -138,7 +140,7 @@
 
     let roFiles = null;
     if (READONLY_TESTABLE) {
-      const roRow = await until(() => document.querySelector(`.sidebar-item[data-path="${CSS.escape(PROJECT + '/ro')}"]`));
+      const roRow = await until(() => document.querySelector(`.sidebar-item[data-path="${CSS.escape(inProject('ro'))}"]`));
       if (roRow) roRow.click(); // the import goes into the selected folder
       await sleep(300);
       importQueue.push(new File(['plain text\n'], 'fail.md'));

@@ -63,8 +63,10 @@ const getSettingsFile = () => path.join(app.getPath('userData'), 'revery_setting
 const VOLATILE_DIR    = path.join(os.tmpdir(), 'revery-volatile');
 
 /* ── Active project root ──────────────────────────────────────────────────
-   Set only by the OS folder dialog or by the restore-from-settings path.
-   All FS handlers enforce that every path stays inside this root.         */
+   Set only by fs:set-root-path (a folder the user authorized through the
+   OS folder dialog or the default notes folder) and by a Save As that
+   opts into a new root. All FS handlers enforce that every path stays
+   inside this root.                                                      */
 let currentRootPath = null;
 
 function requireRoot() {
@@ -477,10 +479,11 @@ ipcMain.handle('dialog:open-folder', async () => {
     writeSettings({ trustedRoots });
   }
 
-  // Store the root — this is the only place a new root can be established
-  // from the OS side. The path came from a native dialog, not the renderer.
-  currentRootPath = chosenPath;
-  return currentRootPath;
+  // Authorized, but NOT yet the project root: the renderer first saves the
+  // note open in the current project, then switches with fs:set-root-path.
+  // Switching here made that save fail ("escapes project root") for edits
+  // that arrived while the dialog was open. Mirrors open_folder_dialog (Tauri).
+  return chosenPath;
 });
 
 /* ── Restore root from persisted settings ─────────────────────────────────

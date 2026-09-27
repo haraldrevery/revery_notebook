@@ -1471,23 +1471,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         item.addEventListener("click", async () => {
           menu.remove();
           if (isActive) return;
-          await waitForTitleRename();
-          if (S.isDirty && S.activeFilePath) {
-            const saved = await saveActiveFile();
-            if (!saved) return;
-          }
-          S.activeFilePath = null;
-          await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
-          markClean();
-          if (typeof window.replaceEditorContent === "function") {
-            window.replaceEditorContent("");
-          } else {
-            editor.value = "";
-            if (typeof render === "function") render();
-          }
-          if (typeof countWords === "function") countWords();
-          if (docTitleEl) docTitleEl.value = "";
-          await openFolder(proj.path);
+          await switchProject(proj.path);
         });
         menu.appendChild(item);
       });
@@ -2052,6 +2036,28 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }, () => {
     });
   }
+  var SWITCH_CANCELLED = Symbol("switch-cancelled");
+  var SWITCH_ATTEMPTS = 5;
+  async function replaceOpenDocument(prepare, apply) {
+    await waitForTitleRename();
+    const unsaved = () => S.isDirty && !!S.activeFilePath;
+    for (let attempt = 0; attempt < SWITCH_ATTEMPTS; attempt++) {
+      if (unsaved() && !await saveActiveFile()) return false;
+      const prepared = prepare ? await prepare() : void 0;
+      if (prepared === SWITCH_CANCELLED) return false;
+      if (unsaved()) continue;
+      apply(prepared);
+      return true;
+    }
+    if (typeof window.showStatusWarning === "function") {
+      window.showStatusWarning(
+        "switch-busy",
+        window.t("The open note is still being changed. Try again in a moment."),
+        { priority: 20, ttl: 4e3 }
+      );
+    }
+    return false;
+  }
   async function retargetActiveFile(oldPath, newPath) {
     if (!oldPath || !newPath) return false;
     markActivePathGone(oldPath);
@@ -2515,8 +2521,6 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     cancelPendingAutoSave();
     S.activeFilePath = null;
     markClean();
-    await window.NativeAPI.clearLastOpenedFile().catch(() => {
-    });
     if (typeof window.replaceEditorContent === "function") {
       window.replaceEditorContent("");
     } else {
@@ -2524,6 +2528,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (typeof render === "function") render();
       if (typeof countWords === "function") countWords();
     }
+    await window.NativeAPI.clearLastOpenedFile().catch(() => {
+    });
   }
   function withoutNested(items) {
     return items.filter((it) => !items.some((o) => o !== it && !samePath(o.path, it.path) && isInsideRoot(it.path, o.path)));
@@ -2987,96 +2993,89 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
   }
   async function openMediaFile(filePath) {
-    await waitForTitleRename();
-    if (S.isDirty && S.activeFilePath) {
-      const saved = await saveActiveFile();
-      if (!saved) return;
-    }
-    S.activeFilePath = null;
-    window._showingUnsupportedFile = false;
-    S.previewMediaPath = filePath;
-    const mdText = mediaMarkdown(filePath);
-    if (typeof window.replaceEditorContent === "function") {
-      window.replaceEditorContent(mdText);
-    } else {
-      editor.value = mdText;
-      if (typeof render === "function") render();
-    }
-    if (docTitleEl) {
-      const base = filePath.replace(/\\/g, "/").split("/").pop().replace(/\.[^/.]+$/, "");
-      docTitleEl.value = base;
-    }
-    treeEl.querySelectorAll(".sidebar-media-active").forEach((el) => el.classList.remove("sidebar-media-active"));
-    const mediaEl = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(filePath)}"]`);
-    if (mediaEl) mediaEl.classList.add("sidebar-media-active");
-    markClean();
-    switchFromMobileSidebar();
+    const switched = await replaceOpenDocument(null, () => {
+      S.activeFilePath = null;
+      window._showingUnsupportedFile = false;
+      S.previewMediaPath = filePath;
+      const mdText = mediaMarkdown(filePath);
+      if (typeof window.replaceEditorContent === "function") {
+        window.replaceEditorContent(mdText);
+      } else {
+        editor.value = mdText;
+        if (typeof render === "function") render();
+      }
+      if (docTitleEl) {
+        const base = filePath.replace(/\\/g, "/").split("/").pop().replace(/\.[^/.]+$/, "");
+        docTitleEl.value = base;
+      }
+      treeEl.querySelectorAll(".sidebar-media-active").forEach((el) => el.classList.remove("sidebar-media-active"));
+      const mediaEl = treeEl.querySelector(`.sidebar-item[data-path="${CSS.escape(filePath)}"]`);
+      if (mediaEl) mediaEl.classList.add("sidebar-media-active");
+      markClean();
+    });
+    if (switched) switchFromMobileSidebar();
   }
   async function openUnsupportedFile(filePath) {
-    await waitForTitleRename();
-    if (S.isDirty && S.activeFilePath) {
-      const saved = await saveActiveFile();
-      if (!saved) return;
-    }
-    S.activeFilePath = null;
-    S.previewMediaPath = null;
-    window._showingUnsupportedFile = true;
-    switchFromMobileSidebar();
-    if (typeof window.replaceEditorContent === "function") {
-      window.replaceEditorContent("");
-    } else {
-      editor.value = "";
-    }
-    if (docTitleEl) {
-      docTitleEl.value = filePath.replace(/\\/g, "/").split("/").pop();
-    }
-    if (typeof window.replaceEditorContent !== "function") {
-      if (typeof render === "function") render();
-      if (typeof countWords === "function") countWords();
-    }
-    markClean();
+    const switched = await replaceOpenDocument(null, () => {
+      S.activeFilePath = null;
+      S.previewMediaPath = null;
+      window._showingUnsupportedFile = true;
+      if (typeof window.replaceEditorContent === "function") {
+        window.replaceEditorContent("");
+      } else {
+        editor.value = "";
+      }
+      if (docTitleEl) {
+        docTitleEl.value = filePath.replace(/\\/g, "/").split("/").pop();
+      }
+      if (typeof window.replaceEditorContent !== "function") {
+        if (typeof render === "function") render();
+        if (typeof countWords === "function") countWords();
+      }
+      markClean();
+    });
+    if (switched) switchFromMobileSidebar();
   }
   async function openFile(filePath) {
-    await waitForTitleRename();
-    S.previewMediaPath = null;
-    window._showingUnsupportedFile = false;
-    if (S.isDirty && S.activeFilePath) {
-      const saved = await saveActiveFile();
-      if (!saved) return;
-    }
-    try {
-      const c = await window.NativeAPI.canonicalEntryPath(filePath);
-      if (typeof c === "string" && c) filePath = c;
-    } catch (_) {
-    }
-    let content;
-    try {
-      content = await window.NativeAPI.readFile(filePath);
-    } catch (err) {
-      await window.NativeAPI.showMessageBox({
-        type: "error",
-        title: window.t("Open Failed"),
-        message: window.t("Could not read:") + "\n" + filePath,
-        detail: String(err)
-      });
-      return;
-    }
-    if (typeof window.replaceEditorContent === "function") {
-      window.replaceEditorContent(content);
-    } else {
-      editor.value = content;
-      if (typeof render === "function") render();
-      if (typeof countWords === "function") countWords();
-    }
-    S.activeFilePath = filePath;
-    forgetGonePath(filePath);
-    markClean();
-    rememberDiskContent(content);
+    const switched = await replaceOpenDocument(async () => {
+      let path = filePath;
+      try {
+        const c = await window.NativeAPI.canonicalEntryPath(path);
+        if (typeof c === "string" && c) path = c;
+      } catch (_) {
+      }
+      try {
+        return { path, content: await window.NativeAPI.readFile(path) };
+      } catch (err) {
+        await window.NativeAPI.showMessageBox({
+          type: "error",
+          title: window.t("Open Failed"),
+          message: window.t("Could not read:") + "\n" + path,
+          detail: String(err)
+        });
+        return SWITCH_CANCELLED;
+      }
+    }, ({ path, content }) => {
+      filePath = path;
+      S.previewMediaPath = null;
+      window._showingUnsupportedFile = false;
+      if (typeof window.replaceEditorContent === "function") {
+        window.replaceEditorContent(content);
+      } else {
+        editor.value = content;
+        if (typeof render === "function") render();
+        if (typeof countWords === "function") countWords();
+      }
+      S.activeFilePath = path;
+      forgetGonePath(path);
+      markClean();
+      rememberDiskContent(content);
+      if (docTitleEl) {
+        docTitleEl.value = baseNameOf(path).replace(/\.(md|txt)$/, "");
+      }
+    });
+    if (!switched) return;
     await window.NativeAPI.setLastOpenedFile(filePath).catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
-    if (docTitleEl) {
-      const base = filePath.replace(/\\/g, "/").split("/").pop();
-      docTitleEl.value = base.replace(/\.(md|txt)$/, "");
-    }
     if (typeof postProcessImages === "function") postProcessImages();
     highlightActiveFile(filePath);
     switchFromMobileSidebar();
@@ -3299,28 +3298,30 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     await renderTree();
     if (!S.sidebarOpen) openSidebar();
   }
-  async function promptOpenFolder() {
-    await waitForTitleRename();
-    if (S.isDirty && S.activeFilePath) {
-      const saved = await saveActiveFile();
-      if (!saved) return;
+  function clearEditorForProjectSwitch() {
+    S.activeFilePath = null;
+    S.previewMediaPath = null;
+    window._showingUnsupportedFile = false;
+    markClean();
+    if (typeof window.replaceEditorContent === "function") {
+      window.replaceEditorContent("");
+    } else {
+      editor.value = "";
+      if (typeof render === "function") render();
     }
+    if (typeof countWords === "function") countWords();
+    if (docTitleEl) docTitleEl.value = "";
+  }
+  async function switchProject(path) {
+    if (!await replaceOpenDocument(null, clearEditorForProjectSwitch)) return;
+    await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
+    await openFolder(path);
+  }
+  async function promptOpenFolder() {
     try {
       const path = await window.NativeAPI.openFolderDialog();
       if (!path) return;
-      S.activeFilePath = null;
-      S.previewMediaPath = null;
-      await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
-      markClean();
-      if (typeof window.replaceEditorContent === "function") {
-        window.replaceEditorContent("");
-      } else {
-        editor.value = "";
-        if (typeof render === "function") render();
-      }
-      if (typeof countWords === "function") countWords();
-      if (docTitleEl) docTitleEl.value = "";
-      await openFolder(path);
+      await switchProject(path);
     } catch (err) {
       console.error("[Sidebar] openFolderDialog failed:", err);
     }
@@ -4445,12 +4446,20 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     window.insertWithUndo(pos, pos, insert, pos + cursor);
   }
   function ingestMediaAt(sources, from, to = from) {
-    return ingestMedia(sources, (links) => window.insertWithUndo(from, to, links + "\n"));
+    return ingestMedia(sources, { from, to, paragraph: false });
   }
   function ingestMediaAtDrop(sources, target) {
-    return ingestMedia(sources, (links) => insertAtTarget(target, links));
+    return ingestMedia(sources, { from: target.pos, to: target.pos, paragraph: target.paragraph });
   }
-  function ingestMedia(sources, insert) {
+  function tellLinksNotInserted(finals) {
+    if (typeof window.showStatusWarning !== "function") return;
+    window.showStatusWarning(
+      "media-link-skipped",
+      window.t("Added {names} to the project. The note it was dropped on is no longer open, so no link was inserted.").replace("{names}", finals.map(baseNameOf).join(", ")),
+      { priority: 30, ttl: 8e3 }
+    );
+  }
+  function ingestMedia(sources, where) {
     const media = sources.filter(isMediaSource);
     if (!media.length) {
       if (sources.length) explainNonMediaDrop();
@@ -4467,13 +4476,22 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       return Promise.resolve(false);
     }
     return withOperationLock(async () => {
-      const { finals, errors } = await copySources(media, dir);
-      if (finals.length) {
-        insert(finals.map((p) => mediaMarkdown(p, dir)).join("\n"));
-        expandedDirs.add(dir);
-        await renderTree();
+      const anchor = window.anchorEditorRange(where.from, where.to);
+      try {
+        const { finals, errors } = await copySources(media, dir);
+        if (finals.length) {
+          const links = finals.map((p) => mediaMarkdown(p, dir)).join("\n");
+          const at = anchor.take();
+          if (!at) tellLinksNotInserted(finals);
+          else if (where.paragraph) insertAtTarget({ pos: at.from, paragraph: true }, links);
+          else window.insertWithUndo(at.from, at.to, links + "\n");
+          expandedDirs.add(dir);
+          await renderTree();
+        }
+        reportCopyIssues(errors, "{n} file(s) could not be added:");
+      } finally {
+        anchor.release();
       }
-      reportCopyIssues(errors, "{n} file(s) could not be added:");
     });
   }
   function insertSidebarItems(dataTransfer, target) {

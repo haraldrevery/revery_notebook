@@ -10,6 +10,8 @@
    CodeMirror's own drop handler is exercised, not simulated. */
 (async () => {
   const PROJECT = __PROJECT__;
+  /* A path inside the project in the project's own spelling (Windows: '\'). */
+  const inProject = (rel) => [PROJECT, ...String(rel).split('/')].join(PROJECT.includes('\\') ? '\\' : '/');
   const PNG_B64 = __PNG_B64__;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const until = async (fn, ms = 8000) => {
@@ -102,7 +104,7 @@
     const before = editor.value;
     const dt = new DataTransfer();
     dt.setData('text/plain', '![pic.png](sub/pic.png)');
-    dt.setData('application/x-revery-path', PROJECT + '/sub/pic.png');
+    dt.setData('application/x-revery-path', inProject('sub/pic.png'));
     dropOnEditor(dt);
     await sleep(400);
     out.sidebarDrop = {
@@ -117,12 +119,12 @@
          with Ctrl+click travel as ONE drag, and dropping it on the editor
          inserts one link per image, each on its own line, in tree order. */
   {
-    const subPath = PROJECT + '/sub';
+    const subPath = inProject('sub');
     const fileRow = (p) => document.querySelector(`.sidebar-file[data-path="${CSS.escape(p)}"]`);
     const subRow = await until(() => document.querySelector(`.sidebar-dir[data-path="${CSS.escape(subPath)}"]`));
     if (subRow && !subRow.classList.contains('expanded')) subRow.click();
-    const a = await until(() => fileRow(subPath + '/a-one.png'));
-    const b = await until(() => fileRow(subPath + '/b-two.png'));
+    const a = await until(() => fileRow(inProject('sub/a-one.png')));
+    const b = await until(() => fileRow(inProject('sub/b-two.png')));
     out.multiDrag = { rowsFound: !!(a && b) };
     if (a && b) {
       const linkA = '![a-one.png](sub/a-one.png)';
@@ -149,10 +151,10 @@
         against the folder the future note will live in), no file is
         created yet, and the editor holds a link relative to that folder. */
   {
-    const subPath = PROJECT + '/sub';
+    const subPath = inProject('sub');
     const subRow = await until(() => document.querySelector(`.sidebar-dir[data-path="${CSS.escape(subPath)}"]`));
     if (subRow && !subRow.classList.contains('expanded')) subRow.click();
-    const picRow = await until(() => document.querySelector(`.sidebar-file[data-path="${CSS.escape(subPath + '/pic.png')}"]`));
+    const picRow = await until(() => document.querySelector(`.sidebar-file[data-path="${CSS.escape(inProject('sub/pic.png'))}"]`));
     if (picRow) picRow.click();
     await sleep(500);
     const previewOk = !!(await until(() => previewFilePaths().some((p) => p.endsWith('/sub/pic.png')), 3000));
@@ -295,7 +297,7 @@
       if (!p) return { found: false };
       const dt = new DataTransfer();
       dt.setData('text/plain', '![pic.png](sub/pic.png)');
-      dt.setData('application/x-revery-path', PROJECT + '/sub/pic.png');
+      dt.setData('application/x-revery-path', inProject('sub/pic.png'));
       (document.elementFromPoint(p.x, p.y) || window.cmView.contentDOM).dispatchEvent(new DragEvent('drop', {
         bubbles: true, cancelable: true, dataTransfer: dt, clientX: p.x, clientY: p.y,
       }));

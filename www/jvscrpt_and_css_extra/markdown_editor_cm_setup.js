@@ -142,6 +142,50 @@ const lineNumbersCompartment = new Compartment();
     if (typeof fn === 'function') _docReplacedListeners.push(fn);
   };
 
+  /* Deferred edits. Code that awaits between choosing WHERE to edit and
+     editing (a dropped or pasted image is copied into the project first)
+     takes an anchor instead of keeping offsets. The range follows every
+     edit made meanwhile, and the anchor dies with its document: the edit
+     can never land in another note, or at an offset that now means other
+     text. Plain offsets did both — a dropped image's link went into the
+     note opened meanwhile, and a paste replaced whatever text had moved
+     under the old selection. Text typed at a collapsed anchor goes after
+     it; typing at a range's edges does not widen it. */
+  const _anchors = new Set();
+  window.anchorEditorRange = function (from, to) {
+    const doc = window.cmView.state.doc;
+    const a = { gen: _docGeneration };
+    a.from = Math.max(0, Math.min(from, doc.length));
+    a.to = Math.max(a.from, Math.min(to, doc.length));
+    a.text = doc.sliceString(a.from, a.to);
+    _anchors.add(a);
+    return {
+      /** Release the anchor and get its range in the CURRENT document:
+          { from, to }, or null when that document is no longer on screen.
+          A range that no longer holds exactly its original text comes back
+          collapsed (from === to): insert there, never delete. */
+      take() {
+        _anchors.delete(a);
+        if (a.gen !== _docGeneration) return null;
+        const start = Math.min(a.from, a.to);
+        const intact = a.from < a.to
+          && window.cmView.state.doc.sliceString(a.from, a.to) === a.text;
+        return { from: start, to: intact ? a.to : start };
+      },
+      release() { _anchors.delete(a); },
+    };
+  };
+  function mapAnchors(changes) {
+    for (const a of _anchors) {
+      if (a.from === a.to) {
+        a.from = a.to = changes.mapPos(a.from, -1);
+      } else {
+        a.from = changes.mapPos(a.from, 1);
+        a.to = changes.mapPos(a.to, -1);
+      }
+    }
+  }
+
   // ═════════════════════════════════════════════════════════════════════════
   // 2.  PLACEHOLDER COMPARTMENT (so menus.js can update the placeholder text)
   // ═════════════════════════════════════════════════════════════════════════
@@ -677,6 +721,7 @@ const lineNumbersCompartment = new Compartment();
       findHighlightField,
       EditorView.updateListener.of(update => {
         if (update.docChanged) {
+          mapAnchors(update.changes); // first: input listeners may act on anchors
           const evt = new Event('input', { bubbles: true });
           _inputListeners.forEach(fn => fn(evt));
         }
