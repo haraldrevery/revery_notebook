@@ -151,6 +151,12 @@ content="default-src 'self';
   </div>
 </div>
 
+<!-- Status warnings in the phone layout (≤ 820px), where #size-warning
+     is hidden in every view. The same writer fills both
+     (_renderStatusWarning, markdown_editor_core_cm.js); the stylesheet
+     shows this bar only in the phone layout, and only when it has text. -->
+<div id="phone-status" role="status" aria-live="polite"></div>
+
 <div id="workspace">
 
     <!-- (+) Project File Sidebar — hidden until user opens a folder -->

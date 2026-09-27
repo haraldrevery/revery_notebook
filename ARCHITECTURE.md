@@ -590,8 +590,16 @@ the desktop layout the view is always `editor` (live preview's pane rules
 key on `[data-view="preview"]`), and on a phone reader mode is always the
 preview view. The view toggle names the view it switches to and follows
 the attribute. The desktop app keeps its window controls in this layout;
-the project-sidebar button exists only there. `test/phone_e2e.test.js`
-covers it at 390px.
+the project-sidebar button exists only there. Status warnings: the top
+bar's `#size-warning` is hidden in every phone view, so
+`_renderStatusWarning` (core_cm.js) also writes the text to
+`#phone-status`, a bar under the header shown only in this layout.
+Submenus open on a tap: a tap's compatibility `mouseenter` is ignored
+(`attachSubmenuHandlers`, menus.js) and its click toggles, since hover
+open plus click toggle shut every submenu on touch. About / Legal /
+User Guide are capped to the window (their text area scrolls) and also
+close on Escape or a backdrop tap. `test/phone_e2e.test.js` covers it at
+390px.
 
 ---
 

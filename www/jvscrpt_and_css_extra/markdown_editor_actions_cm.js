@@ -629,6 +629,10 @@ async function exportProjectZip() {
    The YAML frontmatter block, if present, is exported as a small metadata
    table above the prose body.                                             */
 async function exportHtmlFile() {
+  /* Render first: the preview can lag the text — the phone editor view
+     skips rendering while typing (core_cm.js input handler), and the
+     render debounce may still be pending. Same as the PDF export. */
+  if (typeof render === 'function') render();
   const proseEl = preview.querySelector('.prose');
   if (!proseEl) return; // Nothing rendered yet
 

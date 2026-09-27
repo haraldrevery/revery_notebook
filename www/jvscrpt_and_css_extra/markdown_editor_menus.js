@@ -1888,7 +1888,23 @@ function positionSubmenuVertically(sub, initialTop) {
    every submenu gets identical, correct behaviour everywhere.
 
    On touch: prevents ghost mouse events, collapses any other open submenu,
-   and repositions the submenu to stay within the viewport edge.          */
+   and repositions the submenu to stay within the viewport edge.
+
+   A tap fires compatibility mouse events just before its click: the
+   mouseenter opened the submenu, then the click saw it open and shut it,
+   so no submenu could be opened by touch (or pen). The mouseenter of a
+   tap is ignored — the click toggles. Touch events cover engines without
+   pointer events; a real mouse press clears the flag at once.            */
+let lastTouchAt = -Infinity;
+const noteTouch = () => { lastTouchAt = performance.now(); };
+document.addEventListener('touchstart', noteTouch, { capture: true, passive: true });
+document.addEventListener('touchend', noteTouch, { capture: true, passive: true });
+['pointerdown', 'pointerup'].forEach((type) => document.addEventListener(type, (e) => {
+  if (e.pointerType === 'mouse') lastTouchAt = -Infinity;
+  else noteTouch();
+}, true));
+const isTapMouseEvent = () => performance.now() - lastTouchAt < 1000;
+
 function attachSubmenuHandlers(wrapper, sub) {
   let hideTimer;
 
@@ -1942,6 +1958,7 @@ function attachSubmenuHandlers(wrapper, sub) {
 
   // ── Desktop: hover to reveal ──
   wrapper.addEventListener('mouseenter', () => {
+    if (isTapMouseEvent()) return; // a tap: its click toggles (below)
     clearTimeout(hideTimer);
     showSubAndFix();
   });
@@ -3476,6 +3493,31 @@ if (btnLegalClose) {
     document.getElementById('legal-modal').classList.remove('show');
   });
 }
+
+/* About / Legal / User Guide are read-only, so a tap on the backdrop or
+   Escape closes them too: nothing in them can be lost, and a very short
+   window can still hide Close. The backdrop closes on click — the last
+   event of a tap, so no ghost click lands on the app underneath — and
+   only when the press also began on the backdrop (a text selection
+   dragged out of the dialog must not close it). */
+const INFO_MODAL_IDS = ['about-modal', 'legal-modal', 'user-guide-modal'];
+INFO_MODAL_IDS.forEach((id) => {
+  const overlay = document.getElementById(id);
+  if (!overlay) return;
+  let pressedBackdrop = false;
+  overlay.addEventListener('mousedown', (e) => { pressedBackdrop = e.target === overlay; });
+  overlay.addEventListener('click', (e) => {
+    if (pressedBackdrop && e.target === overlay) overlay.classList.remove('show');
+    pressedBackdrop = false;
+  });
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  INFO_MODAL_IDS.forEach((id) => {
+    const overlay = document.getElementById(id);
+    if (overlay) overlay.classList.remove('show');
+  });
+});
 
 /* Attach event listeners for Reader Mode buttons */
 const btnReaderMode = document.getElementById('btn-reader-mode');

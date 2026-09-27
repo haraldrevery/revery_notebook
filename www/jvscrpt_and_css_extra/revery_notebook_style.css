@@ -1034,6 +1034,32 @@ button.yaml-toggle:focus-visible { outline: none; }
   body[data-view="preview"] #btn-exit-reader-mode { order: 2; }
 }
 
+/* ── Phone status bar ─────────────────────────────────────────────────
+   Status warnings (storage full, another tab overwrote the autosave,
+   saving held, …) are written to #size-warning in the top bar, which
+   the phone layout hides in every view. _renderStatusWarning (core_cm.js)
+   writes the same text into #phone-status; it shows under the header in
+   the phone layout while it has text. Amber marker, theme text color —
+   readable on the light themes too. Never shown on the desktop layout. */
+#phone-status { display: none; }
+@media (max-width: 820px) {
+  #phone-status:not(:empty) {
+    display: block;
+    flex-shrink: 0;
+    padding: 6px 20px 5px 17px;
+    border-left: 3px solid #fbbf24;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+    background: color-mix(in srgb, #fbbf24 16%, var(--bg));
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+}
+
 /* ── Reader Mode Topbar Adjustments ── */
 body.reader-mode-active #topbar-left { visibility: hidden !important; }
 body.reader-mode-active #topbar-left #btn-sidebar { visibility: visible !important; }
@@ -1730,6 +1756,7 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
 
   /* 2. Hide everything that isn't the preview */
   #topbar,
+  #phone-status,
   #editor-pane,
   #divider,
   #outline-pane,
@@ -1841,6 +1868,19 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
 .mod-scroll-about { font-size: 0.9rem; color: var(--text-muted); line-height: 1.5; max-height: 400px; overflow-y: auto; padding-right: 8px; }
 .mod-scroll-legal { font-size: 0.9rem; color: var(--text-muted); line-height: 1.6; max-height: 70vh; overflow-y: auto; padding-right: 10px; }
 .mod-scroll-guide { font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; max-height: 70vh; overflow-y: auto; padding-right: 10px; }
+/* About / Legal / User Guide never outgrow the window: the dialog is
+   capped to it and the text area gives up height first, so Close stays
+   on screen. A landscape phone, or a short window at a large UI size,
+   pushed Close off-screen, leaving no way out. Where there is room
+   nothing changes. Only these three: they hold no dropdowns for the
+   overflow to clip (Escape / backdrop close: menus.js). */
+:is(#about-modal, #legal-modal, #user-guide-modal) > .modal-content {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 24px);
+  overflow-y: auto; /* last resort: title + buttons alone taller than the window */
+}
+:is(.mod-scroll-about, .mod-scroll-legal, .mod-scroll-guide) { min-height: 0; }
 
 /* Typography & Headings */
 .mod-about-title { color: var(--text); margin-bottom: 4px; font-size: 1rem; }

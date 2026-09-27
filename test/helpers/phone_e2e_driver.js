@@ -41,6 +41,57 @@
     && view() === 'preview' && vis(toggle) && label() === 'Editor';
   toggle.click(); await sleep(250);
 
+  /* Status warnings show in every phone view: the top bar's slot for
+     them (#size-warning) is hidden in all of them. */
+  showStatusWarning('e2e', 'E2E warning', { priority: 1 });
+  await sleep(50);
+  let warned = vis($('phone-status'));
+  toggle.click(); await sleep(250);
+  warned = warned && vis($('phone-status'));
+  toggle.click(); await sleep(250);
+  clearStatusWarning('e2e'); await sleep(50);
+  out.warningsVisible = warned && !vis($('phone-status'));
+
+  /* A tap opens a submenu. Its compatibility mouseenter used to open it
+     and the click then shut it again. A tap's event order, synthesized. */
+  $('btn-settings').click(); await sleep(100);
+  const row = document.querySelector('#settings-dropdown > .has-submenu');
+  const rowLabel = row.querySelector(':scope > span');
+  rowLabel.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+  rowLabel.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+  row.dispatchEvent(new MouseEvent('mouseenter'));
+  rowLabel.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  out.tapOpensSubmenu = row.querySelector('.submenu').style.display === 'flex';
+  document.body.click(); await sleep(100);
+
+  /* Export as .html carries the latest text, although the phone editor
+     view does not render the preview while typing. */
+  const blobs = [];
+  const origCreateURL = URL.createObjectURL;
+  const origAnchorClick = HTMLAnchorElement.prototype.click;
+  URL.createObjectURL = (b) => { blobs.push(b); return 'about:blank'; };
+  HTMLAnchorElement.prototype.click = function () {};
+  const cm = window.cmView;
+  cm.dispatch({ changes: { from: cm.state.doc.length, insert: '\n\nE2E_FRESH_TEXT' } });
+  await sleep(400);
+  executeAction('file_export_html'); await sleep(300);
+  out.htmlExportFresh = blobs.length > 0 && (await blobs[blobs.length - 1].text()).includes('E2E_FRESH_TEXT');
+  URL.createObjectURL = origCreateURL;
+  HTMLAnchorElement.prototype.click = origAnchorClick;
+
+  /* About can always be left: Close on screen, Escape, a backdrop tap. */
+  const about = $('about-modal');
+  about.classList.add('show'); await sleep(100);
+  const closeRect = $('about-btn-close').getBoundingClientRect();
+  const closeOnScreen = closeRect.top >= 0 && closeRect.bottom <= window.innerHeight;
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const escapeCloses = !about.classList.contains('show');
+  about.classList.add('show');
+  about.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  about.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  out.aboutClosable = closeOnScreen && escapeCloses && !about.classList.contains('show');
+  about.classList.remove('show');
+
   /* Nothing is wider than the phone. */
   out.noHorizontalOverflow = document.documentElement.scrollWidth <= window.innerWidth;
   return out;

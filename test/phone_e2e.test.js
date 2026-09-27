@@ -6,6 +6,9 @@
    the web version, a view toggle whose label went backwards, a title
    capped at 40vw, and reader mode that showed a blank screen (entered
    from the editor view) or had no Exit button (from the preview view).
+   The last four failed before the mobile-audit fixes: status warnings
+   hidden in every view, submenus a tap could not open, a stale HTML
+   export, and an About dialog with no way out on a short screen.
    Skipped when no display is available. */
 
 const { test } = require('node:test');
@@ -47,5 +50,9 @@ test('phone layout: views, toggle label, reader mode', { skip: !hasDisplay, time
   assert.equal(r.readerHasExit, true, 'reader mode must offer Exit Reader Mode');
   assert.equal(r.readerOneRow, true, 'reader mode uses a single header row');
   assert.equal(r.readerExits, true, 'Exit Reader Mode returns to the preview view with its toggle');
+  assert.equal(r.warningsVisible, true, 'status warnings (storage full, tab conflict, save held) must show in every phone view');
+  assert.equal(r.tapOpensSubmenu, true, 'a tap must open a submenu (its mouseenter must not open it for the click to shut)');
+  assert.equal(r.htmlExportFresh, true, 'Export as .html must carry the latest text, not the last rendered preview');
+  assert.equal(r.aboutClosable, true, 'About must be closable: Close on screen, Escape, backdrop tap');
   assert.equal(r.noHorizontalOverflow, true, 'nothing may be wider than the phone');
 });

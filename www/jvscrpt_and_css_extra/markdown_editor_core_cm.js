@@ -182,6 +182,9 @@ const preview   = document.getElementById('preview');
 const empty     = document.getElementById('preview-empty');
 const wordcount = document.getElementById('wordcount');
 const sizeWarning = document.getElementById('size-warning');
+/* The phone layout's status bar: #size-warning is hidden in every phone
+   view, so the same text goes here too and CSS shows whichever fits. */
+const phoneStatus = document.getElementById('phone-status');
 const _statusSlots = new Map(); // name → { text, priority, timer }
 
 function _renderStatusWarning() {
@@ -190,6 +193,7 @@ function _renderStatusWarning() {
   for (const slot of _statusSlots.values()) {
     if (!top || slot.priority > top.priority) top = slot;
   }
+  if (phoneStatus) phoneStatus.textContent = top ? top.text : ''; // empty → hidden (CSS :empty)
   if (top) {
     sizeWarning.textContent  = top.text;   // textContent only — no HTML injection
     sizeWarning.style.display = 'inline';
