@@ -134,11 +134,18 @@ async function checkActiveFileOnDisk(filePath) {
       ? ['Reload from disk', 'Save my version & reload', 'Keep my version']
       : ['Reload from disk', 'Keep my version'];
     const dialogCancelId = dialogButtons.length - 1;
+    /* The default (Enter — and Space where the dialog focuses it) must
+       never discard anything: this question appears unasked, often while
+       the user is typing. With unsaved edits, "Reload from disk" (which
+       drops them) used to be the default; "Save my version & reload"
+       keeps both versions, each in its own file. Without unsaved edits a
+       reload loses nothing. */
+    const dialogDefaultId = S.isDirty ? dialogButtons.indexOf('Save my version & reload') : 0;
 
     const result = await window.NativeAPI.showMessageBox({
       type: 'question',
       buttons: dialogButtons,
-      defaultId: 0,
+      defaultId: dialogDefaultId,
       cancelId:  dialogCancelId,
       title: 'File Changed Externally',
       message: `"${filePath.replace(/\\/g, '/').split('/').pop()}" was modified by another program.`,

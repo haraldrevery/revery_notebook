@@ -465,9 +465,34 @@ window.NativeAPI.onWindowClose(sidebarHandleClose);
     return S.activeFilePath ? 'opened' : 'none';
   }
 
+  /* The last project folder could not be opened at start (a USB stick or
+     network drive that is not connected, a folder moved or renamed). This
+     used to be silent: the welcome text, no project, and everything typed
+     afterwards had no backup. Now the user is told; what they type is kept
+     (save.js, no-project backup). Never throws. */
+  async function tellProjectUnavailable(folder, err) {
+    const reason = String((err && err.message) || err || '')
+      .replace(/^Error invoking remote method '[^']*': /, '')
+      .replace(/^Error: /, '');
+    try {
+      await window.NativeAPI.showMessageBox({
+        type:    'warning',
+        title:   window.t('Could Not Open Project'),
+        message: window.t('"{name}" could not be opened. It may be on a drive that is not connected, or it was moved or renamed.')
+          .replace('{name}', baseNameOf(folder) || folder),
+        detail:  reason + '\n\n' + window.t('Nothing in it was changed. When it is available again, restart Revery to continue where you left off, or open a folder from the file panel. Text you type now is kept as a backup and becomes a note in the next folder you open.'),
+        buttons: [window.t('OK')],
+        defaultId: 0,
+      });
+    } catch (e) {
+      console.warn('[Sidebar Boot] could not show the missing-project message:', e);
+    }
+  }
+
 export function runBoot() {
   (async function bootSidebar() {
     let hasLoadedText = false;
+    let unavailableRoot = null; // { folder, err } — the last project could not be opened
 
     // Helper: Safely injects the starter guide if no file exists to open
     function injectStarterText() {
@@ -537,7 +562,13 @@ try {
         if (folder) {
           /* The backend answers with the root's CANONICAL spelling (the
              one every folder listing uses); the renderer adopts it. */
-          const canonicalRoot = await window.NativeAPI.setRootPath(folder);
+          let canonicalRoot;
+          try {
+            canonicalRoot = await window.NativeAPI.setRootPath(folder);
+          } catch (err) {
+            unavailableRoot = { folder, err };
+            throw err;
+          }
           if (typeof canonicalRoot === 'string' && canonicalRoot) folder = canonicalRoot;
           S.rootPath        = folder;
           lastFile = await reconcilePendingRename(journal, lastFile);
@@ -810,6 +841,10 @@ try {
 
     } catch (err) {
       console.warn('[Sidebar] Boot failed:', err);
+      if (unavailableRoot) {
+        injectStarterText(); // behind the message, not a blank editor
+        await tellProjectUnavailable(unavailableRoot.folder, unavailableRoot.err);
+      }
     } finally {
       // Ensure the editor never stays blank if no file/project was found
       if (!hasLoadedText) injectStarterText();

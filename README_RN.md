@@ -73,7 +73,8 @@ the browser (a live demo of the software before you install it).
   multi-select, project quick-switcher, project-wide search (**Ctrl+Shift+F**).
 - **Links follow renames**: renaming or moving files/folders offers to update
   every markdown link that points at them (you see the exact files first;
-  Ctrl+Z reverses it, links included).
+  in the file panel Ctrl+Z reverses it and Ctrl+Y redoes it, links included
+  — links you chose not to update are left alone).
 - Images: drop or paste (screenshots included) straight into a note — the file
   is copied into your project beside the note and a link is inserted. Drag an
   image from the file panel to link it; click one to preview it and start a
@@ -281,8 +282,8 @@ Open `www/jvscrpt_and_css_extra/markdown_editor_lang.js`:
 | `Ctrl+F` | Find / Replace (regex supported, ReDoS-guarded) |
 | `Ctrl+Shift+F` | Project-wide search (desktop) |
 | `Enter` / `Shift+Enter` (in Find) | Next / previous match |
-| `Ctrl+Z` | Undo — outside the editor it undoes the last file move/rename |
-| `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
+| `Ctrl+Z` | Undo — in the file panel it undoes the last file move/rename |
+| `Ctrl+Shift+Z` / `Ctrl+Y` | Redo — in the file panel it redoes the last undone move/rename |
 | `Tab` (in editor) | Insert 4 spaces |
 | `Escape` | Close find bar / dialogs |
 

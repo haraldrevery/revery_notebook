@@ -10,8 +10,8 @@ import { baseNameOf, pathKey, samePath, sanitizeEntryName, checkEntryName } from
 import { detectEol, normalizeEol, toDiskText } from './eol.js';
 import { renderTree, highlightActiveFile } from './tree.js';
 import { startWatchingFile, stopWatchingFile, checkActiveFileOnDisk } from './watcher.js';
-import { pushUndo, hasUndoOperations, undoLastOperation, clearUndoStack,
-         showNameProblem } from './fileops.js';
+import { pushUndo, hasUndoOperations, undoLastOperation, hasRedoOperations,
+         redoLastOperation, clearUndoStack, showNameProblem } from './fileops.js';
 import { recordProjectOpen } from './projects.js';
 
 /* ── Save-engine local state ─────────────────────────────────────── */
@@ -318,11 +318,19 @@ export function writeDurableSnapshot(path, content) {
 /* The key whose backup must also go to the durable slot right now, or
    null: the open note while autosave is suspended and it has unsaved
    edits; with no note open, scratchpad text whose note could not be
-   created (until it is, the temp backup is its only copy). */
+   created, or cannot be because no project is open (until it is, the
+   temp backup is its only copy). */
 function _durableMirrorKey() {
   if (S.activeFilePath) return (_durableExposed() && S.isDirty) ? S.activeFilePath : null;
   const s = pendingScratchpad();
-  return (s && s.failed) ? s.key : null;
+  return (s && (s.failed || !pendingNoteDir())) ? s.key : null;
+}
+
+/** Text typed while no project is open. A project switch keeps it on
+    screen and creates its note in the project being opened, instead of
+    emptying the editor (fileops.switchProject). */
+export function hasTextWithoutProject() {
+  return !S.rootPath && !!pendingScratchpad();
 }
 
 function _fireDurableMirror() {
@@ -567,7 +575,8 @@ const execRename = async () => {
           if (!followed && S.activeFilePath) startWatchingFile(S.activeFilePath);
         }
       });
-      pushUndo({ type: 'rename', records: [{ oldPath, newPath: finalNewPath }] });
+      /* A title rename never offers a link update (links: 'none'). */
+      pushUndo({ type: 'rename', records: [{ oldPath, newPath: finalNewPath }], links: 'none' });
       if (followed) {
         docTitleEl.value = finalNewPath.replace(/\\/g, '/').split('/').pop().replace(new RegExp(`\\.${ext}$`), '');
       }
@@ -651,8 +660,15 @@ async function saveActiveFile(opts) {
   // Path may have changed while waiting, re‑check
   if (!S.activeFilePath) { report('no-file'); return false; }
 
-  // Apply pending title rename if needed
-  if (docTitleEl) {
+  /* Apply a pending title rename — but never from a BACKGROUND save while
+     the title field still has focus: the user is still typing the name.
+     It used to rename the file to whatever the field held when the timer
+     fired ("meeting-no.md"), reset the field under the cursor, and pop up
+     "Invalid Name" for a half-typed "v1." — the rename runs when the
+     field is left or Enter is pressed ('change'); explicit saves (Ctrl+S,
+     switching notes, closing) still apply it. */
+  const typingTitle = auto && docTitleEl && document.activeElement === docTitleEl;
+  if (docTitleEl && !typingTitle) {
     const currentBase = S.activeFilePath.replace(/\\/g, '/').split('/').pop()
                        .replace(/\.[^/.]+$/, '');
     const inputName = docTitleEl.value.trim();
@@ -1123,6 +1139,22 @@ export function initSaveEngine() {
         }
         return; // skip normal flow until the file is established
       }
+      /* No project is open at all (none yet, or the last one could not be
+         opened at start — a drive that is not connected, a folder that was
+         moved): no note can be created, so the crash backup is this text's
+         ONLY copy. It used to get none. Kept like any scratchpad text, and
+         mirrored to the reboot-safe slot (_durableMirrorKey). Opening a
+         project gives it its note there (fileops.switchProject); otherwise
+         the next start offers it. */
+      const session = scratchpadSession();
+      session.latest = editor.value;
+      try {
+        window.NativeAPI.setVolatileContent(session.key, editor.value);
+      } catch (e) {
+        console.warn('[Sidebar] no-project backup failed (non-fatal):', e);
+      }
+      mirrorDurableWhileExposed();
+      return;
     }
 
 
@@ -1156,16 +1188,22 @@ export function initSaveEngine() {
       
       await saveActiveFile();
     }
-    /* Ctrl+Z → undo the last file move or rename — ONLY while the user is
-       working in the file panel (sidebarUndoAllowed). It used to fire
-       whenever the editor lacked focus, so Ctrl+Z typed in the title
-       field, the find bar or the project search silently moved files
-       back (and rewrote links) instead of undoing the typing. */
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+    /* Ctrl+Z → undo the last file move or rename; Ctrl+Y (or Ctrl+Shift+Z,
+       as in the editor) → redo it — ONLY while the user is working in the
+       file panel (sidebarUndoAllowed). Everywhere else these keys belong
+       to the text: CodeMirror's own undo/redo, the title field, the find
+       bar. Undo used to fire whenever the editor lacked focus, so Ctrl+Z
+       typed in the title field, the find bar or the project search
+       silently moved files back (and rewrote links) instead of undoing the
+       typing. */
+    const key = String(e.key || '').toLowerCase();
+    const fileUndo = e.ctrlKey && !e.altKey && !e.shiftKey && key === 'z';
+    const fileRedo = e.ctrlKey && !e.altKey && ((key === 'y' && !e.shiftKey) || (key === 'z' && e.shiftKey));
+    if (fileUndo || fileRedo) {
       if (!sidebarUndoAllowed(e)) return;
-      if (!hasUndoOperations()) return;
+      if (!(fileUndo ? hasUndoOperations() : hasRedoOperations())) return;
       e.preventDefault();
-      await undoLastOperation();
+      await (fileUndo ? undoLastOperation() : redoLastOperation());
     }
   });
 
@@ -1182,7 +1220,7 @@ export function initSaveEngine() {
 
 let _panelArmed = false;
 
-/* File undo may run only when ALL hold: the editor does not have focus;
+/* File undo/redo may run only when ALL hold: the editor does not have focus;
    no text field anywhere has it (Ctrl+Z there means "undo my typing");
    no dialog is open; the file panel is open; and the last thing the user
    pressed or focused was the file panel. */

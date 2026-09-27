@@ -1264,10 +1264,11 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     try {
       const dialogButtons = S.isDirty ? ["Reload from disk", "Save my version & reload", "Keep my version"] : ["Reload from disk", "Keep my version"];
       const dialogCancelId = dialogButtons.length - 1;
+      const dialogDefaultId = S.isDirty ? dialogButtons.indexOf("Save my version & reload") : 0;
       const result = await window.NativeAPI.showMessageBox({
         type: "question",
         buttons: dialogButtons,
-        defaultId: 0,
+        defaultId: dialogDefaultId,
         cancelId: dialogCancelId,
         title: "File Changed Externally",
         message: `"${filePath.replace(/\\/g, "/").split("/").pop()}" was modified by another program.`,
@@ -1824,7 +1825,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   function _durableMirrorKey() {
     if (S.activeFilePath) return _durableExposed() && S.isDirty ? S.activeFilePath : null;
     const s = pendingScratchpad();
-    return s && s.failed ? s.key : null;
+    return s && (s.failed || !pendingNoteDir()) ? s.key : null;
+  }
+  function hasTextWithoutProject() {
+    return !S.rootPath && !!pendingScratchpad();
   }
   function _fireDurableMirror() {
     const key = _durableMirrorKey();
@@ -1956,7 +1960,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
             if (!followed && S.activeFilePath) startWatchingFile(S.activeFilePath);
           }
         });
-        pushUndo({ type: "rename", records: [{ oldPath, newPath: finalNewPath }] });
+        pushUndo({ type: "rename", records: [{ oldPath, newPath: finalNewPath }], links: "none" });
         if (followed) {
           docTitleEl.value = finalNewPath.replace(/\\/g, "/").split("/").pop().replace(new RegExp(`\\.${ext}$`), "");
         }
@@ -2006,7 +2010,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         report("no-file");
         return false;
       }
-      if (docTitleEl) {
+      const typingTitle = auto && docTitleEl && document.activeElement === docTitleEl;
+      if (docTitleEl && !typingTitle) {
         const currentBase = S.activeFilePath.replace(/\\/g, "/").split("/").pop().replace(/\.[^/.]+$/, "");
         const inputName = docTitleEl.value.trim();
         if (inputName && inputName !== currentBase && !window._showingUnsupportedFile) {
@@ -2268,19 +2273,28 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (!S.activeFilePath && !window._showingUnsupportedFile) {
         const targetDir = pendingNoteDir();
         if (targetDir) {
-          const session = scratchpadSession();
-          session.latest = editor.value;
+          const session2 = scratchpadSession();
+          session2.latest = editor.value;
           try {
-            window.NativeAPI.setVolatileContent(session.key, editor.value);
+            window.NativeAPI.setVolatileContent(session2.key, editor.value);
           } catch (e) {
             console.warn("[Sidebar] scratchpad placeholder volatile failed (non-fatal):", e);
           }
           mirrorDurableWhileExposed();
-          if (!S._projectSwitch && !session.creating && Date.now() >= session.retryAfter) {
-            startScratchpadCreate(session);
+          if (!S._projectSwitch && !session2.creating && Date.now() >= session2.retryAfter) {
+            startScratchpadCreate(session2);
           }
           return;
         }
+        const session = scratchpadSession();
+        session.latest = editor.value;
+        try {
+          window.NativeAPI.setVolatileContent(session.key, editor.value);
+        } catch (e) {
+          console.warn("[Sidebar] no-project backup failed (non-fatal):", e);
+        }
+        mirrorDurableWhileExposed();
+        return;
       }
       if (S.activeFilePath) {
         markDirty();
@@ -2298,11 +2312,14 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         }
         await saveActiveFile();
       }
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z") {
+      const key = String(e.key || "").toLowerCase();
+      const fileUndo = e.ctrlKey && !e.altKey && !e.shiftKey && key === "z";
+      const fileRedo = e.ctrlKey && !e.altKey && (key === "y" && !e.shiftKey || key === "z" && e.shiftKey);
+      if (fileUndo || fileRedo) {
         if (!sidebarUndoAllowed(e)) return;
-        if (!hasUndoOperations()) return;
+        if (!(fileUndo ? hasUndoOperations() : hasRedoOperations())) return;
         e.preventDefault();
-        await undoLastOperation();
+        await (fileUndo ? undoLastOperation() : redoLastOperation());
       }
     });
     const isPanelSurface = (el) => !!(el && el.closest && (sidebarPanel && sidebarPanel.contains(el) || el.closest("#context-menu, #sidebar-sort-menu, .revery-input-overlay")));
@@ -2631,6 +2648,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
   var MAX_UNDO = 30;
   var undoStack = [];
+  var redoStack = [];
   var _dirOf = (p) => p.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
   var _n = (p) => String(p).replace(/\\/g, "/");
   function applyTextToEditor(oldText, newText) {
@@ -2656,12 +2674,12 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
   async function updateLinksAfterPathChange(records, { confirm = true } = {}) {
     try {
-      if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return;
+      if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return "none";
       records = (records || []).filter((r) => r && r.oldPath && r.newPath && r.oldPath.replace(/\\/g, "/") !== r.newPath.replace(/\\/g, "/"));
-      if (!records.length) return;
+      if (!records.length) return "none";
       invalidateProjectScan();
       const files = await listProjectTextFiles(["md", "txt"]);
-      if (!files.length) return;
+      if (!files.length) return "none";
       const mapAbs = buildAbsMapper(records);
       const mapBack = buildAbsMapper(invertRecords(records));
       const isActivePath = (p) => !!S.activeFilePath && _n(S.activeFilePath) === _n(p);
@@ -2686,7 +2704,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           plans.push({ path: f.path, opts, changes: res.changes });
         }
       }
-      if (!plans.length) return;
+      if (!plans.length) return "none";
       if (confirm) {
         const total = plans.reduce((a, p) => a + p.changes, 0);
         const names = plans.map((p) => p.path.replace(/\\/g, "/").split("/").pop());
@@ -2697,7 +2715,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           shown,
           window.t("Update links")
         );
-        if (!ok) return;
+        if (!ok) return "declined";
       }
       const errors = [];
       for (const p of plans) {
@@ -2728,16 +2746,27 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           detail: errors.join("\n")
         });
       }
+      return "updated";
     } catch (err) {
       console.error("[Sidebar] link update failed (files left unchanged):", err);
+      return "failed";
     }
+  }
+  async function followLinksOnReplay(records, choice) {
+    if (choice === "declined") return "declined";
+    const outcome = await updateLinksAfterPathChange(records, { confirm: choice !== "updated" });
+    return outcome === "updated" || outcome === "declined" ? outcome : choice;
   }
   function pushUndo(op) {
     undoStack.push(op);
     if (undoStack.length > MAX_UNDO) undoStack.shift();
+    redoStack.length = 0;
   }
   function hasUndoOperations() {
     return undoStack.length > 0;
+  }
+  function hasRedoOperations() {
+    return redoStack.length > 0;
   }
   async function settleActiveFileBefore(paths) {
     if (!activeAffectedBy(paths)) return true;
@@ -2753,54 +2782,68 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
   function clearUndoStack() {
     undoStack.length = 0;
+    redoStack.length = 0;
   }
-  async function undoLastOperation() {
-    if (undoStack.length === 0) return;
+  async function stepFileHistory(direction) {
+    const redo = direction === "redo";
+    const from = redo ? redoStack : undoStack;
+    const to = redo ? undoStack : redoStack;
+    if (from.length === 0) return;
     if (S._operationLock) {
       reportBusy();
       return;
     }
     S._operationLock = true;
     try {
-      const op = undoStack.pop();
-      const errors = [];
-      const undone = [];
-      const currentPaths = op.records.map((r) => r.newPath);
+      const op = from.pop();
+      const steps = op.records.map((rec) => redo ? { rec, at: rec.oldPath, dest: rec.newPath } : { rec, at: rec.newPath, dest: rec.oldPath });
+      if (!redo) steps.reverse();
+      const currentPaths = steps.map((s) => s.at);
       if (!await settleActiveFileBefore(currentPaths)) {
-        undoStack.push(op);
+        from.push(op);
         return;
       }
+      const errors = [];
+      const moved = [];
+      const done = /* @__PURE__ */ new Set();
       await inDiskLock(activeAffectedBy(currentPaths), async () => {
-        for (const { oldPath, newPath } of [...op.records].reverse()) {
+        for (const { rec, at, dest } of steps) {
           try {
-            await window.NativeAPI.renameNode(newPath, oldPath);
+            await window.NativeAPI.renameNode(at, dest);
           } catch (err) {
-            errors.push(`${baseNameOf(newPath)}: ${errText(err)}`);
+            errors.push(`${baseNameOf(at)}: ${errText(err)}`);
             continue;
           }
-          const back = { oldPath: newPath, newPath: oldPath };
-          undone.push(back);
-          await followActiveFile(newPath, oldPath);
-          remapPathState([back]);
+          const m = { oldPath: at, newPath: dest };
+          moved.push(m);
+          done.add(rec);
+          await followActiveFile(at, dest);
+          remapPathState([m]);
         }
       });
+      let entry = null;
+      if (moved.length) {
+        entry = { ...op, records: op.records.filter((r) => done.has(r)) };
+        to.push(entry);
+        if (to.length > MAX_UNDO) to.shift();
+      }
       selectedItems.clear();
       S.selectionAnchor = null;
       await renderTree();
-      if (undone.length) await updateLinksAfterPathChange(undone, { confirm: false });
-      if (undone.length && typeof window.showStatusWarning === "function") {
-        const msg = op.type === "rename" ? window.t('Undone: rename of "{name}".') : window.t("Undone: move of {n} item(s).");
+      if (entry) entry.links = await followLinksOnReplay(moved, op.links);
+      if (moved.length && typeof window.showStatusWarning === "function") {
+        const msg = op.type === "rename" ? redo ? window.t('Redone: rename of "{name}".') : window.t('Undone: rename of "{name}".') : redo ? window.t("Redone: move of {n} item(s).") : window.t("Undone: move of {n} item(s).");
         window.showStatusWarning(
           "fs-undo",
-          msg.replace("{name}", baseNameOf(undone[0].newPath)).replace("{n}", undone.length),
+          msg.replace("{name}", baseNameOf(moved[0].newPath)).replace("{n}", moved.length),
           { priority: 20, ttl: 5e3 }
         );
       }
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
-          title: window.t("Undo Failed Partially"),
-          message: window.t("{n} item(s) could not be moved back:").replace("{n}", errors.length),
+          title: redo ? window.t("Redo Failed Partially") : window.t("Undo Failed Partially"),
+          message: (redo ? window.t("{n} item(s) could not be moved again:") : window.t("{n} item(s) could not be moved back:")).replace("{n}", errors.length),
           detail: errors.join("\n")
         });
       }
@@ -2808,6 +2851,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       S._operationLock = false;
     }
   }
+  var undoLastOperation = () => stepFileHistory("undo");
+  var redoLastOperation = () => stepFileHistory("redo");
   async function moveNodes(items, targetDir) {
     if (!items.length || !targetDir) return;
     if (S._operationLock) {
@@ -2844,9 +2889,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (movedRecords.length) expandedDirs.add(targetDir);
       selectedItems.clear();
       S.selectionAnchor = null;
-      if (movedRecords.length) pushUndo({ type: "move", records: movedRecords });
+      const entry = movedRecords.length ? { type: "move", records: movedRecords, links: "none" } : null;
+      if (entry) pushUndo(entry);
       await renderTree();
-      if (movedRecords.length) await updateLinksAfterPathChange(movedRecords);
+      if (entry) entry.links = await updateLinksAfterPathChange(movedRecords);
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
@@ -2987,9 +3033,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       });
       selectedItems.clear();
       S.selectionAnchor = null;
-      if (renamedRecords.length) pushUndo({ type: "rename", records: renamedRecords });
+      const entry = renamedRecords.length ? { type: "rename", records: renamedRecords, links: "none" } : null;
+      if (entry) pushUndo(entry);
       await renderTree();
-      if (renamedRecords.length) await updateLinksAfterPathChange(renamedRecords);
+      if (entry) entry.links = await updateLinksAfterPathChange(renamedRecords);
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: "warning",
@@ -3052,6 +3099,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (result.response !== 0) return;
       if (!await saveOpenNoteBeforeDelete(items.map((it) => it.path))) return;
       const errors = [];
+      let deletedAny = false;
       await inDiskLock(activeAffectedBy(items.map((it) => it.path)), async () => {
         for (const { path: p } of items) {
           try {
@@ -3060,10 +3108,12 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
             errors.push(`${baseNameOf(p)}: ${errText(err)}`);
             continue;
           }
+          deletedAny = true;
           if (S.activeFilePath && isInsideRoot(S.activeFilePath, p)) await closeDeletedActiveFile();
           forgetDeletedPathState(p);
         }
       });
+      if (deletedAny) clearUndoStack();
       selectedItems.clear();
       S.selectionAnchor = null;
       await renderTree();
@@ -3168,21 +3218,25 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     switchFromMobileSidebar();
     startWatchingFile(filePath);
   }
+  async function tellNoFolderOpen() {
+    await window.NativeAPI.showMessageBox({
+      type: "info",
+      title: window.t("No Folder Open"),
+      message: window.t("Please open a project folder first.")
+    }).catch(() => {
+    });
+  }
   async function createNewFile(targetDir) {
     if (S._operationLock || S._projectSwitch) {
       reportBusy();
       return;
     }
-    if (!await saveBeforeLeaving()) return;
     const dir = targetDir || S.selectedDirPath || S.rootPath;
     if (!dir) {
-      await window.NativeAPI.showMessageBox({
-        type: "info",
-        title: window.t("No Folder Open"),
-        message: window.t("Please open a project folder first.")
-      });
+      await tellNoFolderOpen();
       return;
     }
+    if (!await saveBeforeLeaving()) return;
     const MAX_CREATE_RETRIES = 5;
     let newPath = null;
     let created = false;
@@ -3309,9 +3363,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         });
         return;
       }
-      pushUndo({ type: "rename", records: [rec] });
+      const entry = { type: "rename", records: [rec], links: "none" };
+      pushUndo(entry);
       await renderTree();
-      await updateLinksAfterPathChange([rec]);
+      entry.links = await updateLinksAfterPathChange([rec]);
     } finally {
       S._operationLock = false;
     }
@@ -3346,6 +3401,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         if (S.activeFilePath && isInsideRoot(S.activeFilePath, nodePath)) await closeDeletedActiveFile();
         forgetDeletedPathState(nodePath);
       });
+      if (!failure) clearUndoStack();
       if (failure) {
         console.error("[Sidebar] deleteNode failed:", failure);
         await window.NativeAPI.showMessageBox({
@@ -3406,10 +3462,19 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     let began = false;
     let failure = null;
     try {
-      if (!await replaceOpenDocument(null, () => {
+      if (hasTextWithoutProject()) {
+        if (S._projectSwitch || S._operationLock) {
+          reportBusy();
+          return;
+        }
+        began = true;
+        S._projectSwitch = true;
+      } else if (!await replaceOpenDocument(null, () => {
         began = true;
         clearEditorForProjectSwitch();
-      })) return;
+      })) {
+        return;
+      }
       await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
       await openFolder(path);
     } catch (err) {
@@ -3427,7 +3492,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         await window.NativeAPI.showMessageBox({
           type: "error",
           title: window.t("Could Not Open Folder"),
-          message: window.t('"{name}" could not be opened. The current project stays open.').replace("{name}", baseNameOf(path) || path),
+          message: (previousRoot ? window.t('"{name}" could not be opened. The current project stays open.') : window.t('"{name}" could not be opened.')).replace("{name}", baseNameOf(path) || path),
           detail: errText(failure)
         }).catch(() => {
         });
@@ -3454,7 +3519,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     window.sidebarImportFile = async function() {
       const dir = S.selectedDirPath || S.rootPath;
       if (!dir) {
-        if (typeof executeImport === "function") executeImport();
+        await tellNoFolderOpen();
         return;
       }
       if (!await saveBeforeLeaving()) return;
@@ -5163,9 +5228,25 @@ Last edited: ${new Date(backup.ts || Date.now()).toLocaleString()}
     }
     return S.activeFilePath ? "opened" : "none";
   }
+  async function tellProjectUnavailable(folder, err) {
+    const reason = String(err && err.message || err || "").replace(/^Error invoking remote method '[^']*': /, "").replace(/^Error: /, "");
+    try {
+      await window.NativeAPI.showMessageBox({
+        type: "warning",
+        title: window.t("Could Not Open Project"),
+        message: window.t('"{name}" could not be opened. It may be on a drive that is not connected, or it was moved or renamed.').replace("{name}", baseNameOf(folder) || folder),
+        detail: reason + "\n\n" + window.t("Nothing in it was changed. When it is available again, restart Revery to continue where you left off, or open a folder from the file panel. Text you type now is kept as a backup and becomes a note in the next folder you open."),
+        buttons: [window.t("OK")],
+        defaultId: 0
+      });
+    } catch (e) {
+      console.warn("[Sidebar Boot] could not show the missing-project message:", e);
+    }
+  }
   function runBoot() {
     (async function bootSidebar() {
       let hasLoadedText = false;
+      let unavailableRoot = null;
       function injectStarterText() {
         if (hasLoadedText) return;
         hasLoadedText = true;
@@ -5248,7 +5329,13 @@ More information, click the \xBD logo in the center top of the screen.
             folder = parts.join("/");
           }
           if (folder) {
-            const canonicalRoot = await window.NativeAPI.setRootPath(folder);
+            let canonicalRoot;
+            try {
+              canonicalRoot = await window.NativeAPI.setRootPath(folder);
+            } catch (err) {
+              unavailableRoot = { folder, err };
+              throw err;
+            }
             if (typeof canonicalRoot === "string" && canonicalRoot) folder = canonicalRoot;
             S.rootPath = folder;
             lastFile = await reconcilePendingRename(journal, lastFile);
@@ -5474,6 +5561,10 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
         }
       } catch (err) {
         console.warn("[Sidebar] Boot failed:", err);
+        if (unavailableRoot) {
+          injectStarterText();
+          await tellProjectUnavailable(unavailableRoot.folder, unavailableRoot.err);
+        }
       } finally {
         if (!hasLoadedText) injectStarterText();
         try {

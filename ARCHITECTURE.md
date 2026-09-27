@@ -203,6 +203,18 @@ volatile crash-backups from an interrupted save are found. The boot IIFE
 calls `render()`/`countWords()` itself — there is deliberately no second
 standalone render call.
 
+**The last project cannot be opened** (a drive that is not connected, a
+folder moved or renamed): the user is told ("Could Not Open Project") and
+the app starts with no project. Text typed then has no note, so its crash
+backup is its only copy: it is kept under a scratchpad key and mirrored to
+the reboot-safe slot (`save.js` input listener, `_durableMirrorKey`). Open
+Folder / a recent project keeps it on screen and creates its note in that
+project (`fileops.switchProject` → `hasTextWithoutProject` →
+`resumeScratchpadAfterSwitch`); New File and Import only say "No Folder
+Open". Before, the start was silent, the text had no backup, Open Folder
+emptied the editor and Import replaced it without asking. Otherwise the
+next start offers the backup ("Recover unsaved text?").
+
 ---
 
 ## Project File Sidebar
@@ -397,10 +409,19 @@ title bar) follows the same rules; the backends enforce them again
   the parent after a delete.
 - **One operation at a time** (`S._operationLock`); a second one shows
   "Busy — try again in a moment." instead of vanishing.
-- **Undo** (moves/renames, 30 deep) runs from Ctrl+Z only while the user
-  works in the file panel (`save.js sidebarUndoAllowed`: not in the editor,
-  not in any text field, no dialog open, last press/focus in the panel)
-  and says what it undid; the stack is cleared when the project changes.
+- **Undo / redo** (moves/renames, 30 deep each; `fileops.stepFileHistory`)
+  run from Ctrl+Z and Ctrl+Y / Ctrl+Shift+Z only while the user works in
+  the file panel (`save.js sidebarUndoAllowed`: not in the editor, not in
+  any text field, no dialog open, last press/focus in the panel) and say
+  what they did. Both use the operation's own safety (lock, open note
+  saved first, disk lock, retarget). Each entry remembers what happened
+  to the links when it ran (`links`): 'updated' → undo/redo follow again
+  without asking; 'declined' → links are never touched (a silent pass used
+  to "fix" the moved notes' correct relative links into broken ones);
+  otherwise links made since are offered with the usual question. Only
+  what actually moved goes to the other stack. A new operation clears
+  redo; a delete, a project change and Save As to another folder clear
+  both (a deleted item's name can be reused by a new item).
 - **Failures are reported** (move/rename/delete/undo dialogs list each
   item and the reason); the multi-delete question says "Move … to Trash".
 
@@ -485,7 +506,10 @@ empty.
 
 **Title renames and switching notes.** Renaming the open note in the title
 field starts when the field loses focus — typically to the very click that
-opens another note. Everything that puts another document in the editor
+opens another note — or on Enter. A BACKGROUND autosave never applies a
+title while the field still has focus (it used to rename the file to the
+half-typed name, and pop up "Invalid Name" for a partial "v1."); explicit
+saves (Ctrl+S, switching, closing) do. Everything that puts another document in the editor
 (`openFile`, the media/unsupported previews, folder and project switches,
 Save As) first awaits `waitForTitleRename()`, so the rename finishes on the
 note it belongs to. `retargetActiveFile` only moves the OPEN note (it
@@ -513,7 +537,12 @@ time). Every change event is verified under the disk lock against
 recorded by every save inside the same lock. Equal → our own write (or a
 touch that changed nothing): ignored. Different from both the record and
 the buffer → a real external change: the user chooses Reload / Save my
-version & reload / Keep my version. There is no time window after a save in
+version & reload / Keep my version. The question appears unasked, often
+mid-typing, so its default (Enter, and Space where the dialog focuses it)
+never discards: with unsaved edits it is "Save my version & reload" (both
+versions kept, each in its own file); without, "Reload from disk" (nothing
+to lose). It used to be "Reload from disk" in both cases, which dropped
+the unsaved edits. There is no time window after a save in
 which events are ignored (that used to let another program's change be
 overwritten by the next autosave).
 
@@ -1283,6 +1312,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/fs_core.rename.test.js` | The only rename-over-existing exception (case-only alias of the SAME file); two different files differing only in case are never treated as one |
 | `test/fs_core.entry.test.js` | Entry operations (`validateEntryInside`, `renameEntry`, `trashableEntry`): a link is the link, never its target (also one pointing outside); nothing behind an outside link is reachable; a symlinked root resolves to the real spelling; never overwrites (a dangling link included); absolute links move as links, relative ones are refused across folders; into-itself / root / bad names refused, a pure move keeps a legacy name; EXDEV refused with nothing changed; EBUSY is never a copy (retried on every platform, then it fails); the Windows retry, and a destination appearing during it is never overwritten; `checkEntryName` agrees with the renderer's |
 | `test/entry_names.test.js` | The one name rule (`checkEntryName` reasons, Windows device names, byte length), `sanitizeEntryName`, the rename extension rule (`renamedFileName`: "Meeting 26.09.2026" keeps ".md", note ↔ note and image ↔ image only, extensionless names kept), `samePath` / `pathKey`, `joinPath` / `parentPathOf` / `remapUnder` in the listing's own spelling |
+| `test/file_history_e2e.test.js` | Boots the REAL Electron app twice on a temp project. History run: links the user DECLINED on a move are never touched by Ctrl+Z / Ctrl+Y (undo used to break the moved note's relative links); accepted links follow undo and redo unasked; Ctrl+Y / Ctrl+Shift+Z in the title or editor never move files, in the panel they redo; a new operation ends the redo chain; a delete ends the history; autosave never renames to a title still being typed; "File Changed Externally" defaults to "Save my version & reload" with unsaved edits, "Reload from disk" without. No-project run (last project folder missing): "Could Not Open Project" at start, typed text gets a crash backup, New File / Import leave it alone, Open Folder keeps it and gives it a note there |
 | `test/file_ops_e2e.test.js` | Boots the REAL Electron app twice on a temp project (a recorder replaces the system trash): card-view path bar and its root-segment drop, the narrow-panel "← Back" drop target, nothing above the root; "Move to…" (picker rules, the link update still runs) and "Move up one level"; Ctrl+Z in the title never undoes a file move, after working in the panel it does (with a status message); links moved as links, a relative link not moved away, deleting a link trashes the link; rename rules and refusals; the open note's folder moved while a save is queued (save lands first, later typing saved at the new place, old folder never recreated); the open note deleted with a save in flight (the save lands first, never resurrected); multi-delete wording. Second run with the project opened through a symlink: canonical root and note, no name_2 on a drop into the own folder, no escape above the root |
 | `test/eol.test.js` | Line-ending rules: which files keep CRLF, normalisation, byte-exact round-trip |
 | `test/unique_name.test.js` | New/renamed/imported/moved names: case-insensitive collisions, trailing `_2024` kept, the renamed file does not block its own spelling |

@@ -8,7 +8,7 @@ import { saveActiveFile, markClean, scheduleAutoSave, cancelPendingAutoSave,
          retargetActiveFile, waitForSaveChainIdle, rememberDiskContent,
          _enqueueDiskOp, markActivePathGone, forgetGonePath,
          replaceOpenDocument, SWITCH_CANCELLED, saveBeforeLeaving,
-         resumeScratchpadAfterSwitch } from './save.js';
+         resumeScratchpadAfterSwitch, hasTextWithoutProject } from './save.js';
 import { renderTree, updateMultiSelectHighlight, updateSelectedDirHighlight, highlightActiveFile } from './tree.js';
 import { openSidebar, switchFromMobileSidebar } from './panel.js';
 import { startWatchingFile, stopWatchingFile, watchedPath } from './watcher.js';
@@ -160,9 +160,16 @@ import { decodeImportedText } from './import_text.js';
     };
   }
 
-  /* ── Undo stack (moves + renames only — deletes are irreversible) ── */
+  /* ── File history: undo (Ctrl+Z) and redo (Ctrl+Y) of moves + renames ──
+     Deletes are not undoable here (the system trash restores them).
+     Every entry is { type:'move'|'rename', records:[{oldPath,newPath}],
+     links } — the operation moved each oldPath to newPath; undo moves it
+     back, redo moves it forward again. `links` is what happened to the
+     markdown links when it ran (see updateLinksAfterPathChange): undo and
+     redo repeat that choice (see followLinksOnReplay). */
   const MAX_UNDO  = 30;
-  const undoStack = []; // [{type:'move'|'rename', records:[{oldPath,newPath}]}]
+  const undoStack = []; // items are at newPath
+  const redoStack = []; // items are at oldPath (undone)
 
   /* ══════════════════════════════════════════════════════════════════
      LINK UPDATING ON RENAME/MOVE
@@ -214,16 +221,22 @@ import { decodeImportedText } from './import_text.js';
     else window.insertWithUndo(0, oldText.length, newText);
   }
 
+  /* → what happened, recorded with the operation for undo/redo:
+       'updated'  the links were rewritten (asked and agreed, or silently);
+                  a file that could not be updated is reported;
+       'declined' the user chose to leave every link as it was;
+       'none'     no link needed updating;
+       'failed'   an unexpected error stopped it (files left unchanged). */
   async function updateLinksAfterPathChange(records, { confirm = true } = {}) {
     try {
-      if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return;
+      if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return 'none';
       records = (records || []).filter((r) => r && r.oldPath && r.newPath
         && r.oldPath.replace(/\\/g, '/') !== r.newPath.replace(/\\/g, '/'));
-      if (!records.length) return;
+      if (!records.length) return 'none';
 
       invalidateProjectScan(); // paths just changed — never scan a stale tree
       const files = await listProjectTextFiles(['md', 'txt']);
-      if (!files.length) return;
+      if (!files.length) return 'none';
 
       const mapAbs = buildAbsMapper(records);
       const mapBack = buildAbsMapper(invertRecords(records));
@@ -251,7 +264,7 @@ import { decodeImportedText } from './import_text.js';
           plans.push({ path: f.path, opts, changes: res.changes });
         }
       }
-      if (!plans.length) return;
+      if (!plans.length) return 'none';
 
       if (confirm) {
         const total = plans.reduce((a, p) => a + p.changes, 0);
@@ -262,7 +275,7 @@ import { decodeImportedText } from './import_text.js';
           window.t('Update {n} link(s) in {m} file(s) so they keep working?')
             .replace('{n}', total).replace('{m}', plans.length),
           shown, window.t('Update links'));
-        if (!ok) return;
+        if (!ok) return 'declined';
       }
 
       /* APPLY — recompute from each file's CURRENT content: the user may have
@@ -298,27 +311,55 @@ import { decodeImportedText } from './import_text.js';
           detail: errors.join('\n'),
         });
       }
+      return 'updated';
     } catch (err) {
       /* Never let link maintenance break the rename itself. */
       console.error('[Sidebar] link update failed (files left unchanged):', err);
+      return 'failed';
     }
+  }
+
+  /* Links when undo/redo moves the items again, following what the user
+     chose when the operation ran:
+       'updated'  → the links followed then: follow again, without asking
+                    (undoing the move means restoring them);
+       'declined' → the user kept every link as it was: never touch them.
+                    A silent pass used to run anyway, and it rewrote the
+                    moved notes' own relative links — correct again once
+                    the notes were back — into broken ones;
+       otherwise  → nothing needed updating then (or a title rename, which
+                    never offers it): links written since are offered with
+                    the usual question.
+     → the outcome, which becomes the entry's choice from here on. */
+  async function followLinksOnReplay(records, choice) {
+    if (choice === 'declined') return 'declined';
+    const outcome = await updateLinksAfterPathChange(records, { confirm: choice !== 'updated' });
+    return (outcome === 'updated' || outcome === 'declined') ? outcome : choice;
   }
 
   /* ══════════════════════════════════════════════════════════════════
      UNDO STACK
   ══════════════════════════════════════════════════════════════════ */
 
+  /* A new operation ends the redo chain: the undone items may be where
+     the new operation needs their names, and redoing across it would act
+     on a tree it never saw. */
   function pushUndo(op) {
     undoStack.push(op);
     if (undoStack.length > MAX_UNDO) undoStack.shift();
+    redoStack.length = 0;
   }
 
-  /* The stack stays private to this module; other modules ask through
-     this function. (save.js used to read `undoStack` directly — a name
+  /* The stacks stay private to this module; other modules ask through
+     these functions. (save.js used to read `undoStack` directly — a name
      that does not exist there, which the bundle turned into a global
      lookup that threw on every sidebar Ctrl+Z.) */
   function hasUndoOperations() {
     return undoStack.length > 0;
+  }
+
+  function hasRedoOperations() {
+    return redoStack.length > 0;
   }
 
   /* ── The active file vs. rename/move operations ────────────────────── */
@@ -345,68 +386,94 @@ import { decodeImportedText } from './import_text.js';
     if (next && next !== S.activeFilePath) await retargetActiveFile(S.activeFilePath, next);
   }
 
-  /** File undo never reaches into another project (openFolder, Save As). */
+  /** Forget the file history (undo and redo). File undo never reaches into
+      another project (openFolder, Save As), and never runs across a delete:
+      a deleted item's name can be taken by a new one, which undo would
+      then move in its place. */
   function clearUndoStack() {
     undoStack.length = 0;
+    redoStack.length = 0;
   }
 
   /**
-   * Reverse the most recent move or rename operation.
-   * Works by renaming each record back, in reverse order. The keyboard
-   * shortcut only reaches here while the user works in the file panel
-   * (save.js sidebarUndoAllowed); a status message says what was undone.
+   * Undo (direction 'undo') or redo ('redo') the most recent entry.
+   * Undo renames each record back, in reverse order (a multi-rename unwinds
+   * cleanly); redo renames them forward again, in the order they first ran.
+   * Exactly the safety of the operation itself: one file operation at a
+   * time, the open note's edits on disk first, the renames inside the disk
+   * lock, the note and every remembered path follow, and the backends never
+   * overwrite. What actually moved goes to the other stack; an item that
+   * could not be moved is reported and dropped. The keyboard shortcuts only
+   * reach here while the user works in the file panel (save.js
+   * sidebarUndoAllowed); a status message says what was done.
    */
-  async function undoLastOperation() {
-    if (undoStack.length === 0) return;
+  async function stepFileHistory(direction) {
+    const redo = direction === 'redo';
+    const from = redo ? redoStack : undoStack;
+    const to   = redo ? undoStack : redoStack;
+    if (from.length === 0) return;
     if (S._operationLock) { reportBusy(); return; }
     S._operationLock = true;
     try {
-      const op = undoStack.pop();
-      const errors = [];
-      const undone = [];
-      const currentPaths = op.records.map((r) => r.newPath);
+      const op = from.pop();
+      const steps = op.records.map((rec) => (redo
+        ? { rec, at: rec.oldPath, dest: rec.newPath }
+        : { rec, at: rec.newPath, dest: rec.oldPath }));
+      if (!redo) steps.reverse();
+      const currentPaths = steps.map((s) => s.at);
 
       if (!(await settleActiveFileBefore(currentPaths))) {
-        undoStack.push(op); // the flush failed — keep the operation undoable
+        from.push(op); // the flush failed — keep the entry where it was
         return;
       }
 
-      /* Reverse in reverse order so a multi-rename undoes cleanly */
+      const errors = [];
+      const moved = [];  // this step's own moves, as {oldPath: from, newPath: to}
+      const done  = new Set(); // the entry's records that moved
       await inDiskLock(activeAffectedBy(currentPaths), async () => {
-        for (const { oldPath, newPath } of [...op.records].reverse()) {
+        for (const { rec, at, dest } of steps) {
           try {
-            await window.NativeAPI.renameNode(newPath, oldPath);
+            await window.NativeAPI.renameNode(at, dest);
           } catch (err) {
-            errors.push(`${baseNameOf(newPath)}: ${errText(err)}`);
+            errors.push(`${baseNameOf(at)}: ${errText(err)}`);
             continue;
           }
-          const back = { oldPath: newPath, newPath: oldPath };
-          undone.push(back);
-          await followActiveFile(newPath, oldPath);
-          remapPathState([back]);
+          const m = { oldPath: at, newPath: dest };
+          moved.push(m);
+          done.add(rec);
+          await followActiveFile(at, dest);
+          remapPathState([m]);
         }
       });
 
+      let entry = null;
+      if (moved.length) {
+        entry = { ...op, records: op.records.filter((r) => done.has(r)) };
+        to.push(entry);
+        if (to.length > MAX_UNDO) to.shift();
+      }
+
       selectedItems.clear(); S.selectionAnchor = null;
       await renderTree();
-      /* Reverse the link rewrites too — silently: undoing the rename means
-         restoring the links, no second confirmation needed. Only for what
-         actually moved back. */
-      if (undone.length) await updateLinksAfterPathChange(undone, { confirm: false });
+      /* The links follow as the user chose when the operation ran — only
+         for what actually moved. */
+      if (entry) entry.links = await followLinksOnReplay(moved, op.links);
 
-      if (undone.length && typeof window.showStatusWarning === 'function') {
+      if (moved.length && typeof window.showStatusWarning === 'function') {
         const msg = op.type === 'rename'
-          ? window.t('Undone: rename of "{name}".')
-          : window.t('Undone: move of {n} item(s).');
+          ? (redo ? window.t('Redone: rename of "{name}".') : window.t('Undone: rename of "{name}".'))
+          : (redo ? window.t('Redone: move of {n} item(s).') : window.t('Undone: move of {n} item(s).'));
         window.showStatusWarning('fs-undo',
-          msg.replace('{name}', baseNameOf(undone[0].newPath)).replace('{n}', undone.length),
+          msg.replace('{name}', baseNameOf(moved[0].newPath)).replace('{n}', moved.length),
           { priority: 20, ttl: 5000 });
       }
 
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
-          type: 'warning', title: window.t('Undo Failed Partially'),
-          message: window.t('{n} item(s) could not be moved back:').replace('{n}', errors.length),
+          type: 'warning',
+          title: redo ? window.t('Redo Failed Partially') : window.t('Undo Failed Partially'),
+          message: (redo ? window.t('{n} item(s) could not be moved again:')
+                         : window.t('{n} item(s) could not be moved back:')).replace('{n}', errors.length),
           detail: errors.join('\n'),
         });
       }
@@ -414,6 +481,9 @@ import { decodeImportedText } from './import_text.js';
       S._operationLock = false;
     }
   }
+
+  const undoLastOperation = () => stepFileHistory('undo');
+  const redoLastOperation = () => stepFileHistory('redo');
 
   /**
    * Move an array of {path, type} items into targetDir.
@@ -469,9 +539,10 @@ import { decodeImportedText } from './import_text.js';
       if (movedRecords.length) expandedDirs.add(targetDir); // show what arrived
       selectedItems.clear();
       S.selectionAnchor = null;
-      if (movedRecords.length) pushUndo({ type: 'move', records: movedRecords });
+      const entry = movedRecords.length ? { type: 'move', records: movedRecords, links: 'none' } : null;
+      if (entry) pushUndo(entry);
       await renderTree();
-      if (movedRecords.length) await updateLinksAfterPathChange(movedRecords);
+      if (entry) entry.links = await updateLinksAfterPathChange(movedRecords);
 
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
@@ -640,9 +711,10 @@ import { decodeImportedText } from './import_text.js';
       });
 
       selectedItems.clear(); S.selectionAnchor = null;
-      if (renamedRecords.length) pushUndo({ type: 'rename', records: renamedRecords });
+      const entry = renamedRecords.length ? { type: 'rename', records: renamedRecords, links: 'none' } : null;
+      if (entry) pushUndo(entry);
       await renderTree();
-      if (renamedRecords.length) await updateLinksAfterPathChange(renamedRecords);
+      if (entry) entry.links = await updateLinksAfterPathChange(renamedRecords);
       if (errors.length) {
         await window.NativeAPI.showMessageBox({
           type: 'warning', title: window.t('Rename Issues'),
@@ -720,6 +792,7 @@ import { decodeImportedText } from './import_text.js';
       if (!(await saveOpenNoteBeforeDelete(items.map((it) => it.path)))) return;
 
       const errors = [];
+      let deletedAny = false;
       await inDiskLock(activeAffectedBy(items.map((it) => it.path)), async () => {
         for (const { path: p } of items) {
           try {
@@ -728,10 +801,12 @@ import { decodeImportedText } from './import_text.js';
             errors.push(`${baseNameOf(p)}: ${errText(err)}`);
             continue;
           }
+          deletedAny = true;
           if (S.activeFilePath && isInsideRoot(S.activeFilePath, p)) await closeDeletedActiveFile();
           forgetDeletedPathState(p);
         }
       });
+      if (deletedAny) clearUndoStack(); // never undo/redo across a delete
 
       selectedItems.clear(); S.selectionAnchor = null;
       await renderTree();
@@ -912,6 +987,14 @@ import { decodeImportedText } from './import_text.js';
     startWatchingFile(filePath);
   }
 
+  /* No project is open: say so, and change nothing (text on screen stays). */
+  async function tellNoFolderOpen() {
+    await window.NativeAPI.showMessageBox({
+      type: 'info', title: window.t('No Folder Open'),
+      message: window.t('Please open a project folder first.')
+    }).catch(() => {});
+  }
+
   /**
    * Creates a new empty .md file in targetDir, then opens it.
    * Called by the "+" toolbar button AND by actions.js newFile().
@@ -919,19 +1002,15 @@ import { decodeImportedText } from './import_text.js';
   // AFTER
 async function createNewFile(targetDir) {
     if (S._operationLock || S._projectSwitch) { reportBusy(); return; }
+    /* No folder: nothing can be created — checked first, so text typed
+       with no project open is not sent through a save that must fail. */
+    const dir = targetDir || S.selectedDirPath || S.rootPath;
+    if (!dir) { await tellNoFolderOpen(); return; }
+
     /* Save the open note (or give typed text its note) first. If that
        fails, create nothing: the new file could not be opened anyway, and
        an empty "untitled" was left behind. */
     if (!(await saveBeforeLeaving())) return;
-
-    const dir = targetDir || S.selectedDirPath || S.rootPath;
-    if (!dir) {
-      await window.NativeAPI.showMessageBox({
-        type: 'info', title: window.t('No Folder Open'),
-        message: window.t('Please open a project folder first.')
-      });
-      return;
-    }
 
     // Retry loop handles the TOCTOU race between uniquePath() and createFile().
     // If another process creates the candidate filename in the gap, the Rust
@@ -1072,9 +1151,10 @@ async function renameNode(nodePath, type) {
         }).catch(() => {});
         return;
       }
-      pushUndo({ type: 'rename', records: [rec] });
+      const entry = { type: 'rename', records: [rec], links: 'none' };
+      pushUndo(entry);
       await renderTree();
-      await updateLinksAfterPathChange([rec]);
+      entry.links = await updateLinksAfterPathChange([rec]);
     } finally {
       S._operationLock = false;
     }
@@ -1122,6 +1202,7 @@ async function deleteNode(nodePath, type, isLink = false) {
         if (S.activeFilePath && isInsideRoot(S.activeFilePath, nodePath)) await closeDeletedActiveFile();
         forgetDeletedPathState(nodePath);
       });
+      if (!failure) clearUndoStack(); // never undo/redo across a delete
 
       if (failure) {
         console.error('[Sidebar] deleteNode failed:', failure);
@@ -1216,10 +1297,20 @@ function clearEditorForProjectSwitch() {
 async function switchProject(path) {
   const previousNote = S.activeFilePath;
   const previousRoot = S.rootPath;
-  let began = false; // this call emptied the editor (and so owns S._projectSwitch)
+  let began = false; // this call started the switch (and so owns S._projectSwitch)
   let failure = null;
   try {
-    if (!(await replaceOpenDocument(null, () => { began = true; clearEditorForProjectSwitch(); }))) return;
+    if (hasTextWithoutProject()) {
+      /* Text typed while no project was open has no note and nowhere to
+         be saved first. It used to be emptied away with the editor, its
+         only copy gone. It stays on screen instead, and gets its note in
+         the project opened now (resumeScratchpadAfterSwitch below). */
+      if (S._projectSwitch || S._operationLock) { reportBusy(); return; }
+      began = true;
+      S._projectSwitch = true;
+    } else if (!(await replaceOpenDocument(null, () => { began = true; clearEditorForProjectSwitch(); }))) {
+      return;
+    }
     // Non-fatal: the old note has left the editor even if this fails.
     await window.NativeAPI.clearLastOpenedFile().catch((e) => console.warn('[Sidebar] could not persist last-opened pointer (non-fatal):', e));
     await openFolder(path);
@@ -1238,7 +1329,9 @@ async function switchProject(path) {
       await window.NativeAPI.showMessageBox({
         type: 'error',
         title: window.t('Could Not Open Folder'),
-        message: window.t('"{name}" could not be opened. The current project stays open.')
+        message: (previousRoot
+          ? window.t('"{name}" could not be opened. The current project stays open.')
+          : window.t('"{name}" could not be opened.'))
           .replace('{name}', baseNameOf(path) || path),
         detail: errText(failure),
       }).catch(() => {});
@@ -1262,7 +1355,8 @@ async function promptOpenFolder() {
     }
   }
 
-export { pushUndo, hasUndoOperations, undoLastOperation, clearUndoStack, moveNodes,
+export { pushUndo, hasUndoOperations, undoLastOperation, hasRedoOperations,
+         redoLastOperation, clearUndoStack, moveNodes,
          moveItemsTo, moveItemsUp, moveUpTarget, renameSelectedNodes,
          deleteSelectedNodes, openMediaFile, openUnsupportedFile, openFile,
          createNewFile, createNewFolder, renameNode, deleteNode, itemInfo,
@@ -1286,8 +1380,11 @@ export function initFileOps() {
   window.sidebarImportFile = async function () {
     const dir = S.selectedDirPath || S.rootPath;
     if (!dir) {
-      /* No folder open — fall back to the legacy in-browser import */
-      if (typeof executeImport === 'function') executeImport();
+      /* No folder open: there is nowhere to import to. This used to fall
+         back to the web version's import, which REPLACED the text on screen
+         without asking (and without undo) — text that, with no project
+         open, had no other copy. */
+      await tellNoFolderOpen();
       return;
     }
 
