@@ -6,6 +6,7 @@
 3. [The NativeAPI Abstraction Layer](#the-nativeapi-abstraction-layer)
 4. [Boot Priority Logic](#boot-priority-logic)
 5. [Project File Sidebar](#project-file-sidebar)
+   - [Window Layout: Widths & Top Bar](#window-layout-widths--top-bar)
 6. [Electron Wrapper](#electron-wrapper)
 7. [Tauri Wrapper](#tauri-wrapper)
 8. [Data Safety & Crash Recovery](#data-safety--crash-recovery)
@@ -501,6 +502,45 @@ does and lifts the hold. A sticky status message says so. Reasons:
   cannot read.
 While held, the buffer is also mirrored to the durable backup slot. If the
 watcher cannot start, a status message says so.
+
+---
+
+## Window Layout: Widths & Top Bar
+
+One rule throughout: **sizes the user chose are pixels that a window
+resize never changes; when the window is too small they give way on
+screen only, and come back when there is room.** The saved values are
+never rewritten by a resize.
+
+**Text columns** (menus.js `applyColumnWidths`, `ColumnWidths`).
+Settings → *Reading width* (preview, reader mode, live preview) and
+*Editor width* (classic editor) store the TEXT width in px, or Full
+(`readingWidthPx` / `editingWidthPx`, `null` = Full), plus the last
+dragged width as a *Custom* row. The stylesheet caps each surface with
+`--reader-max-width` / `--editor-max-width`; live preview and the classic
+editor carry their side margins inside the capped box and add them back
+in their `max-width: calc()`, so one setting gives the same text width in
+LP and reader mode. Side margins (`--read-gutter`) are 52px on a roomy
+pane and shrink to 20px (5% of the pane, container units) on a narrow
+one, so a pane loses margin before it loses text. Settings saved before
+the px model (window/pane percentages, "Fixed width") are converted once
+against `screen.availWidth` and written back (`migrateLegacy`).
+
+**Panes.** The dragged editor/preview split (`savedEditorWidth`) and the
+sidebar width are px. The editor pane may shrink (`flex: 0 1 auto`) once
+the preview is at its 200px min-width, and the sidebar's `max-width`
+leaves both panes their minimums, so no saved width can push a pane or
+the divider off a smaller window.
+
+**Top bar** (layout.js "Top bar fit"). Labels never wrap. Instead of
+width breakpoints (the bar's content depends on UI size, language, word
+counter, status notices, logo position), a controller measures the two
+button groups and applies the first state that fits: hide Export →
+narrower title → short labels → minimal title → hide Outline, with the
+logo centred while possible and slid aside otherwise; the last resort
+narrows the title to the exact shortfall and right-aligns the row so the
+window controls stay visible. In the desktop app the phone layout
+(≤ 820px, the window's minimum is 640) keeps the window controls.
 
 ---
 

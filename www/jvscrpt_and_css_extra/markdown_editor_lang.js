@@ -23,6 +23,7 @@ window.uiTranslations = {
   "Export .md": { "Swedish": "Exportera .md" },
   "Export": { "Swedish": "Export" },
   "Reader Mode": { "Swedish": "Läsläge" },
+  "Reader": { "Swedish": "Läsläge" },
   "Exit Reader Mode": { "Swedish": "Avsluta läsläge" },
   "Nothing here yet": { "Swedish": "Inget här ännu" },
   "Untitled": { "Swedish": "Namnlös" },
@@ -35,14 +36,14 @@ window.uiTranslations = {
   "Show Word Counter": { "Swedish": "Visa ordräknare" },
   "Show Line Numbers": { "Swedish": "Visa radnummer" },
   "Mobile View": { "Swedish": "Mobilvy" },
-  "Reader padding ▸": { "Swedish": "Läsläge marginal ▸" },
+  "Reading width ▸": { "Swedish": "Läsbredd ▸" },
+  "Full width": { "Swedish": "Full bredd" },
   "Drag to adjust": { "Swedish": "Justera med drag" },
   "Custom": { "Swedish": "Anpassad" },
-  "Fixed width": { "Swedish": "Fast bredd" },
   "Panel order": { "Swedish": "Panelordning" },
   "Normal": { "Swedish": "Normal" },
   "Mirrored": { "Swedish": "Speglad" },
-  "Editor padding ▸": { "Swedish": "Redig. marginal ▸" },
+  "Editor width ▸": { "Swedish": "Redig. bredd ▸" },
   "Default": { "Swedish": "Standard" },
   "Calendar format ▸": { "Swedish": "Kalenderformat ▸" },
   "Filename format ▸": { "Swedish": "Filnamnsformat ▸" },
@@ -1138,7 +1139,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>UI Size / Text Size</strong> — "UI Size" scales menu buttons; "Text Size" scales editor and preview text.</li>
           <li><strong>Calendar Format</strong> (Settings menu) — choose how dates are inserted when you use the date toolbar action.</li>
           <li><strong>Drag the divider</strong> — the vertical bar between editor and preview can be dragged left or right to resize each pane.</li>
-          <li><strong>Text column width</strong> — hover the edge of the text column itself (in the editor or the preview/reader) and drag it to exactly the width you like; presets live under Settings → Editor padding ▸ and Reader padding ▸. The <em>Fixed width</em> toggle in each submenu freezes the current width in pixels, so it no longer follows the window when panes or the window resize.</li>
+          <li><strong>Text column width</strong> — Settings → Reading width ▸ (preview, reader mode and live preview) and Editor width ▸ (the Markdown editor) set the text column in pixels, or Full width. The width stays the same when you resize the window: in a pane too narrow for it the side margins shrink first, then the column, and your width comes back as soon as there is room. You can also hover the edge of the text column and drag it to exactly the width you like; it is kept as the <em>Custom</em> choice.</li>
           <li><strong>Panel order</strong> — Advanced Options → Panel order: <em>Mirrored</em> flips the whole layout, putting the preview on the left, the editor on the right, and the file panel on the right edge.</li>
           <li><strong>Panel label bars</strong> — Settings → Theme ▸: the <em>Panel label bars</em> row hides or shows the small title bars above the editor and preview panes for an even cleaner look. With the bars hidden (and always in Reader Mode), the text-size − / + buttons appear when you point at the top-right corner of a pane (desktop, with a mouse).</li>
           <li><strong>Click any preview block</strong> — jumps the editor cursor to the matching source line.</li>
@@ -1218,7 +1219,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>UI-storlek / textstorlek</strong> — "UI-storlek" skalar menyknappar; "Textstorlek" skalar redigerings- och förhandsgranskningstext.</li>
           <li><strong>Kalenderformat</strong> (Inställningar) — välj hur datum infogas när du använder datumverktyget.</li>
           <li><strong>Dra avdelaren</strong> — den vertikala stapeln mellan redigeraren och förhandsgranskningen kan dras åt vänster eller höger för att ändra storlek på varje ruta.</li>
-          <li><strong>Textkolumnens bredd</strong> — håll muspekaren över kanten på själva textkolumnen (i redigeraren eller förhandsgranskningen/läsläget) och dra den till precis den bredd du vill ha; förval finns under Inställningar → Redig. marginal ▸ och Läsläge marginal ▸. Knappen <em>Fast bredd</em> i respektive undermeny fryser den aktuella bredden i pixlar, så att den inte längre följer fönstret när rutorna eller fönstret ändrar storlek.</li>
+          <li><strong>Textkolumnens bredd</strong> — Inställningar → Läsbredd ▸ (förhandsgranskning, läsläge och Live Preview) och Redig. bredd ▸ (Markdown-redigeraren) anger textkolumnen i pixlar, eller Full bredd. Bredden är densamma när du ändrar fönstrets storlek: i en ruta som är för smal krymper först sidomarginalerna och sedan kolumnen, och din bredd kommer tillbaka så snart det finns plats. Du kan också hålla muspekaren över kanten på textkolumnen och dra den till precis den bredd du vill ha; den sparas som valet <em>Anpassad</em>.</li>
           <li><strong>Panelordning</strong> — Avancerade alternativ → Panelordning: <em>Speglad</em> vänder hela layouten, med förhandsgranskningen till vänster, redigeraren till höger och filpanelen vid högerkanten.</li>
           <li><strong>Panelrubriker</strong> — Inställningar → Tema ▸: raden <em>Panelrubriker</em> döljer eller visar de små rubrikraderna ovanför redigerar- och förhandsgranskningsrutorna för ett ännu renare utseende. När rubrikraderna är dolda (och alltid i läsläge) visas knapparna − / + för textstorlek när du pekar på det övre högra hörnet av en ruta (dator, med mus).</li>
           <li><strong>Klicka på ett förhandsgranskningsblock</strong> — hoppar redigerarens markör till motsvarande källrad.</li>

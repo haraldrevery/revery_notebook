@@ -151,8 +151,10 @@ colors apply in the classic editor too; TABLES render via a StateField
 table ranges so selection-only changes outside tables cost nothing),
 cells go through the same markdown-it + DOMPurify pipeline as the
 preview, and clicking a table places the cursor inside to edit raw;
-the 'Reader padding' setting now drives the live-preview column width
-(--reader-max-width, centered) exactly like reader mode.
+the Reading width setting drives the live-preview column width
+(--reader-max-width, centered) exactly like reader mode: the var is the
+TEXT width in px and the LP column adds its own side margins
+(--read-gutter) back, so both surfaces wrap text at the same width.
 
 ## 7. Order of work
 

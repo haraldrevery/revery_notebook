@@ -32,7 +32,7 @@ function openSidebar() {
     }
   }
 
-  let sbDragging = false, sbStartX = 0, sbStartW = 0;
+  let sbDragging = false, sbStartX = 0, sbStartW = 0, sbMaxW = 0;
   const MIN_SIDEBAR_W = 160, MAX_SIDEBAR_W = 1200;
 
 export { openSidebar, closeSidebar, switchFromMobileSidebar };
@@ -62,6 +62,14 @@ if (btnSidebar) btnSidebar.addEventListener('click', () => {
       sbDragging = true;
       sbStartX   = e.clientX;
       sbStartW   = sidebarPanel.getBoundingClientRect().width;
+      /* Grow only by what the visible panes can spare above their 200px
+         minimums — any wider pushes them off-screen. */
+      const spare = ['editor-pane', 'preview-pane'].reduce((sum, id) => {
+        const el = document.getElementById(id);
+        const w = el ? el.getBoundingClientRect().width : 0;
+        return sum + (w > 0 ? Math.max(0, w - 200) : 0);
+      }, 0);
+      sbMaxW = Math.min(MAX_SIDEBAR_W, Math.max(MIN_SIDEBAR_W, sbStartW + spare));
       document.body.style.cursor     = 'col-resize';
       document.body.style.userSelect = 'none';
     });
@@ -73,7 +81,7 @@ if (btnSidebar) btnSidebar.addEventListener('click', () => {
        its divider on the left — the same pointer movement must change the
        width in the other direction. Read at event time. */
     const dir = window.flipLayout ? -1 : 1;
-    const newW = Math.min(MAX_SIDEBAR_W, Math.max(MIN_SIDEBAR_W, sbStartW + dir * (e.clientX - sbStartX)));
+    const newW = Math.min(sbMaxW, Math.max(MIN_SIDEBAR_W, sbStartW + dir * (e.clientX - sbStartX)));
     sidebarPanel.style.width = newW + 'px';
   });
 

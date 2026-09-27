@@ -185,7 +185,7 @@ const lineNumbersCompartment = new Compartment();
     },
     // Editable content
     '.cm-content': {
-      padding: 'var(--editor-padding, 24px 28px)',
+      padding: '24px 28px', // the stylesheet owns it (#editor .cm-content: --editor-gutter)
       lineHeight: '1.7',
       letterSpacing: '0.01em',
       caretColor: 'var(--doc-text)',

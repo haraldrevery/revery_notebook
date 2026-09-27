@@ -24,8 +24,17 @@ let editorTextSize = 150; // Editor textarea font scale in %
 let previewTextSize = 140; // Preview prose font scale in %
 let outlineFontSize = 140; // Outline panel font scale in %, independent of editor/preview text
 
-let readerPadding = window.innerWidth <= 820 ? 'default' : '40'; // Reader mode content width: 'default' | '80' | '60' | '50'
-let editorPadding = 'default'; // Editor padding: 'default' | '5%' | '10%' | '15%' | '20%' | '25%' | '30%'
+/* Text column widths in CSS px — the TEXT itself, margins excluded; null
+   = Full (as wide as the pane allows). readingWidthPx drives the preview,
+   reader mode and live preview; editingWidthPx the classic Markdown
+   editor. Fixed on screen: resizing the window never changes them. A
+   pane too narrow for the width only shrinks the column on screen
+   (max-width in the stylesheet) — the saved value is never touched and
+   comes back when the room does. See applyColumnWidths. */
+let readingWidthPx = 720;
+let editingWidthPx = null;
+let readingWidthCustomPx = null; // last DRAGGED widths, kept as their own
+let editingWidthCustomPx = null; // selectable "Custom" rows (see the menus)
 let editorFontType = 'harald'; // Editor font style ('harald' is default)
 
 let previewFontType = 'harald'; // Preview font style ('harald' is default)
@@ -44,22 +53,99 @@ let editorBgGradient = false;     // true = gradient fade, false = solid colour
 let logoPosition = 'center';      // top bar logo: 'center' | 'left' (Advanced Options)
 let readerDragEnabled = true;     // drag the reading-column edge to resize it (desktop)
 window.readerDragEnabled = true;  // Mirror read by layout.js at event time
-let readerPaddingCustom = null;   // last dragged width in vw — stays selectable after preset clicks
-/* Fixed-width mode: freeze the chosen width in PIXELS so half-screen ↔
-   full-screen keeps the same column (max-width/min() clamp still shrink
-   it when the viewport is smaller). The px is captured ONCE at selection
-   or toggle-on time and persisted — never recomputed at boot or resize,
-   or the frozen width would drift with whatever window size boots first. */
-let readerPaddingFixed   = false; // Reader padding: apply as frozen px instead of vw
-let readerPaddingFixedPx = null;  // the frozen reader column width (px)
-let editorPaddingFixed   = false; // Editor padding: freeze the column width in px
-let editorPaddingFixedColPx = null; // the frozen editor COLUMN width (px, base padding included)
-let editorPaddingCustom = null;   // last dragged editor width in vw — kept selectable like the reader's
 let editorDragEnabled = true;     // drag the editor column edge to resize it (desktop, classic mode)
 window.editorDragEnabled = true;  // Mirror read by layout.js at event time
 let flipLayout = false;           // mirror the desktop panel order (Advanced Options)
 window.flipLayout = false;        // Mirror read by the drag handlers at event time
 let paneLabelsHidden = false;     // hide the editor/preview panel label bars (Theme submenu)
+
+/* ── Text column widths: presets, validation, legacy migration ──────────
+   Pure (no DOM), exposed as window.ReveryColumnWidths so the E2E can
+   drive migrateLegacy with a table of old settings blobs. */
+const ColumnWidths = (() => {
+  const PRESETS = [480, 560, 640, 720, 800, 880, 960, 1040, 1120, 1280];
+  const MIN = 120;   // same floor as the edge drag (layout.js)
+  const MAX = 10000;
+  /* The old classic-editor column caps INCLUDED the 28px side padding;
+     the px model stores the text alone. */
+  const OLD_EDITOR_PAD = 2 * 28;
+
+  const clampPx = (v) => Math.round(Math.min(Math.max(v, MIN), MAX));
+
+  /* A stored width: null (Full) or an in-range px number. Returns
+     undefined for anything else, so the caller keeps its default. */
+  function valid(v) {
+    if (v === null) return null;
+    if (typeof v === 'number' && isFinite(v) && v >= MIN && v <= MAX) return Math.round(v);
+    return undefined;
+  }
+  function validCustom(v) {
+    const n = valid(v);
+    return n === undefined ? null : n; // a Custom row is a number or absent
+  }
+
+  /* The screen's usable width — what a maximized window is. Legacy
+     fractions are converted against it (not the window: the app always
+     opens at 1280 wide, which would shrink a full-screen user's column). */
+  function referenceWidth() {
+    const w = window.screen && window.screen.availWidth;
+    return (typeof w === 'number' && w > 0) ? w : (window.innerWidth || 1280);
+  }
+
+  const READER_VW = ['90', '80', '70', '60', '50', '40', '30', '25', '20', '15', '10'];
+  const EDITOR_PCT = ['95%', '90%', '85%', '80%', '75%', '70%', '60%', '50%', '40%', '30%', '25%', '20%', '15%'];
+  const customVw = (tok) => {
+    const m = /^custom:(\d+(?:\.\d+)?)$/.exec(String(tok));
+    return m ? Math.min(Math.max(parseFloat(m[1]), 5), 100) : null;
+  };
+  const posNum = (v) => typeof v === 'number' && isFinite(v) && v > 0;
+
+  /* Settings written before the px model stored the reading width as a
+     share of the WINDOW (vw presets, 'custom:<vw>' drags) and the editing
+     width as the text's share of the PANE ('N%' presets), with an optional
+     frozen px ("Fixed width", whose editor value included the padding).
+     Returns only the keys it could convert; undefined = keep the default. */
+  function migrateLegacy(s, refW) {
+    const out = {};
+    const ofRef = (pct) => clampPx(refW * pct / 100);
+
+    const rTok = s.readerPadding;
+    const rFixed = s.readerPaddingFixed === true && posNum(s.readerPaddingFixedPx);
+    if (rFixed) out.readingWidthPx = clampPx(s.readerPaddingFixedPx);
+    else if (rTok === 'default') out.readingWidthPx = null;
+    else if (customVw(rTok) !== null) out.readingWidthPx = ofRef(customVw(rTok));
+    else if (READER_VW.includes(String(rTok))) out.readingWidthPx = ofRef(parseFloat(rTok));
+    if (rFixed && customVw(rTok) !== null) {
+      out.readingWidthCustomPx = out.readingWidthPx; // the drag's exact px
+    } else if (posNum(s.readerPaddingCustom)) {
+      out.readingWidthCustomPx = ofRef(Math.min(Math.max(s.readerPaddingCustom, 5), 100));
+    } else if (customVw(rTok) !== null) {
+      out.readingWidthCustomPx = out.readingWidthPx;
+    }
+
+    const eTok = s.editorPadding;
+    const eFixed = s.editorPaddingFixed === true && posNum(s.editorPaddingFixedColPx);
+    const ofRefEd = (vw) => clampPx(refW * vw / 100 - OLD_EDITOR_PAD);
+    if (eFixed) out.editingWidthPx = clampPx(s.editorPaddingFixedColPx - OLD_EDITOR_PAD);
+    else if (eTok === 'default') out.editingWidthPx = null;
+    else if (customVw(eTok) !== null) out.editingWidthPx = ofRefEd(customVw(eTok));
+    else if (EDITOR_PCT.includes(String(eTok))) out.editingWidthPx = ofRef(parseFloat(eTok));
+    if (eFixed && customVw(eTok) !== null) {
+      out.editingWidthCustomPx = out.editingWidthPx;
+    } else if (posNum(s.editorPaddingCustom)) {
+      out.editingWidthCustomPx = ofRefEd(Math.min(Math.max(s.editorPaddingCustom, 5), 100));
+    } else if (customVw(eTok) !== null) {
+      out.editingWidthCustomPx = out.editingWidthPx;
+    }
+    return out;
+  }
+  const LEGACY_KEYS = ['readerPadding', 'readerPaddingCustom', 'readerPaddingFixed',
+    'readerPaddingFixedPx', 'editorPadding', 'editorPaddingCustom', 'editorPaddingFixed',
+    'editorPaddingFixedColPx', 'editorPaddingFixedPx'];
+
+  return { PRESETS, MIN, MAX, valid, validCustom, referenceWidth, migrateLegacy, LEGACY_KEYS };
+})();
+window.ReveryColumnWidths = ColumnWidths;
 
 /* ── Background image options ─────────────────────────────────────────────
    To add a new background: append a new entry to this array.
@@ -80,7 +166,7 @@ window.saveEditorSettings = function() {
   const settings = {
     lineNumbersVisible,
     forcedSyncEnabled: window.forcedSyncEnabled, rightClickDisabled, previewVisible, wordCountVisible, mobileView, readerMode, outlineVisible,
-    uiSize, editorTextSize, previewTextSize, outlineFontSize, readerPadding, editorPadding, editorFontType, previewFontType, uiLanguage,
+    uiSize, editorTextSize, previewTextSize, outlineFontSize, editorFontType, previewFontType, uiLanguage,
     currentDateFormat: window.currentDateFormat,
 
     
@@ -102,12 +188,10 @@ window.saveEditorSettings = function() {
     yamlPropsCollapsed,
     logoPosition,
     readerDragEnabled,
-    readerPaddingCustom,
-    readerPaddingFixed,
-    readerPaddingFixedPx,
-    editorPaddingFixed,
-    editorPaddingFixedColPx,
-    editorPaddingCustom,
+    readingWidthPx,
+    editingWidthPx,
+    readingWidthCustomPx,
+    editingWidthCustomPx,
     editorDragEnabled,
     flipLayout,
     paneLabelsHidden
@@ -153,8 +237,6 @@ function loadEditorSettings() {
 
       if (s.outlineFontSize !== undefined) outlineFontSize = s.outlineFontSize;
       
-      if (s.readerPadding !== undefined) readerPadding = s.readerPadding;
-      if (s.editorPadding !== undefined) editorPadding = s.editorPadding;
       if (s.editorFontType !== undefined) editorFontType = s.editorFontType;
       if (s.previewFontType !== undefined) previewFontType = s.previewFontType;
       if (s.uiLanguage !== undefined) {
@@ -195,42 +277,47 @@ function loadEditorSettings() {
     if (s.editorBgGradient !== undefined) editorBgGradient = s.editorBgGradient;
     if (s.logoPosition === 'left' || s.logoPosition === 'center') logoPosition = s.logoPosition;
     if (s.readerDragEnabled !== undefined) readerDragEnabled = !!s.readerDragEnabled;
-    if (typeof s.readerPaddingCustom === 'number' && isFinite(s.readerPaddingCustom)) {
-      readerPaddingCustom = s.readerPaddingCustom;
+    /* Column widths. A blob from before the px model has the legacy keys
+       instead: convert them once and write the result straight back, so
+       the conversion never repeats against a different screen. */
+    let w = s;
+    if (!('readingWidthPx' in s) && !('editingWidthPx' in s)
+        && ColumnWidths.LEGACY_KEYS.some(k => k in s)) {
+      w = ColumnWidths.migrateLegacy(s, ColumnWidths.referenceWidth());
+      widthsMigrated = true;
     }
-    if (s.readerPaddingFixed !== undefined) readerPaddingFixed = !!s.readerPaddingFixed;
-    if (typeof s.readerPaddingFixedPx === 'number' && isFinite(s.readerPaddingFixedPx) && s.readerPaddingFixedPx > 0) {
-      readerPaddingFixedPx = s.readerPaddingFixedPx;
-    }
-    if (s.editorPaddingFixed !== undefined) editorPaddingFixed = !!s.editorPaddingFixed;
-    /* Editor fixed width now freezes the COLUMN in px (new key). The
-       legacy editorPaddingFixedPx held a per-side PADDING px and is
-       deliberately ignored — reading it as a column width would crush
-       the editor. Fixed mode behaves as relative until the next preset
-       click / toggle recycle / drag captures a column value. */
-    if (typeof s.editorPaddingFixedColPx === 'number' && isFinite(s.editorPaddingFixedColPx) && s.editorPaddingFixedColPx > 0) {
-      editorPaddingFixedColPx = s.editorPaddingFixedColPx;
-    }
-    if (typeof s.editorPaddingCustom === 'number' && isFinite(s.editorPaddingCustom)) {
-      editorPaddingCustom = s.editorPaddingCustom;
-    }
+    const rw = ColumnWidths.valid(w.readingWidthPx);
+    if (rw !== undefined) readingWidthPx = rw;
+    const ew = ColumnWidths.valid(w.editingWidthPx);
+    if (ew !== undefined) editingWidthPx = ew;
+    readingWidthCustomPx = ColumnWidths.validCustom(w.readingWidthCustomPx);
+    editingWidthCustomPx = ColumnWidths.validCustom(w.editingWidthCustomPx);
     if (s.editorDragEnabled !== undefined) editorDragEnabled = !!s.editorDragEnabled;
     if (s.flipLayout !== undefined) flipLayout = !!s.flipLayout;
     if (s.paneLabelsHidden !== undefined) paneLabelsHidden = !!s.paneLabelsHidden;
-    /* Settings written before readerPaddingCustom existed can still carry
-       an ACTIVE custom token — derive the remembered value from it. */
-    if (readerPaddingCustom === null) {
-      const m = /^custom:(\d+(?:\.\d+)?)$/.exec(String(readerPadding));
-      if (m) readerPaddingCustom = parseFloat(m[1]);
-    }
-    if (editorPaddingCustom === null) {
-      const m = /^custom:(\d+(?:\.\d+)?)$/.exec(String(editorPadding));
-      if (m) editorPaddingCustom = parseFloat(m[1]);
-    }
     }
   } catch (e) {}
+  /* A width that matches no preset is shown (and re-selectable) as the
+     Custom row — e.g. a converted 768 px. */
+  if (readingWidthPx !== null && !ColumnWidths.PRESETS.includes(readingWidthPx)) {
+    readingWidthCustomPx = readingWidthPx;
+  }
+  if (editingWidthPx !== null && !ColumnWidths.PRESETS.includes(editingWidthPx)) {
+    editingWidthCustomPx = editingWidthPx;
+  }
 }
+let widthsMigrated = false;
 loadEditorSettings();
+/* Persist a legacy conversion right away. Only the width keys are
+   touched — the rest of the blob stays byte-for-byte what was loaded. */
+if (widthsMigrated) {
+  try {
+    const blob = JSON.parse(localStorage.getItem('revery_md_settings'));
+    ColumnWidths.LEGACY_KEYS.forEach(k => { delete blob[k]; });
+    Object.assign(blob, { readingWidthPx, editingWidthPx, readingWidthCustomPx, editingWidthCustomPx });
+    localStorage.setItem('revery_md_settings', JSON.stringify(blob));
+  } catch (_) { /* storage unavailable: converts again next boot */ }
+}
 setReaderDragEnabled(readerDragEnabled); // sync mirror + body class with the loaded value
 setEditorDragEnabled(editorDragEnabled); // same, for the editor column drag
 applyFlipLayout(); // sync mirror + body class with the loaded value (no save)
@@ -257,6 +344,7 @@ window.applyDOMTranslations = function() {
   updateTxt('#btn-toolbar .btn-label-desktop', 'Toolbar ▾');
   updateTxt('#btn-toolbar .btn-label-mobile', 'Tool.');
   updateTxt('#btn-reader-mode .btn-label-desktop', 'Reader Mode');
+  updateTxt('#btn-reader-mode .btn-label-mobile', 'Reader');
   updateTxt('#btn-exit-reader-mode', 'Exit Reader Mode');
   updateTxt('#btn-reader-outline', 'Outline');
   updateTxt('#btn-export .btn-label-desktop', 'Export .md');
@@ -586,51 +674,18 @@ function applyUiSizeProseCompensation() {
     `:root { --prose-base-size: calc(1.125rem * ${inv} * ${tScale}); }`;
 }
 
-/* Apply reader mode padding: constrains the prose content width so text
-   doesn't stretch edge-to-edge on large monitors in reader mode.
-   Uses a CSS custom property (--reader-max-width) defined in :root.     */
-/* The active reader token as a vw number, or null for 'default'/unknown.
-   Shared by the relative apply path and the fixed-px capture. */
-function readerTokenToVw() {
-  const presets = {
-    '90': 90, '80': 80, '70': 70, '60': 60, '50': 50, '40': 40,
-    '30': 30, '25': 25, '20': 20, '15': 15, '10': 10,
-  };
-  const custom = /^custom:(\d+(?:\.\d+)?)$/.exec(String(readerPadding));
-  if (custom) return Math.min(Math.max(parseFloat(custom[1]), 5), 100);
-  return presets[readerPadding] !== undefined ? presets[readerPadding] : null;
+/* Apply the column widths. --reader-max-width / --editor-max-width hold
+   the TEXT width ('none' = Full); the stylesheet caps each surface with
+   it and adds the surface's own margins where they sit inside the capped
+   box (live preview, classic editor), so one value means the same text
+   width in the preview, reader mode and live preview. Also the live
+   write target of the edge drag (layout.js). */
+function applyColumnWidths() {
+  const root = document.documentElement.style;
+  root.setProperty('--reader-max-width', readingWidthPx === null ? 'none' : readingWidthPx + 'px');
+  root.setProperty('--editor-max-width', editingWidthPx === null ? 'none' : editingWidthPx + 'px');
 }
-
-function applyReaderPadding() {
-  /* Fixed-width mode: the frozen px wins. max-width self-clamps when the
-     pane is narrower, so no explicit min() is needed here. A missing px
-     (never captured) falls through to the relative behavior below.     */
-  if (readerPaddingFixed && typeof readerPaddingFixedPx === 'number'
-      && isFinite(readerPaddingFixedPx) && readerPaddingFixedPx > 0) {
-    document.documentElement.style.setProperty('--reader-max-width', Math.round(readerPaddingFixedPx) + 'px');
-    return;
-  }
-  /* Relative mode (the original logic): presets and the dragged
-     'custom:<n>' token scale with the window as vw. Unknown tokens
-     (incl. on an older build) fall through to 'none'.                  */
-  const vw = readerTokenToVw();
-  const val = vw === null ? 'none' : vw + 'vw';
-  document.documentElement.style.setProperty('--reader-max-width', val);
-}
-applyReaderPadding(); // Apply the 50% default on load
-
-/* Freeze the CURRENT reader selection into px. Preset/custom tokens use
-   exact math; 'default' (uncapped) freezes the column as rendered. Null
-   when nothing sensible can be captured — fixed mode then behaves like
-   relative until a preset/drag provides a value.                       */
-function captureReaderFixedPx() {
-  const vw = readerTokenToVw();
-  if (vw !== null) return Math.round(window.innerWidth * vw / 100);
-  const col = document.querySelector('#preview .prose')
-    || document.querySelector('#editor .cm-content');
-  const w = col ? col.getBoundingClientRect().width : 0;
-  return w > 50 ? Math.round(w) : null;
-}
+applyColumnWidths();
 
 /* Toggle for the drag-the-edge width adjustment (desktop only). The body
    class gates the CSS affordance (edge line, col-resize cursor); the
@@ -640,22 +695,6 @@ function setReaderDragEnabled(on) {
   window.readerDragEnabled = readerDragEnabled;
   document.body.classList.toggle('reader-drag-enabled', readerDragEnabled);
 }
-/* Drag-end hook for layout.js: persist the dragged width as the active
-   Reader padding value and refresh the submenu checkmarks. */
-window.commitReaderDragWidth = function (vw, px) {
-  readerPaddingCustom = vw;          // remembered even after picking a preset
-  readerPadding = 'custom:' + vw;    // and active right now
-  if (readerPaddingFixed) {
-    /* Fixed mode: keep the drag's EXACT pixel result (no vw roundtrip);
-       fall back to token math if the caller didn't pass one. */
-    readerPaddingFixedPx = (typeof px === 'number' && isFinite(px) && px > 0)
-      ? Math.round(px)
-      : captureReaderFixedPx();
-  }
-  applyReaderPadding();
-  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-  buildSettingsMenu();
-};
 
 /* Toggle for dragging the classic editor column edge (desktop only).
    The window mirror gates layout.js's event handlers at call time. */
@@ -665,137 +704,87 @@ function setEditorDragEnabled(on) {
   document.body.classList.toggle('editor-drag-enabled', editorDragEnabled);
 }
 
-/* Drag hooks for the classic editor column (layout.js).
-   beginEditorDragWidth runs on the FIRST MOVE of an edge drag (a mere
-   edge click mutates nothing): it converts the live padding geometry
-   LOSSLESSLY into the max-width mechanism — the capped element is
-   text-width + 2×28px base padding, and margin:auto re-centers it
-   exactly where the symmetric padding held the text, so nothing jumps —
-   and returns the seed width for layout.js's delta math. Classic mode
-   only (the drag surface never engages in Live Preview), so measuring
-   the live element is safe here. */
-window.beginEditorDragWidth = function () {
-  const col = document.querySelector('#editor .cm-content');
-  if (!col) return null;
-  const rect = col.getBoundingClientRect();
-  if (!(rect.width > 0)) return null;
-  const cs = getComputedStyle(col);
-  const text = rect.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  if (!(text > 0)) return null;
-  const seed = Math.round(text + 56);
-  document.documentElement.style.setProperty('--editor-padding', '24px 28px');
-  document.documentElement.style.setProperty('--editor-max-width', seed + 'px');
-  return seed;
+/* Drag-end hooks for layout.js: the dragged text width (px) becomes the
+   active width AND the remembered Custom row, which keeps its place after
+   a preset is picked. */
+window.commitReaderDragWidth = function (px) {
+  const w = ColumnWidths.valid(Math.round(px));
+  if (typeof w !== 'number') return;
+  readingWidthPx = readingWidthCustomPx = w;
+  applyColumnWidths();
+  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+  buildSettingsMenu();
 };
-/* Drag-end hook: persist the dragged editor width, mirroring
-   commitReaderDragWidth. */
-window.commitEditorDragWidth = function (vw, px) {
-  editorPaddingCustom = vw;          // remembered even after picking a preset
-  editorPadding = 'custom:' + vw;    // and active right now
-  if (editorPaddingFixed) {
-    editorPaddingFixedColPx = (typeof px === 'number' && isFinite(px) && px > 0)
-      ? Math.round(px)
-      : captureEditorFixedColPx();
-  }
-  applyEditorPadding();
+window.commitEditorDragWidth = function (px) {
+  const w = ColumnWidths.valid(Math.round(px));
+  if (typeof w !== 'number') return;
+  editingWidthPx = editingWidthCustomPx = w;
+  applyColumnWidths();
   if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
   buildSettingsMenu();
 };
 
 
-/* Single source for the desktop editor-padding presets — the fixed-width
-   capture derives its horizontal component from the SAME table, so the
-   two can never drift apart. */
-const EDITOR_PADDING_MAP = {
-  'default': '24px 28px',
-  '95%': '24px 2.5%',
-  '90%': '24px 5%',
-  '85%': '24px 7.5%',
-  '80%': '24px 10%',
-  '75%': '24px 12.5%',
-  '70%': '24px 15%',
-  '60%': '24px 20%',
-  '50%': '24px 25%',
-  '40%': '24px 30%',
-  '30%': '24px 35%',
-  '25%': '24px 40%',
-  '20%': '24px 42%',
-  '15%': '24px 45%'
-};
+/* One Settings submenu per column width: Full, the px presets, the
+   remembered dragged width ("Custom"), then the desktop-only "Drag to
+   adjust" toggle. ■ marks the active width; a width off the presets is
+   the Custom row (see loadEditorSettings). The Custom row stays AFTER
+   the presets: the e2e clickSetting matcher takes the FIRST textContent
+   match, so '720 px' must land on the preset before 'Custom (1720 px)'. */
+function buildColumnWidthSubmenu(title, current, customPx, pick, dragOn, toggleDrag) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'menu-item has-submenu';
+  const label = document.createElement('span');
+  label.textContent = window.t(title);
+  wrapper.appendChild(label);
+  const sub = document.createElement('div');
+  sub.className = 'submenu';
+  sub.style.display = 'none';
 
-/* The active editor 'custom:<n>' drag token as a vw number, or null for
-   presets/'default'. Mirrors readerTokenToVw. */
-function editorTokenToVw() {
-  const custom = /^custom:(\d+(?:\.\d+)?)$/.exec(String(editorPadding));
-  if (custom) return Math.min(Math.max(parseFloat(custom[1]), 5), 100);
-  return null;
-}
-
-function applyEditorPadding() {
-  const map = EDITOR_PADDING_MAP;
-  const mapMobile = {
-    'default': '24px 20px 40vh',
-    '95%': '24px 2.5% 40vh',
-    '90%': '24px 5% 40vh',
-    '85%': '24px 7.5% 40vh',
-    '80%': '24px 10% 40vh',
-    '75%': '24px 12.5% 40vh',
-    '70%': '24px 15% 40vh',
-    '60%': '24px 20% 40vh',
-    '50%': '24px 25% 40vh',
-    '40%': '24px 30% 40vh',
-    '30%': '24px 35% 40vh',
-    '25%': '24px 25% 40vh',
-    '20%': '24px 20% 40vh',
-    '15%': '24px 15% 40vh'
+  const addRow = (text, active, px) => {
+    const btn = document.createElement('button');
+    btn.className = 'menu-item';
+    btn.textContent = (active ? '■ ' : '  ') + text;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      pick(px);
+      applyColumnWidths();
+      settingsDropdown.classList.remove('show');
+      buildSettingsMenu();
+      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+    };
+    sub.appendChild(btn);
   };
-  /* Column-width modes (reader parity): --editor-max-width caps and
-     centers .cm-content in classic mode (desktop media rule in the
-     stylesheet) exactly like --reader-max-width does for the preview;
-     the padding drops to the base so the two mechanisms never stack.
-     A frozen px wins over the dragged custom token (max-width
-     self-clamps when the pane is narrower). Presets keep the original
-     padding emission untouched. Desktop only: the mobile variant always
-     stays relative, and unknown tokens fall back to its default.       */
-  let val = map[editorPadding] || '24px 28px';
-  let maxW = 'none';
-  const vw = editorTokenToVw();
-  if (editorPaddingFixed && typeof editorPaddingFixedColPx === 'number'
-      && isFinite(editorPaddingFixedColPx) && editorPaddingFixedColPx > 0) {
-    val = '24px 28px';
-    maxW = Math.round(editorPaddingFixedColPx) + 'px';
-  } else if (vw !== null) {
-    val = '24px 28px';
-    maxW = vw + 'vw';
+  addRow(window.t('Full width'), current === null, null);
+  ColumnWidths.PRESETS.forEach(px => addRow(px + ' px', current === px, px));
+  if (customPx !== null) {
+    addRow(window.t('Custom') + ' (' + customPx + ' px)',
+      current === customPx && !ColumnWidths.PRESETS.includes(current), customPx);
   }
-  const valMobile = mapMobile[editorPadding] || '24px 20px 40vh';
-  document.documentElement.style.setProperty('--editor-padding', val);
-  document.documentElement.style.setProperty('--editor-padding-mobile', valMobile);
-  document.documentElement.style.setProperty('--editor-max-width', maxW);
-}
-applyEditorPadding();
 
-/* Freeze the CURRENT editor selection's COLUMN width (the .cm-content
-   element, base padding included) into px. Computed ARITHMETICALLY from
-   the active token — never measured from the live element, which in
-   Live Preview is the LP column (reader-padding sized), not this one.
-   Preset gutters are h% of the pane per side; the capped element carries
-   the 28px base padding per side instead, so add it back (2 × 28).     */
-function captureEditorFixedColPx() {
-  const vw = editorTokenToVw();
-  if (vw !== null) return Math.round(window.innerWidth * vw / 100);
-  const pane = document.getElementById('editor-pane');
-  const paneW = pane ? pane.clientWidth : 0;
-  if (paneW <= 0) return null;
-  const shorthand = EDITOR_PADDING_MAP[editorPadding] || EDITOR_PADDING_MAP['default'];
-  const h = shorthand.split(/\s+/)[1] || '28px';
-  if (h.endsWith('%')) {
-    return Math.round(paneW * (1 - 2 * parseFloat(h) / 100) + 56);
+  /* Drag-the-edge toggle — desktop only, like the drag layer itself
+     (innerWidth-gated in layout.js). */
+  if (window.innerWidth > 820) {
+    const dragBtn = document.createElement('button');
+    dragBtn.className = 'menu-item';
+    const dragCheck = document.createElement('span');
+    dragCheck.className = 'menu-item-check';
+    dragCheck.textContent = dragOn ? '■' : '□';
+    dragBtn.appendChild(dragCheck);
+    dragBtn.appendChild(document.createTextNode(window.t('Drag to adjust')));
+    dragBtn.onclick = (e) => {
+      e.stopPropagation();
+      toggleDrag();
+      buildSettingsMenu();
+      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+    };
+    sub.appendChild(dragBtn);
   }
-  return Math.round(paneW); // 'default' = full pane width (effectively uncapped)
+
+  wrapper.appendChild(sub);
+  attachSubmenuHandlers(wrapper, sub);
+  settingsDropdown.appendChild(wrapper);
 }
-
-
 
 /* Apply background image to the preview area via CSS variable.
    Slow hardware mode suppresses the image (large JPEG decode + composite)
@@ -1730,9 +1719,14 @@ function applyPaneLayout() {
   prPane.style.display  = previewVisible ? '' : 'none';
   divider.style.display = previewVisible ? '' : 'none';
   if (previewVisible) {
-    // Split layout — use the user's last dragged width if available
+    /* Split layout — the user's last dragged width (px) if any. The pane
+       keeps that width when the window resizes, but it may SHRINK
+       (flex-shrink 1) once the preview is down to its 200px min-width:
+       a width saved on a bigger window can then never push the preview
+       and the divider off-screen. The saved value is untouched, so the
+       split comes back when the room does. */
     edPane.style.width = window.savedEditorWidth || '33.33%';
-    edPane.style.flex  = 'none';
+    edPane.style.flex  = '0 1 auto';
   } else {
     // Editor fills the workspace
     edPane.style.width = '100%';
@@ -2477,241 +2471,13 @@ function buildSettingsMenu() {
     settingsDropdown.appendChild(mobileBtn);
   }
 
-// ── Reader Padding submenu (controls prose max-width in reader / preview mode)
-const readerPaddingOptions = [
-  { label: '100%',     val: 'default' },
-  { label: '90%',      val: '90' },
-  { label: '80%',      val: '80' },
-  { label: '70%',      val: '70' },
-  { label: '60%',      val: '60' },
-  { label: '50%',      val: '50' },
-  { label: '40%',      val: '40' },
-  { label: '30%',      val: '30' },
-  { label: '25%',      val: '25' },
-  { label: '20%',      val: '20' },
-  { label: '15%',      val: '15' },
-  { label: '10%',      val: '10' }
-];
-  const readerPadWrapper = document.createElement('div');
-  readerPadWrapper.className = 'menu-item has-submenu';
-
-  const readerPadLabel = document.createElement('span');
-  readerPadLabel.textContent = window.t('Reader padding ▸');
-  readerPadWrapper.appendChild(readerPadLabel);
-
-  const readerPadSub = document.createElement('div');
-  readerPadSub.className = 'submenu';
-  readerPadSub.style.display = 'none';
-
-  readerPaddingOptions.forEach(opt => {
-    const btn = document.createElement('button');
-    btn.className = 'menu-item';
-    btn.textContent = (readerPadding === opt.val ? '■ ' : '\u00a0\u00a0') + opt.label;
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      readerPadding = opt.val;
-      /* Fixed-width mode freezes THIS choice in px, right now. */
-      if (readerPaddingFixed) readerPaddingFixedPx = captureReaderFixedPx();
-      applyReaderPadding();
-      settingsDropdown.classList.remove('show');
-      buildSettingsMenu();
-      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-    };
-    readerPadSub.appendChild(btn);
-  });
-
-  /* The last width set by DRAGGING the column edge, remembered as its own
-     selectable option (readerPaddingCustom): it keeps its place after the
-     user picks a preset, so they can flip back to their dragged width —
-     and it survives restarts via the settings blob. Behaves exactly like
-     a preset row (■ when active, closes the menu on click). Placed AFTER
-     the presets: the e2e clickSetting matcher takes the FIRST textContent
-     match, so preset labels must win even when the percentage contains
-     their digits.                                                       */
-  if (typeof readerPaddingCustom === 'number' && isFinite(readerPaddingCustom)) {
-    const customActive = /^custom:/.test(String(readerPadding));
-    const customBtn = document.createElement('button');
-    customBtn.className = 'menu-item';
-    customBtn.textContent = (customActive ? '■ ' : '  ')
-      + window.t('Custom') + ' (' + Math.round(readerPaddingCustom) + '%)';
-    customBtn.onclick = (e) => {
-      e.stopPropagation();
-      readerPadding = 'custom:' + readerPaddingCustom;
-      if (readerPaddingFixed) readerPaddingFixedPx = captureReaderFixedPx();
-      applyReaderPadding();
-      settingsDropdown.classList.remove('show');
-      buildSettingsMenu();
-      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-    };
-    readerPadSub.appendChild(customBtn);
-  }
-
-  /* Drag-the-edge toggle (desktop only — the drag layer itself is also
-     innerWidth-gated in layout.js). NOTE: the label must not contain the
-     substrings "50" or "100%" — the e2e clickSetting matcher selects the
-     preset options above by textContent.includes.                       */
-  if (window.innerWidth > 820) {
-    const dragBtn = document.createElement('button');
-    dragBtn.className = 'menu-item';
-    const dragCheck = document.createElement('span');
-    dragCheck.className = 'menu-item-check';
-    dragCheck.textContent = readerDragEnabled ? '■' : '□';
-    dragBtn.appendChild(dragCheck);
-    dragBtn.appendChild(document.createTextNode(window.t('Drag to adjust')));
-    dragBtn.onclick = (e) => {
-      e.stopPropagation();
-      setReaderDragEnabled(!readerDragEnabled);
-      buildSettingsMenu();
-      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-    };
-    readerPadSub.appendChild(dragBtn);
-  }
-
-  /* Fixed width: freeze the current reader width in px so half-screen ↔
-     full-screen keeps the same column (it still shrinks when the pane is
-     narrower — max-width clamps natively). Off = the original relative
-     (vw) behavior. Desktop only, like the drag toggle above.           */
-  if (window.innerWidth > 820) {
-    const fixBtn = document.createElement('button');
-    fixBtn.className = 'menu-item';
-    const fixCheck = document.createElement('span');
-    fixCheck.className = 'menu-item-check';
-    fixCheck.textContent = readerPaddingFixed ? '■' : '□';
-    fixBtn.appendChild(fixCheck);
-    fixBtn.appendChild(document.createTextNode(window.t('Fixed width')));
-    fixBtn.onclick = (e) => {
-      e.stopPropagation();
-      readerPaddingFixed = !readerPaddingFixed;
-      if (readerPaddingFixed) readerPaddingFixedPx = captureReaderFixedPx();
-      applyReaderPadding();
-      buildSettingsMenu();
-      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-    };
-    readerPadSub.appendChild(fixBtn);
-  }
-
-  readerPadWrapper.appendChild(readerPadSub);
-  attachSubmenuHandlers(readerPadWrapper, readerPadSub);
-  settingsDropdown.appendChild(readerPadWrapper);
-
-// ── Editor Padding submenu
-const editorPaddingOptions = [
-  { label: '100%',  val: 'default' },
-  { label: '95%',      val: '95%' },
-  { label: '90%',      val: '90%' },
-  { label: '85%',      val: '85%' },
-  { label: '80%',      val: '80%' },
-  { label: '75%',      val: '75%' },
-  { label: '70%',      val: '70%' },
-  { label: '60%',      val: '60%' },
-  { label: '50%',      val: '50%' },
-  { label: '40%',      val: '40%' },
-  { label: '30%',      val: '30%' },
-  { label: '25%',      val: '25%' },
-  { label: '20%',      val: '20%' },
-  { label: '15%',      val: '15%' }
-];
-
-
-
-
-  const editorPadWrapper = document.createElement('div');
-  editorPadWrapper.className = 'menu-item has-submenu';
-
-  const editorPadLabel = document.createElement('span');
-  editorPadLabel.textContent = window.t('Editor padding ▸');
-  editorPadWrapper.appendChild(editorPadLabel);
-
-  const editorPadSub = document.createElement('div');
-  editorPadSub.className = 'submenu';
-  editorPadSub.style.display = 'none';
-
-  editorPaddingOptions.forEach(opt => {
-    const btn = document.createElement('button');
-    btn.className = 'menu-item';
-    btn.textContent = (editorPadding === opt.val ? '■ ' : '\u00a0\u00a0') + window.t(opt.label);
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      editorPadding = opt.val;
-      /* Fixed-width mode freezes THIS choice in px, right now. */
-      if (editorPaddingFixed) editorPaddingFixedColPx = captureEditorFixedColPx();
-      applyEditorPadding();
-      settingsDropdown.classList.remove('show');
-      buildSettingsMenu();
-      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-    };
-    editorPadSub.appendChild(btn);
-  });
-
-  /* The last width set by DRAGGING the editor column edge, remembered as
-     its own selectable option — mirrors the reader's Custom row. Placed
-     AFTER the presets (e2e clickSetting takes the FIRST textContent
-     match, so preset labels must win even when the percentage contains
-     their digits). */
-  if (typeof editorPaddingCustom === 'number' && isFinite(editorPaddingCustom)) {
-    const eCustomActive = /^custom:/.test(String(editorPadding));
-    const eCustomBtn = document.createElement('button');
-    eCustomBtn.className = 'menu-item';
-    eCustomBtn.textContent = (eCustomActive ? '■ ' : '  ')
-      + window.t('Custom') + ' (' + Math.round(editorPaddingCustom) + '%)';
-    eCustomBtn.onclick = (e) => {
-      e.stopPropagation();
-      editorPadding = 'custom:' + editorPaddingCustom;
-      if (editorPaddingFixed) editorPaddingFixedColPx = captureEditorFixedColPx();
-      applyEditorPadding();
-      settingsDropdown.classList.remove('show');
-      buildSettingsMenu();
-      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-    };
-    editorPadSub.appendChild(eCustomBtn);
-  }
-
-  /* Drag-the-edge toggle (desktop only — the drag layer itself is also
-     innerWidth-gated in layout.js). Same label constraints as the
-     reader's row above. */
-  if (window.innerWidth > 820) {
-    const eDragBtn = document.createElement('button');
-    eDragBtn.className = 'menu-item';
-    const eDragCheck = document.createElement('span');
-    eDragCheck.className = 'menu-item-check';
-    eDragCheck.textContent = editorDragEnabled ? '■' : '□';
-    eDragBtn.appendChild(eDragCheck);
-    eDragBtn.appendChild(document.createTextNode(window.t('Drag to adjust')));
-    eDragBtn.onclick = (e) => {
-      e.stopPropagation();
-      setEditorDragEnabled(!editorDragEnabled);
-      buildSettingsMenu();
-      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-    };
-    editorPadSub.appendChild(eDragBtn);
-  }
-
-  /* Fixed width: freeze the current editor COLUMN in px so half-screen ↔
-     full-screen keeps the same column (max-width self-clamps when the
-     pane is narrower). Off = the original relative behavior. Desktop
-     only; the mobile padding variant always stays relative.            */
-  if (window.innerWidth > 820) {
-    const eFixBtn = document.createElement('button');
-    eFixBtn.className = 'menu-item';
-    const eFixCheck = document.createElement('span');
-    eFixCheck.className = 'menu-item-check';
-    eFixCheck.textContent = editorPaddingFixed ? '■' : '□';
-    eFixBtn.appendChild(eFixCheck);
-    eFixBtn.appendChild(document.createTextNode(window.t('Fixed width')));
-    eFixBtn.onclick = (e) => {
-      e.stopPropagation();
-      editorPaddingFixed = !editorPaddingFixed;
-      if (editorPaddingFixed) editorPaddingFixedColPx = captureEditorFixedColPx();
-      applyEditorPadding();
-      buildSettingsMenu();
-      if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-    };
-    editorPadSub.appendChild(eFixBtn);
-  }
-
-  editorPadWrapper.appendChild(editorPadSub);
-  attachSubmenuHandlers(editorPadWrapper, editorPadSub);
-  settingsDropdown.appendChild(editorPadWrapper);
+  // ── Column width submenus (px text widths — see applyColumnWidths)
+  buildColumnWidthSubmenu('Reading width ▸', readingWidthPx, readingWidthCustomPx,
+    (px) => { readingWidthPx = px; },
+    readerDragEnabled, () => setReaderDragEnabled(!readerDragEnabled));
+  buildColumnWidthSubmenu('Editor width ▸', editingWidthPx, editingWidthCustomPx,
+    (px) => { editingWidthPx = px; },
+    editorDragEnabled, () => setEditorDragEnabled(!editorDragEnabled));
 
   // ── Calendar Format Submenu
   const formatOptions = [

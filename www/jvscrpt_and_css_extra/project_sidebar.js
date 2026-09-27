@@ -2268,6 +2268,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   var sbDragging = false;
   var sbStartX = 0;
   var sbStartW = 0;
+  var sbMaxW = 0;
   var MIN_SIDEBAR_W = 160;
   var MAX_SIDEBAR_W = 1200;
   function initPanel() {
@@ -2293,6 +2294,12 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         sbDragging = true;
         sbStartX = e.clientX;
         sbStartW = sidebarPanel.getBoundingClientRect().width;
+        const spare = ["editor-pane", "preview-pane"].reduce((sum, id) => {
+          const el = document.getElementById(id);
+          const w = el ? el.getBoundingClientRect().width : 0;
+          return sum + (w > 0 ? Math.max(0, w - 200) : 0);
+        }, 0);
+        sbMaxW = Math.min(MAX_SIDEBAR_W, Math.max(MIN_SIDEBAR_W, sbStartW + spare));
         document.body.style.cursor = "col-resize";
         document.body.style.userSelect = "none";
       });
@@ -2300,7 +2307,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     document.addEventListener("mousemove", (e) => {
       if (!sbDragging) return;
       const dir = window.flipLayout ? -1 : 1;
-      const newW = Math.min(MAX_SIDEBAR_W, Math.max(MIN_SIDEBAR_W, sbStartW + dir * (e.clientX - sbStartX)));
+      const newW = Math.min(sbMaxW, Math.max(MIN_SIDEBAR_W, sbStartW + dir * (e.clientX - sbStartX)));
       sidebarPanel.style.width = newW + "px";
     });
     document.addEventListener("mouseup", () => {

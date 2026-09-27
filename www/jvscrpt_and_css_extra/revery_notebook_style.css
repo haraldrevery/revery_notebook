@@ -153,9 +153,17 @@ html :is(#preview, .lp-render) .prose b {
   --tracking-wider:   0.16em;
   /* ── Outline pane font scale (set via Settings → Outline font size) ── */
   --outline-font-size: 0.76rem;
-  /* ── Reader mode content max-width (set via Settings → Reader padding) ── */
+  /* ── Text column widths (menus.js applyColumnWidths; the edge drag in
+     layout.js writes them live). The TEXT width in px, or none (Full):
+     Reading width → preview, reader mode, live preview; Editor width →
+     classic editor. Surfaces whose margins sit INSIDE the capped box
+     (LP, classic editor) add them in their own max-width calc(). ── */
   --reader-max-width: none;
-  --editor-max-width: none; /* classic editor column cap (Editor padding fixed/drag) */
+  --editor-max-width: none;
+  /* Side margins beside those columns. --read-gutter shrinks with the
+     pane where container units exist (see "Column margins" below). */
+  --read-gutter: 52px;
+  --editor-gutter: 28px;
 }
 /* ── Editor UI Themes ──
    Rules that differ between light and dark palettes key on html.dark
@@ -346,15 +354,38 @@ body {
 
 
 
-@media (max-width: 1480px) and (min-width: 751px) {
-  #doc-title {
-    width: 180px;        /* Slightly narrower on medium screens */
-  }
-
-   /* NEW: Hide the Export .md button on medium-width screens */
-  #btn-export {
-    display: none !important;
-  }
+/* ── Top bar fit (desktop) ────────────────────────────────────────────────
+   Labels never wrap (a wrapped label is what made buttons turn "thick").
+   Instead of width breakpoints — the bar's content width depends on the
+   UI size, language, word counter, status notices and logo position —
+   the fit controller in markdown_editor_layout.js measures the two
+   groups and sets the first of these (cumulative) states that fits on
+   #topbar:
+     tb-no-export  hide "Export .md" (File ▸ Export as .md has it)
+     tb-title-mid  document title 320 → 180px
+     tb-short      short labels (File / Reader / Set. / Tool.)
+     tb-title-min  document title 96px
+     tb-no-outline hide Outline (Settings ▸ Show Outline has it; not in
+                   reader mode, where the Settings menu is hidden)
+     tb-squeeze    last resort: the title narrows to what is left
+                   (--tb-title-w, set by the controller), the logo joins
+                   the row, and the row aligns right so that any
+                   remaining overflow leaves the window controls visible
+   The centred logo stays centred while it can, then slides aside (inline
+   `left`) rather than run under a group. */
+#topbar .tb-btn { white-space: nowrap; }
+@media (min-width: 821px) {
+  #topbar-left,
+  #topbar-right { flex: none; }
+  #topbar.tb-no-export #btn-export { display: none !important; }
+  #topbar.tb-title-mid #doc-title { width: 180px; }
+  #topbar.tb-title-min #doc-title { width: 96px; }
+  #topbar.tb-short .btn-label-desktop { display: none; }
+  #topbar.tb-short .btn-label-mobile { display: inline; }
+  body:not(.reader-mode-active) #topbar.tb-no-outline #btn-reader-outline { display: none !important; }
+  #topbar.tb-squeeze { justify-content: flex-end; column-gap: 12px; }
+  #topbar.tb-squeeze #doc-title { width: var(--tb-title-w, 96px); }
+  #topbar.tb-squeeze #topbar-center { position: static; transform: none; }
 }
 
 #doc-title::placeholder { color: var(--text-dim); }
@@ -582,7 +613,7 @@ body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
   font-size: 0.96rem;
   line-height: 1.7;
   letter-spacing: 0.01em;
-  padding: var(--editor-padding, 24px 28px);
+  padding: 24px 28px; /* inert: #editor.cm-editor zeroes it (padding lives on .cm-content) */
   overflow-y: auto;
   tab-size: 2;
   white-space: pre-wrap;
@@ -599,10 +630,27 @@ body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
   overflow: hidden;
   min-width: 200px;
 }
+/* Column margins. The reading column's side margin (--read-gutter) is
+   52px on a roomy pane and shrinks toward 20px on a narrow one (5% of the
+   pane), so a pane that can't hold the chosen width loses margin before
+   it loses text. The panes are the size containers the cqi unit reads.
+   Without container units the :root 52px stays. The live preview's
+   .cm-content uses the same variable (padding parity with #preview). */
+@supports (width: 1cqi) {
+  #editor-pane,
+  #preview-pane {
+    container-type: inline-size;
+    --read-gutter: clamp(20px, 5cqi, 52px);
+  }
+}
+@media (max-width: 820px) {
+  #editor-pane,
+  #preview-pane { --read-gutter: 20px; }
+}
 #preview {
   flex: 1;
   overflow-y: auto;
-  padding: 40px 52px 80px;
+  padding: 40px var(--read-gutter) 80px;
   position: relative;
   /* ── Apply background directly to prevent scrolling ── */
   background-size: cover;
@@ -875,7 +923,10 @@ button.yaml-toggle:focus-visible { outline: none; }
 /* ── Mobile / narrow ── */
 @media (max-width: 820px) {
   #divider { display: none; }
-  #win-controls { display: none !important; }
+  /* The desktop app keeps its window controls in the phone layout too
+     (the window can be 640px wide): a frameless window has no other
+     visible way to close. Last in every row. Web: never shown. */
+  #win-controls { order: 20; }
   /* Show mobile sidebar button, hide desktop one */
   #btn-sidebar { display: none !important; }
   #btn-sidebar-mobile { display: inline-flex !important; margin-right: auto; }
@@ -894,7 +945,7 @@ button.yaml-toggle:focus-visible { outline: none; }
 
 
 #editor  { 
-    padding: var(--editor-padding-mobile, 24px 20px 40vh); /* 40vh ensures text lifts above the virtual keyboard */
+    padding: 24px 20px 40vh; /* inert: #editor.cm-editor zeroes it */
     font-size: var(--text-body-mobile);
     line-height: var(--text-line-row-space);
   }
@@ -904,6 +955,9 @@ button.yaml-toggle:focus-visible { outline: none; }
   #topbar       { padding: 0 4px; justify-content: stretch; gap: 0; }
 
   #topbar-right { flex: 1; justify-content: space-evenly; gap: 0; }
+  /* A row too long for the window (large UI size) wraps instead of
+     running off the right edge with the window controls. */
+  #topbar-right { flex-wrap: wrap; row-gap: 8px; }
 
 
 /* ── Filename bar & Button row spacing in editor mode ── */
@@ -1015,7 +1069,7 @@ body[data-view="editor"] #topbar-left #wordcount {
   }
 
   /* FIX: Hide the empty menu wrapper divs to eliminate ghost flex gaps */
-  body[data-view="preview"] #topbar-right > div {
+  body[data-view="preview"] #topbar-right > div:not(#win-controls) {
     display: none !important;
   }
 
@@ -1394,13 +1448,13 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
     z-index: 5;
   }
   /* Inset the preview text past the overlay (old squeeze geometry: the
-     base 52px right padding now measured from the outline's left edge).
+     base side margin now measured from the outline's left edge).
      Padding changes the CONTENT area only — the border box that the
      cover-fitted texture paints against never moves. Covers normal
      preview and reader mode; the LP editor twin lives with the LP
      padding-parity override further down (needs higher specificity). */
   body.outline-open #preview {
-    padding-right: calc(var(--outline-pane-w, 200px) + 52px);
+    padding-right: calc(var(--outline-pane-w, 200px) + var(--read-gutter));
   }
   /* The pane the overlay floats over: the preview whenever it is
      displayed, otherwise the editor. The editor is alone when live
@@ -1532,14 +1586,14 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   }
 }
 
-/* ── Reader mode content width — controlled via Settings → Reader padding ── */
+/* ── Reading column width — Settings → Reading width (--reader-max-width, px text width) ── */
 #preview .prose {
   max-width: var(--reader-max-width, none);
   /* margin: 0 auto already present via the prose wrapper's mx-auto class */
   transition: max-width 0.25s ease;
 }
 
-/* ── Drag-the-edge affordance (Reader padding → "Drag to adjust") ────────
+/* ── Drag-the-edge affordance (Reading width → "Drag to adjust") ─────────
    layout.js sets body.reader-edge-hover while the pointer is within ±6px
    of the reading column's edge, and body.reader-edge-dragging during the
    drag. The faint edge lines are BOX-SHADOW slivers (2px, offset past the
@@ -1565,7 +1619,7 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
     transition: none;
   }
 
-  /* Same affordance for the CLASSIC editor column (Editor padding →
+  /* Same affordance for the CLASSIC editor column (Editor width →
      "Drag to adjust"; layout.js sets body.editor-edge-hover/-dragging).
      Scoped :not(.live-preview-active) — in LP the reader rules above
      own the CM column. */
@@ -1947,7 +2001,7 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
       so that applyTextSize() in menus.js (which sets #editor.style.fontSize)
       cascades down here automatically.                                        */
 #editor .cm-content {
-  padding:        var(--editor-padding, 24px 28px);
+  padding:        24px var(--editor-gutter);
   font-size:      inherit;       /* inherits the JS-set size from #editor        */
   line-height:    inherit;
   letter-spacing: inherit;
@@ -1957,27 +2011,26 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   min-height:     100%;
 }
 
-/* Classic-editor column width — Editor padding's Fixed width / dragged
-   custom values (--editor-max-width stays 'none' for the presets, which
-   keep their original padding emission). Same centered-column mechanism
-   the live preview uses with --reader-max-width; :not() keeps the two
-   modes disjoint. Desktop only: the mobile editor always stays
-   relative (matching --editor-padding-mobile). */
-@media (min-width: 821px) {
-  body:not(.live-preview-active) #editor .cm-content {
-    max-width: var(--editor-max-width, none);
-    margin-left: auto;
-    margin-right: auto;
-  }
-  body:not(.live-preview-active) #editor .cm-scroller {
-    justify-content: center;
-  }
+/* Classic-editor column width (Settings → Editor width, or an edge drag).
+   --editor-max-width is the TEXT width and the side padding sits inside
+   this border-box element, so the cap adds it back. With 'none' (Full)
+   the calc() is invalid at computed-value time, so max-width falls back
+   to its initial value — none — and the column fills the pane. Centered
+   like the live preview's column; :not() keeps the two modes disjoint. */
+body:not(.live-preview-active) #editor .cm-content {
+  max-width: calc(var(--editor-max-width) + 2 * var(--editor-gutter));
+  margin-left: auto;
+  margin-right: auto;
+}
+body:not(.live-preview-active) #editor .cm-scroller {
+  justify-content: center;
 }
 
 /* 4. Mobile padding — mirrors the old mobile #editor rule */
 @media (max-width: 820px) {
+  :root { --editor-gutter: 20px; }
   #editor .cm-content {
-    padding:     var(--editor-padding-mobile, 24px 20px 40vh);
+    padding:     24px var(--editor-gutter) 40vh;
     font-size:   inherit;
     line-height: var(--text-line-row-space, 1.24);
   }
@@ -2135,7 +2188,10 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
   flex-direction: column;
   width: 220px;
   min-width: 160px;
-  max-width: 1200px;
+  /* Never wider than what leaves the editor and preview their 200px
+     min-widths (+ two 1px dividers): a width saved on a big screen can
+     then never push the panes off a smaller window. */
+  max-width: min(1200px, calc(100vw - 402px));
   background: var(--bg-secondary, var(--bg));
   border-right: 1px solid var(--border-md, rgba(128,128,128,0.18));
   overflow: hidden;
@@ -2406,11 +2462,15 @@ body.live-preview-active .cm-content {
     font-size: var(--text-body-mobile, 1.07rem) !important;
   }
 }
-/* Content column width follows the 'Reader padding' setting, exactly
-   like the preview/reader (--reader-max-width, e.g. 40vw; 'default'
-   removes the cap). Centered the same way.                            */
+/* Content column width follows Settings → Reading width, exactly like
+   the preview/reader: --reader-max-width is the TEXT width. This
+   border-box element carries its side margins inside (padding parity
+   below), so the cap adds them back — one setting, identical text width
+   in LP and reader mode. With 'none' (Full) the calc() is invalid at
+   computed-value time and max-width falls back to its initial value,
+   none. Centered the same way. */
 body.live-preview-active #editor .cm-content {
-  max-width: var(--reader-max-width, none);
+  max-width: calc(var(--reader-max-width) + 2 * var(--read-gutter));
   margin-left: auto;
   margin-right: auto;
 }
@@ -2763,18 +2823,17 @@ body.live-preview-active #editor .lp-raw-hang {
 
 
 /* Live preview padding parity: the content surface uses the SAME
-   padding as #preview/reader mode (40px 52px 80px desktop, 28px 20px
-   80px mobile — keep in sync with the #preview rules). The editor's own
-   padding lives on .cm-content via the CM theme (--editor-padding), so
-   the override targets the SAME element (!important beats the injected
-   theme). Toggling LP off restores the Editor padding setting
-   untouched — same pattern as the pane width and fonts. */
+   padding as #preview/reader mode (40px/80px vertical and the shared
+   --read-gutter sides; 28px 20px 80px at the ≤820px mobile breakpoint,
+   like #preview). The CM theme also pads .cm-content, so the override
+   targets the SAME element (!important beats the injected theme).
+   Toggling LP off restores the classic editor's padding untouched. */
 body.live-preview-active #editor .cm-content {
-  padding: 40px 52px 80px !important;
+  padding: 40px var(--read-gutter) 80px !important;
 }
-@media (max-width: 899px) {
+@media (max-width: 820px) {
   body.live-preview-active #editor .cm-content {
-    padding: 28px 20px 80px !important;
+    padding: 28px var(--read-gutter) 80px !important;
   }
 }
 /* Desktop outline overlay open: inset the LP text past the floating
@@ -2783,7 +2842,7 @@ body.live-preview-active #editor .cm-content {
    .cm-content is border-box and capped by --reader-max-width, so extra
    padding there would eat the text column from the inside. Shrinking
    the scroller's content area re-centers the column in the strip left
-   of the outline, and .cm-content's own 52px padding keeps the gap.  */
+   of the outline, and .cm-content's own side padding keeps the gap. */
 @media (min-width: 821px) {
   body.outline-open.live-preview-active #editor .cm-scroller {
     padding-right: var(--outline-pane-w, 200px) !important;
@@ -3095,11 +3154,11 @@ body.live-preview-active #editor .cm-content {
     left: var(--outline-pane-w, 200px); /* kept in sync by the drag handler */
   }
   /* Text insets move to the left side with the overlay (base horizontal
-     padding is 52px each side — both set explicitly to override the
+     margin is --read-gutter each side — both set explicitly to override the
      unflipped rules). */
   body.flip-layout.outline-open #preview {
-    padding-right: 52px;
-    padding-left: calc(var(--outline-pane-w, 200px) + 52px);
+    padding-right: var(--read-gutter);
+    padding-left: calc(var(--outline-pane-w, 200px) + var(--read-gutter));
   }
   body.flip-layout.outline-open.live-preview-active #editor .cm-scroller {
     padding-right: 0 !important;

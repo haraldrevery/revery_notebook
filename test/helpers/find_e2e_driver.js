@@ -136,8 +136,8 @@
      not change #preview-pane's box at all — the cover-fitted texture on
      #preview therefore can never re-fit or shift on toggle. The TEXT is
      kept out from under the panel instead: body.outline-open pads the
-     preview content right by outline width + the base 52px (old squeeze
-     geometry), and back to 52px when closed.                           */
+     preview content right by outline width + the side margin
+     (--read-gutter: 5% of the pane, 20–52px), and back when closed.   */
   {
     const pane = document.getElementById('preview-pane');
     const outline = document.getElementById('outline-pane');
@@ -148,14 +148,15 @@
     const overlaps = outline.getBoundingClientRect().left
       < pane.getBoundingClientRect().right - 5;
     const paneAfter = pane.getBoundingClientRect().width;
-    const insetOpen = previewCS.paddingRight;   // outline 200px wide → 252px
+    const insetOpen = previewCS.paddingRight;   // outline 200px wide → 200 + gutter
     toggleOutline();
     await sleep(250);
     pipeline.textureStable = shown && overlaps
       && Math.abs(paneAfter - paneBefore) < 1
       && previewCS.backgroundImage.includes('data:image');
-    pipeline.outlineInsetsText = insetOpen === '252px'
-      && previewCS.paddingRight === '52px';
+    const gutter = Math.min(52, Math.max(20, 0.05 * paneBefore));
+    pipeline.outlineInsetsText = Math.abs(parseFloat(insetOpen) - (200 + gutter)) < 0.6
+      && Math.abs(parseFloat(previewCS.paddingRight) - gutter) < 0.6;
   }
   window.removeCustomBackgroundImage();
   window.setBackgroundOpacity(null);
@@ -553,13 +554,19 @@
     && edPad.paddingTop === pvPad.paddingTop
     && edPad.paddingBottom === pvPad.paddingBottom;
 
-  /* Reader padding drives the live-preview column width. */
-  const rpClicked = clickSetting('Reader padding', '50');
+  /* Reading width drives the live-preview column: the var is the TEXT
+     width in px and the LP column adds its own side margins back, so the
+     text inside is exactly the chosen width (window 1100 → room for 800). */
+  const textWidth = (el) => {
+    const cs = getComputedStyle(el);
+    return el.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  };
+  const rwClicked = clickSetting('Reading width', '800 px');
   await sleep(300);
-  const cmMaxW = getComputedStyle(document.querySelector('.cm-content')).maxWidth;
-  lpV2.readerPadding = rpClicked && Math.abs(parseFloat(cmMaxW) - window.innerWidth * 0.5) < 3;
+  lpV2.readingWidth = rwClicked
+    && Math.abs(textWidth(document.querySelector('#editor .cm-content')) - 800) < 1.5;
 
-  /* Drag-the-edge (Reader padding → "Drag to adjust", ON by default):
+  /* Drag-the-edge (Reading width → "Drag to adjust", ON by default):
      a capture-phase mousedown within ±6px of the column edge starts a
      symmetric resize and swallows the click (CM selection untouched);
      with the toggle off the same gesture must be completely inert.   */
@@ -586,30 +593,32 @@
     mm(r.right - 82); await sleep(80);
     mu(r.right - 82);
     await sleep(250);
-    const persisted = (() => {
-      try { return JSON.parse(localStorage.getItem('revery_md_settings')).readerPadding; }
-      catch (_) { return null; }
-    })();
+    const blob = settingsNow();
+    /* Grabbed 2px inside the edge, released 82px inside: symmetric
+       resize → 164px narrower text (the border box's margins stay),
+       saved as px, active AND remembered as the Custom row. */
     lpV2.readerDragResizes = startedDrag
-      && /vw$/.test(rdVar()) && rdVar() !== '50vw'
-      && /^custom:\d/.test(String(persisted))
+      && rdVar() === blob.readingWidthPx + 'px'
+      && Math.abs(blob.readingWidthPx - 636) <= 2
+      && blob.readingWidthCustomPx === blob.readingWidthPx
+      && Math.abs(textWidth(col) - blob.readingWidthPx) < 1.5
       && window.cmView.state.selection.main.head === selBefore;
 
-    /* The submenu must show a checked "Custom (n%)" row while a dragged
+    /* The submenu must show a checked "Custom (n px)" row while a dragged
        width is active — placed AFTER the presets so clickSetting's
        first-match-wins lookup still lands on preset labels. */
     {
       const rpWrapper = Array.from(document.querySelectorAll('#settings-dropdown .menu-item'))
-        .find(el => el.textContent.includes('Reader padding'));
+        .find(el => el.textContent.includes('Reading width'));
       const rows = rpWrapper ? Array.from(rpWrapper.querySelectorAll('.submenu button')) : [];
       const customIdx = rows.findIndex(b => b.textContent.includes('Custom ('));
-      const preset50Idx = rows.findIndex(b => b.textContent.includes('50'));
+      const preset800Idx = rows.findIndex(b => b.textContent.includes('800 px'));
       lpV2.readerDragCustomRow = customIdx > -1
         && rows[customIdx].textContent.includes('■')
-        && preset50Idx > -1 && preset50Idx < customIdx;
+        && preset800Idx > -1 && preset800Idx < customIdx;
     }
 
-    clickSetting('Reader padding', 'drag to adjust'); // toggle OFF
+    clickSetting('Reading width', 'drag to adjust'); // toggle OFF
     await sleep(150);
     const varBefore2 = rdVar();
     const r2 = document.querySelector('#editor .cm-content').getBoundingClientRect();
@@ -618,14 +627,15 @@
     lpV2.readerDragToggleOff = window.readerDragEnabled === false
       && !document.body.classList.contains('reader-edge-dragging')
       && rdVar() === varBefore2;
-    clickSetting('Reader padding', 'drag to adjust'); // restore the default ON
+    clickSetting('Reading width', 'drag to adjust'); // restore the default ON
     await sleep(100);
   }
 
-  clickSetting('Reader padding', '100%'); // label of the val:'default' option
+  clickSetting('Reading width', 'full width');
   await sleep(200);
-  lpV2.readerPaddingResets =
-    getComputedStyle(document.querySelector('.cm-content')).maxWidth === 'none';
+  lpV2.readingWidthResets =
+    getComputedStyle(document.querySelector('.cm-content')).maxWidth === 'none'
+    && settingsNow().readingWidthPx === null;
 
   /* The Custom row PERSISTS after picking a preset — unchecked, still
      showing the last dragged width — and clicking it re-applies it. */
@@ -634,7 +644,7 @@
       .getPropertyValue('--reader-max-width').trim();
     const findCustom = () => {
       const wrapper = Array.from(document.querySelectorAll('#settings-dropdown .menu-item'))
-        .find(el => el.textContent.includes('Reader padding'));
+        .find(el => el.textContent.includes('Reading width'));
       return wrapper && Array.from(wrapper.querySelectorAll('.submenu button'))
         .find(b => b.textContent.includes('Custom ('));
     };
@@ -642,74 +652,50 @@
     const persistedUnchecked = !!row && !row.textContent.includes('■');
     if (row) row.click();
     await sleep(200);
-    const reappliedVw = /vw$/.test(rdVar()) && rdVar() !== 'none';
+    const reapplied = rdVar() === settingsNow().readingWidthCustomPx + 'px';
     const rowChecked = (() => { const r2 = findCustom(); return !!r2 && r2.textContent.includes('■'); })();
-    lpV2.readerDragCustomPersists = persistedUnchecked && reappliedVw && rowChecked;
-    clickSetting('Reader padding', '100%'); // restore for the probes below
+    lpV2.readerDragCustomPersists = persistedUnchecked && reapplied && rowChecked;
+    clickSetting('Reading width', 'full width'); // restore for the probes below
     await sleep(200);
   }
 
-  /* Fixed width mode: freezes the chosen width in px (captured once at
-     selection/toggle time, persisted); toggling off restores the exact
-     relative value. Reader asserts the shared --reader-max-width var;
-     editor asserts the column-px emission on --editor-max-width (the
-     presets keep the original --editor-padding output, so relative mode
-     is asserted on both vars).                                         */
+  /* Presets are px and persist as px under the new keys only; the
+     Editor width drives its own var the same way. */
   {
-    const rdVar = () => getComputedStyle(document.documentElement)
-      .getPropertyValue('--reader-max-width').trim();
-    clickSetting('Reader padding', '50');
+    const rootVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    clickSetting('Reading width', '640 px');
+    clickSetting('Editor width', '560 px');
     await sleep(200);
-    clickSetting('Reader padding', 'fixed width');       // ON — captures 50vw as px
+    const blob = settingsNow();
+    const noLegacy = ['readerPadding', 'readerPaddingFixed', 'readerPaddingFixedPx',
+      'editorPadding', 'editorPaddingFixed', 'editorPaddingFixedColPx']
+      .every(k => !(k in blob));
+    lpV2.widthPresetsPx = rootVar('--reader-max-width') === '640px'
+      && rootVar('--editor-max-width') === '560px'
+      && blob.readingWidthPx === 640 && blob.editingWidthPx === 560 && noLegacy;
+    clickSetting('Reading width', 'full width');
+    clickSetting('Editor width', 'full width');
     await sleep(200);
-    const pxVal = rdVar();
-    const fixedIsPx = /px$/.test(pxVal)
-      && Math.abs(parseFloat(pxVal) - window.innerWidth * 0.5) < 3;
-    clickSetting('Reader padding', '30');                // preset while fixed → recapture
-    await sleep(200);
-    const px30 = rdVar();
-    const recaptured = /px$/.test(px30)
-      && Math.abs(parseFloat(px30) - window.innerWidth * 0.3) < 3;
-    const blob = (() => {
-      try { return JSON.parse(localStorage.getItem('revery_md_settings')); }
-      catch (_) { return {}; }
-    })();
-    const persisted = blob.readerPaddingFixed === true
-      && Math.abs(blob.readerPaddingFixedPx - window.innerWidth * 0.3) < 3;
-    clickSetting('Reader padding', 'fixed width');       // OFF — relative returns
-    await sleep(200);
-    lpV2.readerFixedWidth = fixedIsPx && recaptured && persisted && rdVar() === '30vw';
+  }
 
-    const edVar = () => getComputedStyle(document.documentElement)
-      .getPropertyValue('--editor-padding').trim();
-    const edMaxVar = () => getComputedStyle(document.documentElement)
-      .getPropertyValue('--editor-max-width').trim();
-    clickSetting('Editor padding', '60%');
-    await sleep(150);
-    const edRelative = edVar() === '24px 20%' && edMaxVar() === 'none';
-    clickSetting('Editor padding', 'fixed width');       // ON — freezes the COLUMN in px
-    await sleep(150);
-    /* 60% preset = 20% gutters/side → column = paneW·0.6 + 2×28px base
-       padding (the capped element carries the base padding instead of
-       the preset gutters). Padding drops to the base while capped. */
-    const paneW = document.getElementById('editor-pane').clientWidth;
-    const edFixed = edVar() === '24px 28px'
-      && /px$/.test(edMaxVar())
-      && Math.abs(parseFloat(edMaxVar()) - (paneW * 0.6 + 56)) < 3;
-    const edBlob = (() => {
-      try { return JSON.parse(localStorage.getItem('revery_md_settings')); }
-      catch (_) { return {}; }
-    })();
-    const edPersisted = edBlob.editorPaddingFixed === true
-      && Math.abs(edBlob.editorPaddingFixedColPx - (paneW * 0.6 + 56)) < 3;
-    clickSetting('Editor padding', 'fixed width');       // OFF
-    await sleep(150);
-    lpV2.editorFixedWidth = edRelative && edFixed && edPersisted
-      && edVar() === '24px 20%' && edMaxVar() === 'none';
-
-    clickSetting('Reader padding', '100%');              // restore defaults
-    clickSetting('Editor padding', '100%');
-    await sleep(200);
+  /* Legacy settings (window/pane fractions, "Fixed width" px) convert
+     once against the screen width: the pure converter, table-driven. */
+  {
+    const M = window.ReveryColumnWidths.migrateLegacy;
+    const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    lpV2.widthMigration = !!M
+      && eq(M({ readerPadding: '40', editorPadding: 'default' }, 1920),
+            { readingWidthPx: 768, editingWidthPx: null })
+      && eq(M({ readerPadding: 'custom:37.5', readerPaddingCustom: 37.5 }, 1920),
+            { readingWidthPx: 720, readingWidthCustomPx: 720 })
+      && eq(M({ readerPadding: '50', readerPaddingFixed: true, readerPaddingFixedPx: 900 }, 1920),
+            { readingWidthPx: 900 })
+      && eq(M({ readerPadding: 'default', editorPadding: '60%' }, 1920),
+            { readingWidthPx: null, editingWidthPx: 1152 })
+      && eq(M({ editorPadding: 'custom:40', editorPaddingCustom: 40,
+                editorPaddingFixed: true, editorPaddingFixedColPx: 700 }, 1920),
+            { editingWidthPx: 644, editingWidthCustomPx: 644 })
+      && eq(M({ readerPadding: 'bogus' }, 1920), {});
   }
 
   /* Vertical arrow keys walk the RAW document lines through rendered
@@ -891,7 +877,10 @@
     const ws = paneRect('workspace');
     const overlayLeft = Math.abs(paneRect('outline-pane').left - ws.left) < 2;
     const pvCS = getComputedStyle(document.getElementById('preview'));
-    const insetFlipped = pvCS.paddingLeft === '252px' && pvCS.paddingRight === '52px';
+    /* The side margin is --read-gutter: 5% of the preview pane, 20–52px. */
+    const gutter = () => Math.min(52, Math.max(20, 0.05 * paneRect('preview-pane').width));
+    const near = (v, px) => Math.abs(parseFloat(v) - px) < 0.6;
+    const insetFlipped = near(pvCS.paddingLeft, 200 + gutter()) && near(pvCS.paddingRight, gutter());
     toggleOutline();
     await sleep(200);
 
@@ -900,11 +889,48 @@
     edPane.style.width = '33.33%'; // undo the probe's divider drag
     await sleep(250);
     const backNormal = paneRect('editor-pane').left < paneRect('preview-pane').left
-      && getComputedStyle(document.getElementById('preview')).paddingRight === '52px';
+      && near(getComputedStyle(document.getElementById('preview')).paddingRight, gutter());
 
     lpV2.flipLayoutMirrors = mirrored && overlayLeft && insetFlipped;
     lpV2.flipLayoutDrag = dragFlipped;
     lpV2.flipLayoutRestores = backNormal;
+  }
+
+  /* Divider: a saved split wider than the window never pushes the
+     preview or the divider off-screen — the editor pane gives way and
+     the preview keeps its 200px minimum; the saved value is untouched. */
+  {
+    const rect = (id) => document.getElementById(id).getBoundingClientRect();
+    const saved = window.savedEditorWidth;
+    window.savedEditorWidth = (window.innerWidth + 400) + 'px';
+    applyPaneLayout();
+    await sleep(150);
+    const ws = rect('workspace');
+    lpV2.dividerClamped = rect('preview-pane').width >= 199.5
+      && rect('preview-pane').right <= ws.right + 0.5
+      && rect('divider').right <= ws.right
+      && edPane.style.width === (window.innerWidth + 400) + 'px';
+    window.savedEditorWidth = saved;
+    applyPaneLayout();
+    await sleep(100);
+  }
+
+  /* Top bar fit: at a large UI size no label wraps (every button one
+     height), no button runs under the logo, none leaves the window. */
+  {
+    const html = document.documentElement;
+    const fontBefore = html.style.fontSize;
+    html.style.fontSize = '220%';
+    await sleep(250);
+    const btns = Array.from(document.querySelectorAll('#topbar .tb-btn'))
+      .map(b => b.getBoundingClientRect()).filter(r => r.width > 0);
+    const logo = document.getElementById('btn-logo').getBoundingClientRect();
+    const hs = btns.map(r => r.height);
+    lpV2.topbarNoWrap = btns.length >= 4 && Math.max(...hs) - Math.min(...hs) < 1;
+    lpV2.topbarNoOverlap = btns.every(r => (r.right <= logo.left || r.left >= logo.right)
+      && r.left >= 0 && r.right <= window.innerWidth);
+    html.style.fontSize = fontBefore;
+    await sleep(150);
   }
 
   /* 11a-2. Custom top bar icon (Advanced Options). Driven through the
