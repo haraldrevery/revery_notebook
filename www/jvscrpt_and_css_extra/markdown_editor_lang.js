@@ -47,10 +47,14 @@ window.uiTranslations = {
   "Default": { "Swedish": "Standard" },
   "Calendar format ▸": { "Swedish": "Kalenderformat ▸" },
   "Filename format ▸": { "Swedish": "Filnamnsformat ▸" },
-  "Editor text size ▸": { "Swedish": "Redig. textstorlek ▸" },
-  "Editor font type ▸": { "Swedish": "Redig. typsnitt ▸" },
-  "Preview text size ▸": { "Swedish": "Förh.granskn. textstorlek ▸" },
-  "Preview font type ▸": { "Swedish": "Förh.granskn. typsnitt ▸" },
+  "Editor font…": { "Swedish": "Redig. typsnitt…" },
+  "Preview font…": { "Swedish": "Förh.granskn. typsnitt…" },
+  "Editor font": { "Swedish": "Redigerarens typsnitt" },
+  "Preview font": { "Swedish": "Förhandsgranskningens typsnitt" },
+  "Size": { "Swedish": "Storlek" },
+  "Line height": { "Swedish": "Radhöjd" },
+  "Letter spacing": { "Swedish": "Teckenavstånd" },
+  "Live Preview uses the Preview font settings.": { "Swedish": "Live Preview använder förhandsgranskningens typsnittsinställningar." },
   "Outline font size ▸": { "Swedish": "Disposition textstorlek ▸" },
   "UI menu size ▸": { "Swedish": "UI-meny storlek ▸" },
   "Language ▸": { "Swedish": "Språk ▸" },
@@ -1139,7 +1143,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Show Outline</strong> — opens a heading navigator panel on the right. Click any heading to jump to it.</li>
           <li><strong>Reader Mode</strong> — hides the editor entirely for a clean, distraction-free reading view. Press <em>Exit Reader Mode</em> to return.</li>
           <li><strong>Mobile View</strong> — frames the preview at a phone-sized width so you can see how your content looks on small screens (don't rely on this too much...).</li>
-          <li><strong>UI Size / Text Size</strong> — "UI Size" scales menu buttons; "Text Size" scales editor and preview text.</li>
+          <li><strong>UI Size / Fonts</strong> — Settings → UI menu size scales the menus and buttons. Settings → <em>Editor font…</em> and <em>Preview font…</em> each open a small window for that pane's text: font, size, line height and letter spacing. Double-click (on a touch screen, double-tap) a slider to put it back to its default, or click the number beside it and type a value, then press Enter. Every change applies and is saved right away; <em>Reset</em> returns that pane to the defaults. Live Preview shows the Preview settings, so there <em>Editor font…</em> opens the Preview ones. The − / + buttons on a pane change its text size too.</li>
           <li><strong>Calendar Format</strong> (Settings menu) — choose how dates are inserted when you use the date toolbar action.</li>
           <li><strong>Drag the divider</strong> — the vertical bar between editor and preview can be dragged left or right to resize each pane.</li>
           <li><strong>Text column width</strong> — Settings → Reading width ▸ (preview, reader mode and live preview) and Editor width ▸ (the Markdown editor) set the text column in pixels, or Full width. The width stays the same when you resize the window: in a pane too narrow for it the side margins shrink first, then the column, and your width comes back as soon as there is room. You can also hover the edge of the text column and drag it to exactly the width you like; it is kept as the <em>Custom</em> choice.</li>
@@ -1162,7 +1166,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Path suggestions in links</strong> (desktop) — typing inside a link destination like <code>![image](here)</code> opens a dropdown of the folders, images and notes at that spot in your project. Arrow keys + Enter accept; picking a folder inserts it and shows the next level.</li>
           <li><strong>Links follow renames</strong> (desktop) — renaming or moving a file or folder offers to update every markdown link that points at it (you are shown exactly which files change before anything is written). Undo (Ctrl+Z with the editor unfocused) restores the links too.</li>
           <li><strong>Advanced Options</strong> — click the top bar logo → Advanced Options: the logo position (centered, or in the left corner next to the File button) and the Panel order (Normal or Mirrored). More advanced settings will live here over time.</li>
-          <li><strong>Custom fonts</strong> — the Editor/Preview font menus end with <em>Custom font…</em>: import a font file (.ttf/.otf/.woff/.woff2) or type the name of a font installed on your computer, check the sample line, press Add. It appears in both font menus; hover it and click ✕ to remove (the app then falls back to the Harald font).</li>
+          <li><strong>Custom fonts</strong> — the Font list in <em>Editor font…</em> / <em>Preview font…</em> ends with <em>Custom font…</em>: import a font file (.ttf/.otf/.woff/.woff2) or type the name of a font installed on your computer, check the sample line, press Add. It appears in both Font lists; hover it (on a touch screen the ✕ always shows) and click ✕ to remove (the app then falls back to the Harald font).</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">
@@ -1219,7 +1223,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Visa disposition</strong> — öppnar en navigeringspanel för rubriker till höger. Klicka på en rubrik för att hoppa till den.</li>
           <li><strong>Läsläge</strong> — döljer redigeraren helt för en ren, störningsfri läsvy. Tryck på <em>Avsluta läsläge</em> för att återgå.</li>
           <li><strong>Mobilvy</strong> — ramar in förhandsgranskningen i en telefonbredd så att du ser hur ditt innehåll ser ut på små skärmar (lita inte för mycket på detta...).</li>
-          <li><strong>UI-storlek / textstorlek</strong> — "UI-storlek" skalar menyknappar; "Textstorlek" skalar redigerings- och förhandsgranskningstext.</li>
+          <li><strong>UI-storlek / typsnitt</strong> — Inställningar → UI-meny storlek skalar menyer och knappar. Inställningar → <em>Redig. typsnitt…</em> och <em>Förh.granskn. typsnitt…</em> öppnar var sitt litet fönster för rutans text: typsnitt, storlek, radhöjd och teckenavstånd. Dubbelklicka (på en pekskärm: dubbeltryck) på ett skjutreglage för att återställa det, eller klicka på talet bredvid och skriv ett värde och tryck Enter. Varje ändring gäller och sparas direkt; <em>Återställ</em> ger rutan standardvärdena igen. Live Preview visar förhandsgranskningens inställningar, så där öppnar <em>Redig. typsnitt…</em> förhandsgranskningens. Knapparna − / + på en ruta ändrar också dess textstorlek.</li>
           <li><strong>Kalenderformat</strong> (Inställningar) — välj hur datum infogas när du använder datumverktyget.</li>
           <li><strong>Dra avdelaren</strong> — den vertikala stapeln mellan redigeraren och förhandsgranskningen kan dras åt vänster eller höger för att ändra storlek på varje ruta.</li>
           <li><strong>Textkolumnens bredd</strong> — Inställningar → Läsbredd ▸ (förhandsgranskning, läsläge och Live Preview) och Redig. bredd ▸ (Markdown-redigeraren) anger textkolumnen i pixlar, eller Full bredd. Bredden är densamma när du ändrar fönstrets storlek: i en ruta som är för smal krymper först sidomarginalerna och sedan kolumnen, och din bredd kommer tillbaka så snart det finns plats. Du kan också hålla muspekaren över kanten på textkolumnen och dra den till precis den bredd du vill ha; den sparas som valet <em>Anpassad</em>.</li>
@@ -1242,7 +1246,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Sökvägsförslag i länkar</strong> (skrivbord) — när du skriver i en länkdestination som <code>![bild](här)</code> öppnas en meny med mappar, bilder och anteckningar på den platsen i ditt projekt. Piltangenter + Enter väljer; väljer du en mapp infogas den och nästa nivå visas.</li>
           <li><strong>Länkar följer namnbyten</strong> (skrivbord) — när du byter namn på eller flyttar en fil eller mapp erbjuds du att uppdatera alla markdown-länkar som pekar på den (du ser exakt vilka filer som ändras innan något skrivs). Ångra (Ctrl+Z när redigeraren inte har fokus) återställer även länkarna.</li>
           <li><strong>Avancerade alternativ</strong> — klicka på logotypen i topplisten → Avancerade alternativ: logotypens position (centrerad, eller i vänstra hörnet bredvid Arkiv-knappen) och Panelordning (Normal eller Speglad). Fler avancerade inställningar hamnar här med tiden.</li>
-          <li><strong>Egna typsnitt</strong> — typsnittsmenyerna för redigeraren/förhandsgranskningen slutar med <em>Eget typsnitt…</em>: importera en typsnittsfil (.ttf/.otf/.woff/.woff2) eller skriv namnet på ett typsnitt som är installerat på datorn, kontrollera exempelraden och tryck Lägg till. Det dyker upp i båda typsnittsmenyerna; håll muspekaren över det och klicka på ✕ för att ta bort (appen återgår då till Harald-typsnittet).</li>
+          <li><strong>Egna typsnitt</strong> — typsnittslistan i <em>Redig. typsnitt…</em> / <em>Förh.granskn. typsnitt…</em> slutar med <em>Eget typsnitt…</em>: importera en typsnittsfil (.ttf/.otf/.woff/.woff2) eller skriv namnet på ett typsnitt som är installerat på datorn, kontrollera exempelraden och tryck Lägg till. Det dyker upp i båda typsnittslistorna; håll muspekaren över det (på en pekskärm syns ✕ alltid) och klicka på ✕ för att ta bort (appen återgår då till Harald-typsnittet).</li>
         </ul>
       </section>
       <hr class="mod-guide-hr">

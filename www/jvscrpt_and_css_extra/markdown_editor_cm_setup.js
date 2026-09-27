@@ -230,8 +230,7 @@ const lineNumbersCompartment = new Compartment();
     // Editable content
     '.cm-content': {
       padding: '24px 28px', // the stylesheet owns it (#editor .cm-content: --editor-gutter)
-      lineHeight: '1.7',
-      letterSpacing: '0.01em',
+      // line height and letter spacing: the stylesheet's (#editor .cm-content)
       caretColor: 'var(--doc-text)',
       minHeight: '100%',
       fontFamily: 'inherit',

@@ -335,9 +335,9 @@
     && (Math.abs(parseFloat(lpP.fontSize) - edInline) > 0.6
         || Math.abs(parseFloat(pvP.fontSize) - edInline) < 0.6);
 
-  /* FONT FAMILY parity via the real settings path: click 'Preview font
-     type -> Times' like a user, assert rendered blocks, raw text and
-     preview change together; then restore the default. */
+  /* FONT FAMILY parity via the real settings path: Settings → Preview
+     font… → Font → Times, like a user; assert rendered blocks, raw text
+     and preview change together; then restore the default. */
   replaceEditorContent('family parity $a^2$ check\n\nsecond');
   editor.setSelectionRange(editor.value.length, editor.value.length);
   await sleep(300);
@@ -353,8 +353,22 @@
     if (btn) { btn.click(); return true; }
     return false;
   };
+  const pickPreviewFont = (optionText) => {
+    const row = Array.from(document.querySelectorAll('#settings-dropdown > .menu-item'))
+      .find(el => el.textContent.includes('Preview font'));
+    if (!row) return false;
+    row.click();
+    const list = document.querySelector('.font-settings-content .fs-dd');
+    if (!list) return false;
+    list.querySelector('.export-dd-btn').click();
+    const opt = Array.from(list.querySelectorAll('.export-dd-item'))
+      .find(b => b.textContent.toLowerCase().includes(optionText));
+    if (opt) opt.click();
+    document.querySelector('.font-settings-content .modal-btn-primary').click(); // Close
+    return !!opt && !document.querySelector('.font-settings-content');
+  };
   const famBefore = famOf('.cm-content');
-  const timesClicked = clickSetting('Preview font type', 'times');
+  const timesClicked = pickPreviewFont('times');
   await sleep(300);
   lpV2.familyFollows = timesClicked
     && /times/i.test(famOf('.cm-content') || '')
@@ -366,7 +380,7 @@
     if (!lpK || !pvK) return false;
     return getComputedStyle(lpK).fontSize === getComputedStyle(pvK).fontSize;
   })();
-  const defaultClicked = clickSetting('Preview font type', 'harald') || clickSetting('Preview font type', 'default');
+  const defaultClicked = pickPreviewFont('harald');
   await sleep(300);
   lpV2.familyRestores = defaultClicked && famOf('.cm-content') === famBefore
     && famOf('.lp-render p') === famOf('#preview p');
@@ -1474,18 +1488,29 @@
      reverts to harald and cleans storage. */
   const customFonts = await (async () => {
     const out = {};
-    const rowsWithDel = () => Array.from(
-      document.querySelectorAll('#settings-dropdown .submenu .menu-item'))
-      .filter((b) => b.querySelector('.tmpl-del'))
-      .map((b) => b.textContent.replace('✕', '').trim());
+    /* The Font list of each font popup (Settings → Editor font… /
+       Preview font…), read by opening the popup like a user. */
+    const fontListRows = () => ['Editor font', 'Preview font'].flatMap((rowText) => {
+      const row = Array.from(document.querySelectorAll('#settings-dropdown > .menu-item'))
+        .find((el) => el.textContent.includes(rowText));
+      if (!row) return [];
+      row.click();
+      const pop = document.querySelector('.font-settings-content');
+      const items = pop ? Array.from(pop.querySelectorAll('.fs-dd')[0].querySelectorAll('.export-dd-item')) : [];
+      const rows = items.map((b) => ({ pane: pop.dataset.pane, del: !!b.querySelector('.tmpl-del'),
+        text: b.textContent.replace('✕', '').trim() }));
+      if (pop) pop.querySelector('.modal-btn-primary').click(); // Close
+      return rows;
+    });
+    const rowsWithDel = () => fontListRows().filter((r) => r.del).map((r) => r.text);
 
     const made = window.createCustomFont({ kind: 'system', label: 'E2E Font', family: 'Georgia' });
     out.created = made.ok === true;
-    const menuRows = rowsWithDel().filter((t) => t.includes('E2E Font'));
-    out.rowsInBothMenus = menuRows.length === 2; // editor + preview submenus
-    out.customEntry = Array.from(
-      document.querySelectorAll('#settings-dropdown .submenu .menu-item'))
-      .filter((b) => b.textContent.includes('Custom font')).length >= 2;
+    const listed = fontListRows();
+    const menuRows = listed.filter((r) => r.del && r.text.includes('E2E Font'));
+    out.rowsInBothMenus = menuRows.length === 2 // the editor and the preview popup
+      && new Set(menuRows.map((r) => r.pane)).size === 2;
+    out.customEntry = listed.filter((r) => r.text.includes('Custom font')).length >= 2;
 
     previewFontType = 'custom:' + made.id; applyFontTypes();
     const varVal = document.documentElement.style.getPropertyValue('--preview-font');

@@ -1105,6 +1105,85 @@ saved file itself is never at risk).
 
 ---
 
+## Text Typography (fonts, sizes, spacing)
+
+Settings → **Editor font…** / **Preview font…** open one popup per pane
+(`openFontSettings`, `markdown_editor_menus.js`) with the pane's font,
+size, line height and letter spacing, and Reset. Live preview renders
+with the PREVIEW settings (font, size, spacing and line height on
+`.cm-content`), so there the Editor row opens the Preview popup (with a
+note), just as the editor bar's −/+ buttons change the preview size.
+
+**One registry, one setter.** `Typography` (window.ReveryTypography)
+holds the defaults, the size steps (`SIZES`, shared with the −/+
+buttons), the built-in fonts and their CSS stacks, the slider ranges and
+the checks every stored value passes on load (a bad value keeps the
+default; spacing snaps onto the slider grid). Every change goes through
+`setPaneTypography(pane, patch, {save})`: check, apply only the part that
+changed (a slider step must not re-read the custom-font store, which can
+hold MBs), persist. `window.setEditorTextSize/setPreviewTextSize` and
+the −/+ buttons are thin wrappers. `applyTypography()` re-applies
+everything (custom font added/removed, UI size).
+
+**CodeMirror re-measures after every change** (`typographyChanged` →
+`remeasureEditorText`). CodeMirror only re-measures by itself when its
+scroller resizes, so after a CSS-only size or font change its line-height
+map was stale: the first click in the classic editor landed 4–6 lines
+from the pointer (and the caret, so the typing, went there), and live
+preview's map was ~400 px off. The re-measure runs as a microtask (after
+the change, before any event can reach the editor, once per burst);
+`coordsAtPos` flushes it synchronously, and CodeMirror's own measure loop
+repeats until the layout stops moving.
+
+**CSS variables** (set on `<html>` only when not at the default, so the
+default look is the designed one):
+
+| Variable | Read by | Default |
+|---|---|---|
+| `--editor-font` / `--preview-font` | `#editor`; prose + live preview `.cm-content` | Harald (`--font-brand`) |
+| `--editor-line-scale` | `#editor .cm-content`: `calc(var(--editor-line) * scale)` | 1 (`--editor-line` 1.4, phones 1.24) |
+| `--preview-line-scale` | prose `p`/`li` and live preview `.cm-content` (× `--text-line-row-space`) | 1 |
+| `--editor-letter-offset` | `#editor`: `calc(0.01em + offset)` | 0em |
+| `--preview-letter-spacing` | prose text + live preview `.cm-content` | unset (Harald: body tracking) / `normal` (other fonts); with an offset: `calc(base + offset)` |
+
+Line height and letter spacing are INHERITED properties: they are only
+ever set on the text surfaces, never on `html`/`body`. `--text-line-row-space`
+itself is left alone because main_rn.css also gives it to `body` (every
+menu would follow). The PDF export's in-app print path lays its document
+out inside the live page (`printInApp`), so a leak would print. The phone
+classic editor has its own `--editor-line` (it used to borrow the
+preview's variable). Live preview's raw lines scale by the same factors as
+the rendered blocks, so an edited block keeps its rendered height at
+every slider position (checked at both ends). **Word spacing was left
+out on purpose**: CodeMirror lines are `white-space: break-spaces` (the
+space at each wrap point takes width, word spacing included) while
+rendered paragraphs are `normal`, so a revealed paragraph grew a row; and
+CSS `word-spacing` only affects U+0020/U+00A0.
+
+**The popup** is not modal: its overlay has `pointer-events: none`, so
+the text stays scrollable and the −/+ buttons keep working while it is
+open (the popup shows their change, `fontPopupRefresh`). A click
+elsewhere closes it (a click, not a press, so scrolling a phone screen
+never does), except on the −/+ buttons, the phone view toggle and inside
+another dialog (the custom-font importer opens on top). Escape closes an
+open list first, then the popup. Controls apply AND save at once; a
+slider applies while dragged and saves on release, and stops applying
+mid-drag when one step takes over 100 ms (a long document). A double
+click on a slider resets it to its default; on touch, two taps under
+250 ms each and within 350 ms count too (iOS fires no `dblclick`; a drag
+is never a tap). The number beside a slider is a text field: Enter or
+leaving it applies the typed value (comma decimals, clamped, snapped;
+for line height `130`/`130%` is a percentage and a bare 0.8–2 the
+factor), Escape undoes the typing. On phones the panel lifts above the
+on-screen keyboard (`visualViewport`: browsers shrink only the visual
+viewport, so a bottom panel would sit behind it). Desktop:
+docked in a top corner over the half of the window that is not the text
+being changed; a short window scrolls the panel. Phones (≤820px): a
+bottom panel, at most 55vh. Both lists open INLINE (in the panel's flow),
+because the panel scrolls and would clip a floating list.
+
+---
+
 ## Themes
 
 `markdown_editor_theme.js` runs first in `<head>` and sets, before anything
@@ -1227,6 +1306,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/livepreview_e2e.test.js` | Boots the REAL app in Electron (web mode, via the generic `test/helpers/web_e2e_main.js` + `lp_e2e_driver.js`) and drives the live preview with DOM mouse events: a click on rendered text lands on THAT word of the source (paragraph, list item, code line, table cell, lower row of a wrapped paragraph) the layout never changes while the button is down (a click's block reveals on release, and a few px of pointer jitter during a click selects nothing), CodeMirror's height map matches the screen below lists/quotes/code/tables, a click on the blank line at a block's edge reveals nothing and never scrolls, a click beside a block lands on the row at that height, a click that changes a block's height moves the side with less visible text (low on the screen it changes downward, high on the screen upward, a block taller than the screen keeps the clicked row under the pointer; also when the previously edited block re-renders above — on screen or scrolled out of view), typing and arrow keys keep the caret's line in place when blocks switch (a lazy-continuation merge, leaving a revealed block, ArrowUp into a tall paragraph without a jump), the block being edited keeps its rendered height (headings, a tight and a nested list, a quote, a wrapped paragraph — at two text sizes), images and `$$` math stay rendered under their source while edited, undrawn blocks keep their measured heights, a drag started on a rendered block selects text, a drag into a rendered block extends character by character with the covered rendered text painted (CSS Custom Highlight) while the block stays rendered, a block the range spans is marked as a unit, heads stay stable over widgets, double-click selects the word, shift-click extends, right-click places the cursor without dragging, select-all keeps spanned blocks rendered, Shift+Arrow into a rendered block paints exactly the selected characters and typing replaces them in the source, arrow keys still reveal, checkboxes and YAML pills keep their behaviour |
 | `test/custom_theme.test.js` | The custom theme generator (theme.js in a vm): it sets exactly the variables every palette block defines; stored values are normalized or rejected (the earlier offset layout is converted); saturation 0 is neutral gray; each control changes only what it names (text sliders never touch a background variable and vice versa; Vivid text changes only `--doc-text`); no part of the Text saturation slider is flat; Vivid text makes dark red red; for every control combination (exact, via the extreme text and surface luminances, since any text color can meet any surface): text ≥ 7:1, muted text ≥ 4.5:1 (4:1 on hover), highlight ≥ 4.5:1 (3:1 on hover), vivid document text ≥ 4.5:1 on bg and both gradient ends, editor gradient visible but gentle (≥ 1.12:1 on dark bases); selection tint visible on a dense grid; the text-slider tracks paint with the generator; boot and live switching never leave an empty palette |
 | `test/theme_e2e.test.js` | Boots the REAL app (web mode) once with the OS in light mode and once in dark: every built-in palette and six custom ones are measured on screen (html.dark matches the actual background, body/footnote/editor-code contrast, visible selection, background-image overlay tinted with the palette's own `--bg`, click flashes yellow in built-ins and the highlight color in custom themes, one text color everywhere in a custom theme — the document on `--doc-text`, menus on `--text`, separate only with Vivid text — and the solid editor background equals `--bg`), identical under both OS settings; in-app PDF print stays dark-on-white under every palette, Vivid text included; plus the custom theme dialog through the real menu: the text sliders apply the generator's color without moving the background and the background sliders leave the text alone, Vivid text changes only the document text, live preview, Escape/outside click/Cancel restore, Save stores the base + custom values, Reset, the Background opacity override stays independent |
+| `test/typography_e2e.test.js` | Boots the REAL app (web mode) at a desktop, a phone and a short landscape size: after −/+ or a font change the first click in the classic editor lands on the line under the pointer and live preview's height map matches the screen; Settings has the two font rows; the popup's lists and sliders apply and save (a slider saves on release), the −/+ buttons update an open popup, spacing never reaches menus or a page-level element (the PDF print root), Reset, Escape, click-outside, custom fonts added/deleted from inside it, live preview opens the Preview popup; damaged stored values keep their defaults; the phone bottom panel and the short window keep Close reachable |
 | `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `safe_entry_inside` (links as links, symlinked root), `rename_entry_blocking` (no overwrite, dangling link kept, relative link refused, into-itself/bad names), `case_only_alias_in_listing`, `classify_rename_error` (pins errno 17 = EEXIST on Unix), `check_entry_name` (same table as the renderer), `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `retry_rename_on_lock` (a brief Windows lock is retried, a lasting one ends as a failure; off Windows only EBUSY is retried), zip export roundtrip/symlink-skip/self-exclusion |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side
@@ -1424,16 +1504,17 @@ hit that.
   note's frontmatter (`insertTemplate`, menus.js): a YAML template merges
   only the missing keys into an existing block, a markdown template goes
   below the frontmatter, and a custom YAML template must have `---` fences.
-- **Custom fonts** (`markdown_editor_menus.js`): the Editor/Preview font
-  menus end with "Custom font…". Two kinds — imported font FILES (data-URL
+- **Custom fonts** (`markdown_editor_menus.js`): the Font list of the
+  font popup (Settings → Editor font… / Preview font…) ends with
+  "Custom font…". Two kinds — imported font FILES (data-URL
   `@font-face` in one regenerated `<style id="custom-fonts-css">`, family
   `RvCustom-<id>`) and INSTALLED fonts by name (CSS resolves any installed
   family; the picker list comes from `NativeAPI.listSystemFonts()` —
   Local Font Access API on Electron/web, Rust fontdb on Tauri — rendered
   as an app-styled menu, never a native datalist). Stored
   under `revery_custom_fonts`; all application flows through
-  `applyFontTypes()`, so live-preview parity, outline, KaTeX sizing and
-  the Harald bold-underline rule handle customs automatically.
+  `applyFontTypes()` (`fontStack`), so live-preview parity, outline, KaTeX
+  sizing and the Harald bold-underline rule handle customs automatically.
 - **Link-path autocomplete** (`src/sidebar/link_complete.js` + a second
   CodeMirror completion source in `markdown_editor_cm_setup.js`): typing
   inside `![...](here)` / `[...](here)` suggests folders, images and

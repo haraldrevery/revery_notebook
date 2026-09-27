@@ -19,9 +19,66 @@ let outlineVisible = false; // Outline navigation panel (toggled via Settings)
 let themeMode = 'system'; // 'system', 'light', 'dark', 'paper', 'forest', 'custom'
 let customTheme = null;   // last SAVED custom palette {base, textHue, textSat, bgHue, bgSat, vividText} (markdown_editor_theme.js)
 
+/* ── Text typography: defaults, choices, checks ─────────────────────────
+   One source for the Editor and Preview text settings: the start values
+   below, Reset in the font popup, and the check every stored value
+   passes on load. Pure (no DOM), exposed as window.ReveryTypography.
+     size       % of the pane's base text size (the −/+ buttons and the
+                size list walk SIZES);
+     font       a FONTS key, or 'custom:<id>' for an imported font (one
+                deleted since falls back to Harald when applied);
+     lineScale  factor on the pane's own default line height (1 = as
+                designed: 1.4 in the classic editor, 1.24 in the preview,
+                live preview and the phone editor);
+     letterEm   em added to the font's own letter spacing (0 = as
+                designed: Harald 0.01em, every other font none).
+   Live preview shows the PREVIEW settings. */
+const Typography = (() => {
+  const DEFAULTS = {
+    editor:  { size: 150, font: 'harald', lineScale: 1, letterEm: 0 },
+    preview: { size: 140, font: 'harald', lineScale: 1, letterEm: 0 },
+  };
+  /* Note the 270 → 290 gap: step by index, never ±10. */
+  const SIZES = [60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 290];
+  /* Built-in fonts; stack '' = the Harald brand face (CSS fallback). */
+  const FONTS = [
+    { val: 'harald',  label: 'Harald Revery Font', stack: '' },
+    { val: 'sans',    label: 'System Sans-Serif',  stack: 'ui-sans-serif, system-ui, sans-serif' },
+    { val: 'serif',   label: 'System Serif',       stack: 'ui-serif, Georgia, serif' },
+    { val: 'mono',    label: 'System Monospace',   stack: 'ui-monospace, "Courier New", monospace' },
+    { val: 'arial',   label: 'Arial',              stack: 'Arial, Helvetica, sans-serif' },
+    { val: 'times',   label: 'Times New Roman',    stack: '"Times New Roman", Times, serif' },
+    { val: 'courier', label: 'Courier New',        stack: '"Courier New", Courier, monospace' },
+  ];
+  const LINE   = { min: 0.8,   max: 2,   step: 0.05 };
+  const LETTER = { min: -0.05, max: 0.3, step: 0.01 };
+
+  const isNum = (v) => typeof v === 'number' && isFinite(v);
+  /* Onto the range's grid, as a clean decimal (0.1 + 0.2 stays 0.3). */
+  const snap = (v, r) => {
+    const n = Math.round((Math.min(Math.max(v, r.min), r.max) - r.min) / r.step);
+    return Number((r.min + n * r.step).toFixed(2));
+  };
+  /* Each returns the value to use, or undefined (keep the default). A
+     size between two SIZES rows stays as stored (older lists had other
+     steps); the −/+ buttons snap it on their first step. */
+  const validSize = (v) => (isNum(v) && v >= SIZES[0] && v <= SIZES[SIZES.length - 1] ? v : undefined);
+  const validFont = (v) => (typeof v === 'string'
+    && (FONTS.some((f) => f.val === v) || /^custom:[a-z0-9-]{1,40}$/.test(v)) ? v : undefined);
+  const validLineScale = (v) => (isNum(v) && v >= LINE.min && v <= LINE.max ? snap(v, LINE) : undefined);
+  const validLetterEm = (v) => (isNum(v) && v >= LETTER.min && v <= LETTER.max ? snap(v, LETTER) : undefined);
+
+  return { DEFAULTS, SIZES, FONTS, LINE, LETTER, snap, validSize, validFont, validLineScale, validLetterEm };
+})();
+window.ReveryTypography = Typography;
+
 let uiSize  = 140; // UI menu font scale in %, applied to <html> (90–200 in 10% steps)
-let editorTextSize = 150; // Editor textarea font scale in %
-let previewTextSize = 140; // Preview prose font scale in %
+let editorTextSize = Typography.DEFAULTS.editor.size;    // Editor text scale in %
+let previewTextSize = Typography.DEFAULTS.preview.size;  // Preview prose scale in % (live preview too)
+let editorLineScale = Typography.DEFAULTS.editor.lineScale;   // see Typography
+let previewLineScale = Typography.DEFAULTS.preview.lineScale;
+let editorLetterEm = Typography.DEFAULTS.editor.letterEm;
+let previewLetterEm = Typography.DEFAULTS.preview.letterEm;
 let outlineFontSize = 140; // Outline panel font scale in %, independent of editor/preview text
 
 /* Text column widths in CSS px — the TEXT itself, margins excluded; null
@@ -35,9 +92,8 @@ let readingWidthPx = 720;
 let editingWidthPx = null;
 let readingWidthCustomPx = null; // last DRAGGED widths, kept as their own
 let editingWidthCustomPx = null; // selectable "Custom" rows (see the menus)
-let editorFontType = 'harald'; // Editor font style ('harald' is default)
-
-let previewFontType = 'harald'; // Preview font style ('harald' is default)
+let editorFontType = Typography.DEFAULTS.editor.font;   // Editor font (see Typography)
+let previewFontType = Typography.DEFAULTS.preview.font; // Preview font (live preview too)
 let uiLanguage = window.uiLanguage; // UI Language setting (synced from lang.js)
 let selectedBackground = 'bg_6'; // Active background image key
 let slowHardwareMode = false;    // One switch for older machines — see setSlowHardwareMode
@@ -167,6 +223,7 @@ window.saveEditorSettings = function() {
     lineNumbersVisible,
     forcedSyncEnabled: window.forcedSyncEnabled, rightClickDisabled, previewVisible, wordCountVisible, mobileView, readerMode, outlineVisible,
     uiSize, editorTextSize, previewTextSize, outlineFontSize, editorFontType, previewFontType, uiLanguage,
+    editorLineScale, previewLineScale, editorLetterEm, previewLetterEm,
     currentDateFormat: window.currentDateFormat,
 
     
@@ -232,13 +289,21 @@ function loadEditorSettings() {
       if (s.outlineVisible !== undefined) outlineVisible = s.outlineVisible; // Added
     
       if (s.uiSize !== undefined) uiSize = s.uiSize; // Added    
-      if (s.editorTextSize !== undefined) editorTextSize = s.editorTextSize;
-      if (s.previewTextSize !== undefined) previewTextSize = s.previewTextSize;
-
-      if (s.outlineFontSize !== undefined) outlineFontSize = s.outlineFontSize;
-      
-      if (s.editorFontType !== undefined) editorFontType = s.editorFontType;
-      if (s.previewFontType !== undefined) previewFontType = s.previewFontType;
+      /* Text typography: a value that fails its check keeps the default
+         (Typography), so a damaged blob can never reach the CSS. */
+      const T = Typography;
+      const keep = (v, check, cur) => { const x = check(v); return x === undefined ? cur : x; };
+      editorTextSize   = keep(s.editorTextSize,   T.validSize,      editorTextSize);
+      previewTextSize  = keep(s.previewTextSize,  T.validSize,      previewTextSize);
+      editorFontType   = keep(s.editorFontType,   T.validFont,      editorFontType);
+      previewFontType  = keep(s.previewFontType,  T.validFont,      previewFontType);
+      editorLineScale  = keep(s.editorLineScale,  T.validLineScale, editorLineScale);
+      previewLineScale = keep(s.previewLineScale, T.validLineScale, previewLineScale);
+      editorLetterEm   = keep(s.editorLetterEm,   T.validLetterEm,  editorLetterEm);
+      previewLetterEm  = keep(s.previewLetterEm,  T.validLetterEm,  previewLetterEm);
+      if (typeof s.outlineFontSize === 'number' && s.outlineFontSize >= 70 && s.outlineFontSize <= 240) {
+        outlineFontSize = s.outlineFontSize; // setOutlineFontSize's range
+      }
       if (s.uiLanguage !== undefined) {
                 uiLanguage = s.uiLanguage;
                 window.uiLanguage = s.uiLanguage; // Keep global translation engine in sync!
@@ -550,8 +615,117 @@ function applyTextSize() {
   applyUiSizeProseCompensation();
 }
 
+/* Line height and letter spacing (Typography: lineScale, letterEm) as
+   CSS variables. Only the text surfaces read them (#editor, the preview
+   prose, live preview's content): both properties are INHERITED, so set
+   on html or body they would reach every menu, and the PDF export's
+   in-app print, which lays its document out inside this page
+   (printInApp). A setting at its default writes nothing, so the default
+   look is exactly the designed one. The preview's letter spacing starts
+   from its font's own: Harald keeps the body tracking, any other font
+   has none (applyFontTypes records which). */
+let previewFontIsHarald = true;
+function applyTextSpacing() {
+  const root = document.documentElement.style;
+  const put = (name, isDefault, value) => {
+    if (isDefault) root.removeProperty(name); else root.setProperty(name, value);
+  };
+  put('--editor-line-scale', editorLineScale === 1, String(editorLineScale));
+  put('--preview-line-scale', previewLineScale === 1, String(previewLineScale));
+  put('--editor-letter-offset', editorLetterEm === 0, editorLetterEm + 'em');
+  if (previewLetterEm === 0) {
+    put('--preview-letter-spacing', previewFontIsHarald, 'normal');
+  } else {
+    root.setProperty('--preview-letter-spacing', previewFontIsHarald
+      ? `calc(var(--tracking-body, 0.01em) + ${previewLetterEm}em)` : previewLetterEm + 'em');
+  }
+}
 
+/* Apply every text typography setting and make the editor re-measure:
+   the path for a change that can touch all of them (a custom font added
+   or removed, the UI size). The boot sequence calls the parts directly,
+   before CodeMirror's first measure. */
+function applyTypography() {
+  applyTextSize();
+  applyFontTypes(); // also the spacing, which starts from the font
+  typographyChanged();
+}
 
+/* Everything after any typography change: the editor re-measures and an
+   open font popup shows the new values (the −/+ buttons change them
+   under it). */
+let fontPopupRefresh = null; // set by openFontSettings while it is open
+function typographyChanged() {
+  remeasureEditorText();
+  if (fontPopupRefresh) fontPopupRefresh();
+}
+
+/* Canonical setter for the Editor/Preview text settings — the font
+   popup, the −/+ buttons and window.setEditorTextSize/setPreviewTextSize
+   all end here: check, apply, persist. `patch` holds any of size, font,
+   lineScale, letterEm (Typography); a size snaps onto the list, any
+   other value that fails its check is ignored. {save:false} applies
+   without writing the settings (a slider mid-drag — its release saves).
+   Applies only the part that changed: a font change resolves the
+   custom-font store (localStorage, can be MBs), which a slider drag
+   must not do on every step. */
+function setPaneTypography(pane, patch, { save = true } = {}) {
+  const T = Typography;
+  const ed = pane === 'editor';
+  let sized = false, fonted = false, spaced = false;
+  if ('size' in patch && typeof patch.size === 'number' && isFinite(patch.size)) {
+    const v = snapTextSize(patch.size);
+    if (ed) editorTextSize = v; else previewTextSize = v;
+    sized = true;
+  }
+  if ('font' in patch && T.validFont(patch.font) !== undefined) {
+    if (ed) editorFontType = patch.font; else previewFontType = patch.font;
+    fonted = true;
+  }
+  if ('lineScale' in patch && T.validLineScale(patch.lineScale) !== undefined) {
+    const v = T.validLineScale(patch.lineScale);
+    if (ed) editorLineScale = v; else previewLineScale = v;
+    spaced = true;
+  }
+  if ('letterEm' in patch && T.validLetterEm(patch.letterEm) !== undefined) {
+    const v = T.validLetterEm(patch.letterEm);
+    if (ed) editorLetterEm = v; else previewLetterEm = v;
+    spaced = true;
+  }
+  if (sized) applyTextSize();
+  if (fonted) applyFontTypes(); // includes the spacing
+  else if (spaced) applyTextSpacing();
+  typographyChanged();
+  if (save && typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
+}
+
+/* One pane's settings as the font popup shows them. */
+function paneTypography(pane) {
+  return pane === 'editor'
+    ? { size: editorTextSize, font: editorFontType, lineScale: editorLineScale, letterEm: editorLetterEm }
+    : { size: previewTextSize, font: previewFontType, lineScale: previewLineScale, letterEm: previewLetterEm };
+}
+
+/* Typography is CSS only (variables, #editor's inline size), and
+   CodeMirror re-measures by itself only when its scroller resizes. Its
+   map of line heights kept the OLD sizes: the first click after a −/+
+   step landed lines away from the pointer in the classic editor (4 lines
+   after three steps, 6 after a font change) and the caret, so the typing
+   too, went there. Runs as a microtask: after the change, before the
+   next event can reach the editor, and once for a burst of changes.
+   coordsAtPos runs the requested measure at once (CodeMirror's own
+   loop repeats it while the layout still moves). */
+let editorRemeasureQueued = false;
+function remeasureEditorText() {
+  if (editorRemeasureQueued || !window.cmView) return;
+  editorRemeasureQueued = true;
+  queueMicrotask(() => {
+    editorRemeasureQueued = false;
+    const view = window.cmView;
+    view.requestMeasure();
+    try { view.coordsAtPos(view.state.selection.main.head); } catch (_) { /* mid-update: the scheduled frame measures */ }
+  });
+}
 
 
 
@@ -583,10 +757,10 @@ window.getOutlineFontSize = function () { return outlineFontSize; };
   if (minus) minus.addEventListener('click', (e) => { e.stopPropagation(); window.setOutlineFontSize(outlineFontSize - 10); });
 })();
 
-/* The Editor/Preview text-size scale — single source for the Settings
-   submenus AND the +/- pane-bar buttons, so the ■ mark always lands on a
-   real row (note the 270 → 290 gap: step by index, never ±10).          */
-const TEXT_SIZE_OPTIONS = [60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 290];
+/* The Editor/Preview text-size scale — one list for the font popup's
+   size list AND the +/- pane-bar buttons, so the ■ mark always lands on
+   a real row (Typography.SIZES). */
+const TEXT_SIZE_OPTIONS = Typography.SIZES;
 function snapTextSize(pct) {
   let best = TEXT_SIZE_OPTIONS[0];
   for (const v of TEXT_SIZE_OPTIONS) {
@@ -600,21 +774,10 @@ function stepTextSize(current, dir) {
   return TEXT_SIZE_OPTIONS[Math.max(0, Math.min(TEXT_SIZE_OPTIONS.length - 1, i))];
 }
 
-/* Canonical setters — shared by the Settings submenus and the +/- buttons
-   on the panel label bars. Same contract as setOutlineFontSize: snap,
-   apply, persist, re-sync the Settings checkmark. */
-window.setEditorTextSize = function (pct) {
-  editorTextSize = snapTextSize(pct);
-  applyTextSize();
-  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-  if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
-};
-window.setPreviewTextSize = function (pct) {
-  previewTextSize = snapTextSize(pct);
-  applyTextSize();
-  if (typeof window.saveEditorSettings === 'function') window.saveEditorSettings();
-  if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
-};
+/* Size setters for the +/- buttons on the panel label bars (and the
+   E2E): snap onto the list, apply, persist (setPaneTypography). */
+window.setEditorTextSize = function (pct) { setPaneTypography('editor', { size: pct }); };
+window.setPreviewTextSize = function (pct) { setPaneTypography('preview', { size: pct }); };
 
 /* The +/- buttons on the editor and preview panel label bars (with the
    bars hidden, CSS turns the same buttons into a hover corner — see
@@ -987,7 +1150,11 @@ function _loadCustomFonts() {
   }
 }
 
+/* Bumped on every write of the custom-font store: the font popup
+   rebuilds its list only when this (or the chosen font) changed. */
+let customFontsVersion = 0;
 function _saveCustomFonts(fonts) {
+  customFontsVersion++;
   try {
     localStorage.setItem(CUSTOM_FONT_KEY, JSON.stringify({ v: 1, fonts }));
     return null;
@@ -1074,7 +1241,7 @@ window.createCustomFont = function ({ kind, label, family, data } = {}) {
   if (err) return { ok: false, error: err };
 
   _applyCustomFontFaces();
-  applyFontTypes();
+  applyTypography();
   if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
   return { ok: true, id };
 };
@@ -1092,57 +1259,50 @@ window.deleteCustomFont = function (id) {
   if (editorFontType === val) editorFontType = 'harald';
   if (previewFontType === val) previewFontType = 'harald';
   _applyCustomFontFaces();
-  applyFontTypes();
+  applyTypography();
   window.saveEditorSettings();
   if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
   return { ok: true };
 };
 
-/* Apply Custom Font Types via CSS Variables */
+/* Font value → CSS font-family stack; '' = the Harald brand face (the
+   CSS variable fallback). A custom font deleted since resolves to ''. */
+function fontStack(val) {
+  const builtin = Typography.FONTS.find((f) => f.val === val);
+  if (builtin) return builtin.stack;
+  return _customFontMapEntries()[val] || '';
+}
+
+/* Apply the editor and preview font families via CSS variables, and the
+   spacing that starts from the preview font's own. */
 function applyFontTypes() {
-  const fontMap = {
-    'harald': '', // Handled by CSS variable fallback
-    'sans': 'ui-sans-serif, system-ui, sans-serif',
-    'serif': 'ui-serif, Georgia, serif',
-    'mono': 'ui-monospace, "Courier New", monospace',
-    'arial': 'Arial, Helvetica, sans-serif',
-    'times': '"Times New Roman", Times, serif',
-    'courier': '"Courier New", Courier, monospace',
-    ..._customFontMapEntries()
-  };
+  const root = document.documentElement.style;
+  const editorStack = fontStack(editorFontType);
+  const previewStack = fontStack(previewFontType);
 
-  if (editorFontType !== 'harald' && fontMap[editorFontType]) {
-    document.documentElement.style.setProperty('--editor-font', fontMap[editorFontType]);
-  } else {
-    document.documentElement.style.removeProperty('--editor-font');
-  }
+  if (editorStack) root.setProperty('--editor-font', editorStack);
+  else root.removeProperty('--editor-font');
 
-  if (previewFontType !== 'harald' && fontMap[previewFontType]) {
-    document.documentElement.style.setProperty('--preview-font', fontMap[previewFontType]);
-    document.documentElement.style.setProperty('--preview-letter-spacing', 'normal');
-    document.documentElement.style.setProperty('--katex-font-size', '1em');
+  if (previewStack) {
+    root.setProperty('--preview-font', previewStack);
+    root.setProperty('--katex-font-size', '1em');
   } else {
-    document.documentElement.style.removeProperty('--preview-font');
-    document.documentElement.style.removeProperty('--preview-letter-spacing');
-    document.documentElement.style.setProperty('--katex-font-size', '0.7em');
+    root.removeProperty('--preview-font');
+    root.setProperty('--katex-font-size', '0.7em');
   }
 
   /* The Harald face has no real bold, so prose_rn.css renders bold text as
      underlined regular weight — but ONLY under this class. Any other preview
      font falls through to normal bold (Tailwind's own strong weights).
-     Same branch condition as above, so the class always tracks the var. */
-  document.documentElement.classList.toggle('preview-font-harald',
-    !(previewFontType !== 'harald' && fontMap[previewFontType]));
+     Same condition as the variable above, so the class always tracks it. */
+  previewFontIsHarald = !previewStack;
+  document.documentElement.classList.toggle('preview-font-harald', previewFontIsHarald);
 
-  const outlineFontFamily = (previewFontType !== 'harald' && fontMap[previewFontType]) 
-    ? fontMap[previewFontType] 
-    : '';
-  
-  if (outlineFontFamily) {
-    document.documentElement.style.setProperty('--outline-font', outlineFontFamily);
-  } else {
-    document.documentElement.style.removeProperty('--outline-font');
-  }
+  /* The outline lists the preview's headings in the preview's font. */
+  if (previewStack) root.setProperty('--outline-font', previewStack);
+  else root.removeProperty('--outline-font');
+
+  applyTextSpacing(); // --preview-letter-spacing: Harald keeps its tracking, others none
 }
 
 /* ── Advanced Options ────────────────────────────────────────────────────
@@ -1649,6 +1809,372 @@ function openCustomThemeDialog() {
   sliders.textHue.focus();
 }
 window.openCustomThemeDialog = openCustomThemeDialog;
+
+/* ── Font popup (Settings → Editor font… / Preview font…) ───────────────
+   One pane's text settings in one place: font, size, line height,
+   letter spacing and Reset. Every control applies AND saves at once
+   (setPaneTypography), like the −/+ buttons, which show up in it while
+   it is open (fontPopupRefresh). Live preview shows the Preview
+   settings, so there the Editor row opens the Preview popup.
+   Not modal: the overlay only positions the panel and lets every
+   pointer event through, so the text being changed can still be
+   scrolled and the −/+ buttons still work. A click anywhere else closes
+   it (a click, not a press: scrolling a phone screen never clicks), as
+   do Close and Escape. Desktop: docked in a top corner over the other
+   half of the window. Phones (≤820px, CSS): a bottom panel, at most
+   about half the screen, that scrolls. Both lists open INLINE, pushing
+   the rows below down, so that scrolling can never clip them (a
+   floating list would be). */
+let closeFontSettings = null; // set while the popup is open
+function openFontSettings(pane) {
+  const lpActive = document.body.classList.contains('live-preview-active');
+  if (pane === 'editor' && lpActive) pane = 'preview';
+  if (closeFontSettings) closeFontSettings();
+  const T = Typography;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'font-settings-modal';
+  overlay.className = 'modal-overlay show font-settings-overlay';
+  const content = document.createElement('div');
+  content.className = 'modal-content font-settings-content';
+  content.setAttribute('role', 'dialog');
+  const title = window.t(pane === 'editor' ? 'Editor font' : 'Preview font');
+  content.setAttribute('aria-label', title);
+  content.dataset.pane = pane;
+
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  content.appendChild(heading);
+  if (pane === 'preview' && lpActive) {
+    const note = document.createElement('p');
+    note.className = 'fs-note';
+    note.textContent = window.t('Live Preview uses the Preview font settings.');
+    content.appendChild(note);
+  }
+
+  const addRow = (labelText, control, cls) => {
+    const row = document.createElement('div');
+    row.className = 'export-row' + (cls ? ' ' + cls : '');
+    const label = document.createElement('label');
+    label.textContent = window.t(labelText);
+    row.appendChild(label);
+    row.appendChild(control);
+    content.appendChild(row);
+  };
+
+  /* An app-styled list (the .export-dd look) that opens inline. */
+  const lists = [];
+  const makeList = (labelText) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'export-dd fs-dd';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'export-dd-btn';
+    btn.setAttribute('aria-haspopup', 'listbox');
+    btn.setAttribute('aria-expanded', 'false');
+    const menu = document.createElement('div');
+    menu.className = 'export-dd-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.setAttribute('aria-label', window.t(labelText));
+    const list = { btn, menu, painted: null };
+    list.setOpen = (open) => {
+      menu.classList.toggle('open', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      const sel = open && menu.querySelector('[aria-selected="true"]');
+      if (sel) menu.scrollTop = sel.offsetTop - (menu.clientHeight - sel.offsetHeight) / 2;
+    };
+    btn.addEventListener('click', () => {
+      const open = !menu.classList.contains('open');
+      lists.forEach((l) => l.setOpen(false));
+      list.setOpen(open);
+    });
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+    addRow(labelText, wrap, 'fs-row-list');
+    lists.push(list);
+    return list;
+  };
+  const option = (text, selected, onPick) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'export-dd-item';
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-selected', selected ? 'true' : 'false');
+    b.textContent = (selected ? '■ ' : '  ') + text;
+    b.addEventListener('click', onPick);
+    return b;
+  };
+
+  /* Font: the built-ins, the user's imported fonts (✕ removes one) and
+     "Custom font…" (the importer). Rebuilt only when the font or the
+     custom-font store changed: a slider drag repaints on every step. */
+  const fontList = makeList('Font');
+  const paintFonts = () => {
+    const cur = paneTypography(pane).font;
+    const key = customFontsVersion + '|' + cur;
+    if (fontList.painted === key) return;
+    fontList.painted = key;
+    const choices = [
+      ...T.FONTS.map((f) => ({ val: f.val, label: window.t(f.label) })),
+      /* User-imported fonts: labels shown verbatim, never translated. */
+      ..._loadCustomFonts().map((f) => ({ val: 'custom:' + f.id, label: f.label, customId: f.id })),
+    ];
+    /* A custom font deleted since is shown as what is applied: Harald. */
+    const active = choices.find((c) => c.val === cur) || choices[0];
+    fontList.btn.textContent = active.label;
+    fontList.menu.textContent = '';
+    choices.forEach((c) => {
+      const b = option(c.label, c === active, () => {
+        fontList.setOpen(false);
+        setPaneTypography(pane, { font: c.val });
+      });
+      if (c.customId) {
+        const del = document.createElement('span');
+        del.className = 'tmpl-del';
+        del.textContent = '✕';
+        del.title = window.t('Delete font');
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!confirm(window.t('Delete font') + ` "${c.label}"?`)) return;
+          window.deleteCustomFont(c.customId);
+        });
+        b.appendChild(del);
+      }
+      fontList.menu.appendChild(b);
+    });
+    const divider = document.createElement('div');
+    divider.className = 'menu-divider';
+    fontList.menu.appendChild(divider);
+    fontList.menu.appendChild(option(window.t('Custom font…'), false, () => {
+      fontList.setOpen(false);
+      openFontImporter(); // on top; an added font shows up here (fontPopupRefresh)
+    }));
+  };
+
+  /* Size: the −/+ steps. */
+  const sizeList = makeList('Size');
+  const paintSize = () => {
+    const cur = paneTypography(pane).size;
+    if (sizeList.painted === cur) return;
+    sizeList.painted = cur;
+    sizeList.btn.textContent = cur + '%';
+    sizeList.menu.textContent = '';
+    T.SIZES.forEach((pct) => {
+      sizeList.menu.appendChild(option(pct + '%', pct === cur, () => {
+        sizeList.setOpen(false);
+        setPaneTypography(pane, { size: pct });
+      }));
+    });
+  };
+
+  /* Sliders apply while dragged and save on release. A long document
+     can take a while to lay out again: when one step is slower than
+     100 ms, dragging only moves the slider and the release applies it
+     (same rule as the custom theme dialog), so it never stutters.
+     A double click on a slider — a double tap on a touch screen — puts
+     it back to its default. The number beside it is a text field: type
+     a value, then Enter or leave the field to apply it (clamped to the
+     slider's range, onto its steps); Escape undoes the typing. `parse`
+     reads the typed text (null = no number in it). */
+  let slowRepaint = false;
+  const sliders = [];
+  const addSlider = (labelText, key, range, show, parse) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'fs-slider';
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.className = 'ct-range';
+    input.min = String(range.min);
+    input.max = String(range.max);
+    input.step = String(range.step);
+    input.setAttribute('aria-label', window.t(labelText));
+    const field = document.createElement('input');
+    field.type = 'text';
+    field.className = 'fs-value';
+    field.inputMode = 'decimal';
+    field.autocomplete = 'off';
+    field.spellcheck = false;
+    field.setAttribute('aria-label', window.t(labelText));
+    const current = () => paneTypography(pane)[key];
+    const setTo = (v) => setPaneTypography(pane, { [key]: T.snap(v, range) }); // applies + saves
+    const apply = (save) => {
+      const t0 = performance.now();
+      setPaneTypography(pane, { [key]: Number(input.value) }, { save });
+      void document.body.offsetHeight; // the layout the next frame would run anyway
+      slowRepaint = performance.now() - t0 > 100;
+    };
+    input.addEventListener('input', () => {
+      field.value = show(Number(input.value));
+      if (!slowRepaint) apply(false);
+    });
+    input.addEventListener('change', () => apply(true)); // release, or a keyboard step
+
+    /* Back to the default. Whatever the two clicks' own slider moves did,
+       this runs last (dblclick / the second tap's pointerup). */
+    const reset = () => setTo(T.DEFAULTS[pane][key]);
+    input.addEventListener('dblclick', reset);
+    /* Touch: iOS fires no dblclick for a double tap, so two TAPS within
+       350 ms, close together, count too. A tap is a press shorter than
+       250 ms that barely moved; a drag and release never is. Where a
+       dblclick fires as well, the reset simply runs twice. */
+    let press = null, lastTap = null;
+    input.addEventListener('pointerdown', (e) => {
+      press = e.pointerType === 'mouse' ? null : { t: e.timeStamp, x: e.clientX, y: e.clientY };
+    });
+    input.addEventListener('pointerup', (e) => {
+      if (!press) return;
+      const tap = e.timeStamp - press.t < 250 && Math.hypot(e.clientX - press.x, e.clientY - press.y) < 10;
+      press = null;
+      if (tap && lastTap && e.timeStamp - lastTap.t < 350
+          && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+        lastTap = null;
+        reset();
+      } else {
+        lastTap = tap ? { t: e.timeStamp, x: e.clientX, y: e.clientY } : null;
+      }
+    });
+
+    /* The typed value. */
+    const commit = () => {
+      const v = parse(field.value);
+      if (v !== null) setTo(v);
+      field.value = show(current()); // what applies: clamped, on a step — or unchanged
+    };
+    /* Selected on focus, so typing replaces it; the click's own mouseup
+       would put a caret instead, so that one is cancelled. */
+    let selectOnUp = false;
+    field.addEventListener('focus', () => { field.select(); selectOnUp = true; });
+    field.addEventListener('mouseup', (e) => { if (selectOnUp) e.preventDefault(); selectOnUp = false; });
+    field.addEventListener('blur', () => { selectOnUp = false; });
+    field.addEventListener('keydown', (e) => {
+      selectOnUp = false;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commit();
+        field.select();
+      } else if (e.key === 'Escape') { // the popup's own Escape leaves this field alone
+        e.preventDefault();
+        e.stopPropagation();
+        field.value = show(current());
+        field.blur();
+      }
+    });
+    field.addEventListener('change', commit); // typed, then left the field
+
+    wrap.appendChild(input);
+    wrap.appendChild(field);
+    addRow(labelText, wrap);
+    sliders.push({ input, field, key, show });
+  };
+  /* A typed number: comma or point decimals, - or − for minus, with or
+     without its unit. null when the text holds no number. */
+  const typedNumber = (text) => {
+    const m = /[-+]?\d*[.,]?\d+/.exec(String(text).replace(/−/g, '-'));
+    return m ? Number(m[0].replace(',', '.')) : null;
+  };
+  addSlider('Line height', 'lineScale', T.LINE, (v) => Math.round(v * 100) + '%', (text) => {
+    const n = typedNumber(text);
+    if (n === null) return null;
+    /* 130 or 130% is a percentage; a bare 0.8–2 is the factor (1.3 = 130%). */
+    return !text.includes('%') && n <= T.LINE.max ? n : n / 100;
+  });
+  addSlider('Letter spacing', 'letterEm', T.LETTER,
+    (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2) + ' em', typedNumber);
+
+  const paint = () => {
+    paintFonts();
+    paintSize();
+    const cur = paneTypography(pane);
+    sliders.forEach((sl) => {
+      sl.input.value = String(cur[sl.key]);
+      /* Never under the user's typing (the −/+ buttons repaint too). */
+      if (document.activeElement !== sl.field) sl.field.value = sl.show(cur[sl.key]);
+    });
+  };
+
+  const buttons = document.createElement('div');
+  buttons.className = 'modal-buttons ct-buttons';
+  const makeBtn = (text, onClick, primary) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = primary ? 'modal-btn modal-btn-primary' : 'modal-btn';
+    b.textContent = window.t(text);
+    b.addEventListener('click', onClick);
+    buttons.appendChild(b);
+    return b;
+  };
+  makeBtn('Reset', () => setPaneTypography(pane, { ...T.DEFAULTS[pane] }));
+  const spacer = document.createElement('span');
+  spacer.className = 'ct-spacer';
+  buttons.appendChild(spacer);
+  makeBtn('Close', () => close(), true);
+  content.appendChild(buttons);
+
+  /* Escape closes an open list first, then the popup — unless another
+     dialog (the font importer) is on top: it is that one's. */
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (e.target instanceof Element && e.target.classList.contains('fs-value')) return; // undoes the typing
+    if (document.querySelector('.modal-overlay.show:not(#font-settings-modal)')) return;
+    e.preventDefault();
+    e.stopPropagation(); // the find bar's global Escape must not also act
+    const openList = lists.find((l) => l.menu.classList.contains('open'));
+    if (openList) { openList.setOpen(false); openList.btn.focus(); } else close();
+  };
+  /* A click outside closes — except on the pane −/+ buttons (the same
+     settings), on the phone view toggle (to see the other pane while
+     changing it) and inside another dialog (the importer, on top). */
+  const onOutside = (e) => {
+    const t = e.target;
+    if (!(t instanceof Element) || content.contains(t)) return;
+    if (t.closest('.pane-size-controls, #btn-toggle-view, .modal-overlay:not(#font-settings-modal)')) return;
+    close();
+  };
+  /* Phones: the on-screen keyboard (typing a value) can cover the bottom
+     panel — browsers shrink only the VISUAL viewport, and the panel sits
+     at the bottom of the layout one. Lift it above the keyboard, and keep
+     it inside what is left of the screen. Nothing to do on a desktop. */
+  const vv = window.visualViewport;
+  const aboveKeyboard = () => {
+    const covered = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    overlay.style.paddingBottom = covered ? covered + 'px' : '';
+    content.style.maxHeight = covered ? Math.round(vv.height * 0.9) + 'px' : '';
+  };
+  if (vv) {
+    vv.addEventListener('resize', aboveKeyboard);
+    vv.addEventListener('scroll', aboveKeyboard);
+  }
+
+  let closed = false;
+  function close() {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('click', onOutside, true);
+    if (vv) {
+      vv.removeEventListener('resize', aboveKeyboard);
+      vv.removeEventListener('scroll', aboveKeyboard);
+    }
+    fontPopupRefresh = null;
+    closeFontSettings = null;
+    overlay.remove();
+  }
+  closeFontSettings = close;
+  fontPopupRefresh = paint;
+
+  overlay.appendChild(content);
+  document.body.appendChild(overlay);
+  /* Desktop: dock over the half of the window that is NOT the text being
+     changed (live preview and reader mode: one full pane → the right). */
+  const surface = document.getElementById(pane === 'preview' && !lpActive ? 'preview-pane' : 'editor-pane');
+  const r = surface ? surface.getBoundingClientRect() : null;
+  if (r && r.width > 0 && (r.left + r.right) / 2 > window.innerWidth * 0.55) overlay.classList.add('fs-dock-left');
+  document.addEventListener('keydown', onKey, true);
+  document.addEventListener('click', onOutside, true);
+  paint();
+  fontList.btn.focus({ preventScroll: true });
+}
+window.openFontSettings = openFontSettings;
 
 /* Apply editor background: gradient (--editor-bg-start → --editor-bg-end) or solid (--bg) */
 function applyEditorBgStyle() {
@@ -2583,157 +3109,18 @@ function buildSettingsMenu() {
   attachSubmenuHandlers(fnFmtWrapper, fnFmtSub);
   settingsDropdown.appendChild(fnFmtWrapper);
 
-  // ── Text Size submenu (options shared with the pane-bar +/- buttons)
-  const sizeOptions = TEXT_SIZE_OPTIONS;
-
-  // ── Editor Text Size submenu
-  const editorSizeWrapper = document.createElement('div');
-  editorSizeWrapper.className = 'menu-item has-submenu';
-
-  const editorSizeLabel = document.createElement('span');
-  editorSizeLabel.textContent = window.t('Editor text size ▸');
-  editorSizeWrapper.appendChild(editorSizeLabel);
-
-  const editorSizeSub = document.createElement('div');
-  editorSizeSub.className = 'submenu';
-  editorSizeSub.style.display = 'none';
-
-  sizeOptions.forEach(pct => {
+  // ── Font popups: font, size, line height, letter spacing (openFontSettings)
+  [['Editor font…', 'editor'], ['Preview font…', 'preview']].forEach(([label, pane]) => {
     const btn = document.createElement('button');
     btn.className = 'menu-item';
-    btn.textContent = (editorTextSize === pct ? '■ ' : '\u00a0\u00a0') + pct + '%';
+    btn.textContent = window.t(label);
     btn.onclick = (e) => {
       e.stopPropagation();
       settingsDropdown.classList.remove('show');
-      window.setEditorTextSize(pct); // applies, persists, rebuilds the menu
+      openFontSettings(pane); // live preview: the Preview popup (its settings are the ones shown)
     };
-    editorSizeSub.appendChild(btn);
+    settingsDropdown.appendChild(btn);
   });
-
-  editorSizeWrapper.appendChild(editorSizeSub);
-  attachSubmenuHandlers(editorSizeWrapper, editorSizeSub);
-  settingsDropdown.appendChild(editorSizeWrapper);
-
-  // ── Editor Font Type Submenu
-  const fontTypeOptions = [
-    { label: 'Harald Revery Font', val: 'harald' },
-    { label: 'System Sans-Serif',  val: 'sans' },
-    { label: 'System Serif',       val: 'serif' },
-    { label: 'System Monospace',   val: 'mono' },
-    { label: 'Arial',              val: 'arial' },
-    { label: 'Times New Roman',    val: 'times' },
-    { label: 'Courier New',        val: 'courier' },
-    /* User-imported fonts (labels shown verbatim, never translated). */
-    ..._loadCustomFonts().map((f) => ({ label: f.label, val: 'custom:' + f.id, customId: f.id }))
-  ];
-
-  /* Shared row builder for both font submenus: standard select rows, a ✕
-     on custom rows (same idiom as custom templates), and a trailing
-     "Custom font…" row that opens the importer. */
-  const buildFontRows = (sub, getVal, setVal) => {
-    fontTypeOptions.forEach(opt => {
-      const btn = document.createElement('button');
-      btn.className = 'menu-item';
-      btn.textContent = (getVal() === opt.val ? '■ ' : '  ')
-        + (opt.customId ? opt.label : window.t(opt.label));
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        setVal(opt.val);
-        applyFontTypes();
-        window.saveEditorSettings();
-        settingsDropdown.classList.remove('show');
-        buildSettingsMenu();
-      };
-      if (opt.customId) {
-        const del = document.createElement('span');
-        del.className = 'tmpl-del';
-        del.textContent = '✕';
-        del.title = window.t('Delete font');
-        del.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (!confirm(window.t('Delete font') + ` "${opt.label}"?`)) return;
-          window.deleteCustomFont(opt.customId);
-        });
-        btn.appendChild(del);
-      }
-      sub.appendChild(btn);
-    });
-    const divi = document.createElement('div');
-    divi.className = 'menu-divider';
-    sub.appendChild(divi);
-    const addBtn = document.createElement('button');
-    addBtn.className = 'menu-item';
-    addBtn.textContent = '  ' + window.t('Custom font…');
-    addBtn.onclick = (e) => {
-      e.stopPropagation();
-      settingsDropdown.classList.remove('show');
-      openFontImporter();
-    };
-    sub.appendChild(addBtn);
-  };
-
-  const editorFontWrapper = document.createElement('div');
-  editorFontWrapper.className = 'menu-item has-submenu';
-  
-  const editorFontLabel = document.createElement('span');
-  editorFontLabel.textContent = window.t('Editor font type ▸');
-  editorFontWrapper.appendChild(editorFontLabel);
-
-  const editorFontSub = document.createElement('div');
-  editorFontSub.className = 'submenu';
-  editorFontSub.style.display = 'none';
-
- buildFontRows(editorFontSub, () => editorFontType, (v) => { editorFontType = v; });
-
-  editorFontWrapper.appendChild(editorFontSub);
-  attachSubmenuHandlers(editorFontWrapper, editorFontSub);
-  settingsDropdown.appendChild(editorFontWrapper);
-
-  // ── Preview Text Size submenu
-  const previewSizeWrapper = document.createElement('div');
-  previewSizeWrapper.className = 'menu-item has-submenu';
-
-  const previewSizeLabel = document.createElement('span');
-  previewSizeLabel.textContent = window.t('Preview text size ▸');
-  previewSizeWrapper.appendChild(previewSizeLabel);
-
-  const previewSizeSub = document.createElement('div');
-  previewSizeSub.className = 'submenu';
-  previewSizeSub.style.display = 'none';
-
-  sizeOptions.forEach(pct => {
-    const btn = document.createElement('button');
-    btn.className = 'menu-item';
-    btn.textContent = (previewTextSize === pct ? '■ ' : '\u00a0\u00a0') + pct + '%';
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      settingsDropdown.classList.remove('show');
-      window.setPreviewTextSize(pct); // applies, persists, rebuilds the menu
-    };
-    previewSizeSub.appendChild(btn);
-  });
-
-  previewSizeWrapper.appendChild(previewSizeSub);
-  attachSubmenuHandlers(previewSizeWrapper, previewSizeSub);
-  settingsDropdown.appendChild(previewSizeWrapper);
-
-  // ── Preview Font Type Submenu
-  const previewFontWrapper = document.createElement('div');
-  previewFontWrapper.className = 'menu-item has-submenu';
-  
-  const previewFontLabel = document.createElement('span');
-  previewFontLabel.textContent = window.t('Preview font type ▸');
-  previewFontWrapper.appendChild(previewFontLabel);
-
-  const previewFontSub = document.createElement('div');
-  previewFontSub.className = 'submenu';
-  previewFontSub.style.display = 'none';
-
-  buildFontRows(previewFontSub, () => previewFontType, (v) => { previewFontType = v; });
-
-  previewFontWrapper.appendChild(previewFontSub);
-  attachSubmenuHandlers(previewFontWrapper, previewFontSub);
-  settingsDropdown.appendChild(previewFontWrapper);
 
   // ── Outline Font Size submenu
   const outlineSizeOptions = [70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240];
@@ -2981,9 +3368,8 @@ const themeOptions = [
       e.stopPropagation();
       uiSize = pct;
       document.documentElement.style.fontSize = pct + '%';
-      applyTextSize();
+      applyTypography(); // also the prose compensation for the new UI size
       applyOutlineFontSize();
-      applyUiSizeProseCompensation();
       settingsDropdown.classList.remove('show');
       buildSettingsMenu();
     };

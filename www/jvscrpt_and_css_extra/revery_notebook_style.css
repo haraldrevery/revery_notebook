@@ -117,6 +117,14 @@ html :is(#preview, .lp-render) .prose b {
   letter-spacing: var(--preview-letter-spacing, inherit) !important;
 }
 :is(#preview, .lp-render) .katex { font-size: var(--katex-font-size, 0.7em) !important; }
+/* Settings → Preview font → Line height scales the paragraph rhythm
+   (--text-line-row-space, prose_rn.css) in the preview and the live
+   preview, whose raw lines scale by the same factor (.cm-content below),
+   so an edited block keeps its rendered height. Headings, code and
+   tables keep theirs. Unset scale = 1 = the designed rhythm. */
+html :is(#preview, .lp-render) .prose :is(p, li) {
+  line-height: calc(var(--text-line-row-space) * var(--preview-line-scale, 1));
+}
 #outline-nav .outline-item { font-family: var(--outline-font, var(--font-brand, inherit)) !important; }
 
 /* Replaces injected <style> for Centered Headers */
@@ -164,6 +172,11 @@ html :is(#preview, .lp-render) .prose b {
      pane where container units exist (see "Column margins" below). */
   --read-gutter: 52px;
   --editor-gutter: 28px;
+  /* Classic editor line height (CodeMirror's own default, which the
+     editor always used; 1.24 on phones, below). Settings → Editor font →
+     Line height multiplies it by --editor-line-scale (menus.js
+     applyTextSpacing), unset = 1. */
+  --editor-line: 1.4;
 }
 /* ── Editor UI Themes ──
    Rules that differ between light and dark palettes key on html.dark
@@ -616,8 +629,9 @@ body.pane-labels-hidden #preview-pane > .pane-label { display: none; }
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 0.96rem;
-  line-height: 1.7;
-  letter-spacing: 0.01em;
+  line-height: 1.7; /* not the text's: .cm-content sets its own (--editor-line) */
+  /* + Settings → Editor font → Letter spacing (menus.js applyTextSpacing) */
+  letter-spacing: calc(0.01em + var(--editor-letter-offset, 0em));
   padding: 24px 28px; /* inert: #editor.cm-editor zeroes it (padding lives on .cm-content) */
   overflow-y: auto;
   tab-size: 2;
@@ -1342,6 +1356,94 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
 }
 .ct-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
+/* ── Font popup (openFontSettings, menus.js) ──
+   Not modal: the overlay only positions the panel and lets every pointer
+   event through, so the text being changed stays scrollable and the −/+
+   buttons keep working (a click elsewhere closes it, menus.js). Desktop:
+   docked in a top corner, over the half of the window that is not the
+   text being changed; a short window scrolls the panel, so Close is
+   always reachable. The lists open inline (in the panel's flow), where
+   that scrolling cannot clip them. */
+.modal-overlay.font-settings-overlay {
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 3rem 1.25rem 0;
+}
+.modal-overlay.font-settings-overlay.fs-dock-left { justify-content: flex-start; }
+.font-settings-content {
+  pointer-events: auto;
+  max-width: 380px;
+  max-height: calc(100% - 4rem);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+.modal-content p.fs-note { font-size: 0.78rem; margin: -4px 0 8px; }
+/* A list row keeps its label at the top when the list opens (.export-row
+   centers, and comes later in this file: hence the doubled class). */
+.export-row.fs-row-list { align-items: flex-start; }
+.export-row.fs-row-list > label { padding-top: 6px; }
+.export-dd.fs-dd, .fs-slider { width: 60%; max-width: none; } /* .export-dd caps at 58%, later */
+.fs-dd .export-dd-btn::after { content: '▾'; margin-left: auto; padding-left: 8px; }
+.fs-dd .export-dd-menu {
+  position: static;
+  margin-top: 3px;
+  max-height: 14em;
+  box-shadow: none;
+}
+/* touch-action: a double tap resets the slider (menus.js) instead of
+   zooming the page. */
+.fs-slider { display: flex; align-items: center; gap: 8px; touch-action: manipulation; }
+.fs-slider .ct-range { width: auto; flex: 1; min-width: 0; }
+/* The value beside a slider is a text field (type a value): it reads as
+   the plain number until pointed at or focused. */
+.fs-value {
+  flex-shrink: 0;
+  width: 5.4em;
+  box-sizing: border-box;
+  padding: 3px 4px 1px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: text;
+}
+.fs-value:hover { border-color: var(--border-md); }
+.fs-value:focus { outline: none; border-color: var(--accent); color: var(--text); background: var(--bg-panel); }
+.fs-value::selection { background: var(--selection); color: var(--text); }
+/* A custom font's ✕ in the list (same idiom as the template menus). */
+.export-dd-item:hover .tmpl-del { opacity: 0.7; }
+.export-dd-item .tmpl-del:hover { opacity: 1; color: #f87171; }
+@media (hover: none) {
+  .export-dd-item .tmpl-del { opacity: 0.7; }
+}
+/* Phones: a bottom panel. The text stays in view above it; at most about
+   half the screen, and it scrolls. */
+@media (max-width: 820px) {
+  .modal-overlay.font-settings-overlay,
+  .modal-overlay.font-settings-overlay.fs-dock-left {
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0;
+  }
+  /* iOS zooms the page into a focused field whose text is under 16px. */
+  .fs-value { font-size: max(16px, 0.72rem); width: 6em; }
+  .font-settings-content {
+    width: 100%;
+    max-width: none;
+    max-height: 55vh;
+    border-radius: 10px 10px 0 0;
+    border-bottom: none;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 /* ── Custom Date Picker Calendar ── */
 .md-cal {
   background: var(--bg-panel);
@@ -1986,7 +2088,7 @@ body:not(.reader-mode-active) #btn-exit-reader-mode { display: none !important; 
 #editor .cm-content {
   padding:        24px var(--editor-gutter);
   font-size:      inherit;       /* inherits the JS-set size from #editor        */
-  line-height:    inherit;
+  line-height:    calc(var(--editor-line) * var(--editor-line-scale, 1));
   letter-spacing: inherit;
   caret-color:    var(--doc-text);
   color:          var(--doc-text);
@@ -2011,11 +2113,12 @@ body:not(.live-preview-active) #editor .cm-scroller {
 
 /* 4. Mobile padding — mirrors the old mobile #editor rule */
 @media (max-width: 820px) {
-  :root { --editor-gutter: 20px; }
+  /* The phone editor's line height is its own (it once borrowed the
+     preview's --text-line-row-space, so a preview setting moved it). */
+  :root { --editor-gutter: 20px; --editor-line: 1.24; }
   #editor .cm-content {
     padding:     24px var(--editor-gutter) 40vh;
     font-size:   inherit;
-    line-height: var(--text-line-row-space, 1.24);
   }
 }
 
@@ -2438,7 +2541,7 @@ body.live-preview-active .cm-content {
      'Preview text size' setting), overriding the inline editor size
      inherited from #editor. Mirrors the prose desktop/mobile split.   */
   font-size: var(--text-body, 1.22rem) !important;
-  line-height: var(--text-line-row-space, 1.7) !important;
+  line-height: calc(var(--text-line-row-space, 1.7) * var(--preview-line-scale, 1)) !important;
 }
 @media (max-width: 899px) {
   body.live-preview-active .cm-content {
