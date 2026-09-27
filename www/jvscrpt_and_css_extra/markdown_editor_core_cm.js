@@ -569,7 +569,13 @@ function renderOutline() {
     btn.textContent = h.text;
     btn.title = h.text; // tooltip for long headings that overflow
     btn.dataset.line = h.lineIndex; // Link the button to the source line
-    btn.addEventListener('click', () => scrollToHeading(h.lineIndex));
+    btn.addEventListener('click', () => {
+      scrollToHeading(h.lineIndex);
+      /* The phone drawer covers the text behind a scrim: a picked heading
+         is a destination, so close it (the desktop pane stays). */
+      if (document.body.classList.contains('mobile-outline-open')
+          && typeof window.closeMobileOutline === 'function') window.closeMobileOutline();
+    });
     outlineNav.appendChild(btn);
   });
   
@@ -724,31 +730,47 @@ More information, click the ½ logo in the center top of the screen.
 
 
 
+/* ── Web autosave ─────────────────────────────────────────────────────────
+   The write rides the render debounce below (renderDelay: up to seconds
+   with the CPU-delay or slow-hardware settings), and a phone may discard
+   a backgrounded tab before it fires. So a write still PENDING is done at
+   once when the page is hidden. Only a pending one: this tab's newest
+   typing, which the debounce was about to write anyway. An unchanged tab
+   must never overwrite what another tab has written since. Desktop saves
+   through project_sidebar.js; nothing here runs there. */
+let webAutosavePending = false;
+function flushWebAutosave() {
+  if (!webAutosavePending) return;
+  webAutosavePending = false;
+  try {
+    localStorage.setItem(AUTOSAVE_KEY, editor.value);
+    clearStatusWarning('storage-full'); // a later write succeeded — storage recovered
+  } catch (e) {
+    if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+      console.warn('Local storage quota exceeded. Auto-save failed.');
+      showStatusWarning('storage-full',
+        'Storage full! Please export your file to prevent data loss.',
+        { priority: 100 }); // sticky until a write succeeds
+    }
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushWebAutosave();
+});
+window.addEventListener('pagehide', flushWebAutosave);
+
 editor.addEventListener('input', () => {
+  if (!(window.NativeAPI && window.NativeAPI.isDesktop)) webAutosavePending = true;
   clearTimeout(renderTimer);
-  renderTimer = setTimeout(() => { 
+  renderTimer = setTimeout(() => {
     // Skip render if on mobile and currently in editor view to save CPU/battery
     const isNarrow = window.innerWidth <= 820;
     const isMobileEditor = isNarrow && document.body.getAttribute('data-view') === 'editor';
     if (!isMobileEditor) {
-      render(); 
+      render();
     }
-    countWords(); 
-    if (!(window.NativeAPI && window.NativeAPI.isDesktop)) {
-      
-    try {
-        localStorage.setItem(AUTOSAVE_KEY, editor.value);
-        clearStatusWarning('storage-full'); // a later write succeeded — storage recovered
-      } catch (e) {
-        if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-          console.warn('Local storage quota exceeded. Auto-save failed.');
-          showStatusWarning('storage-full',
-            'Storage full! Please export your file to prevent data loss.',
-            { priority: 100 }); // sticky until a write succeeds
-        }
-      }
-      
-    }
+    countWords();
+    flushWebAutosave();
     /* Slow hardware mode floors the debounce at 400 ms so weak CPUs are
        never asked to re-render (markdown-it + KaTeX + hljs) per keystroke.
        The user's own renderDelay setting is respected when higher.       */

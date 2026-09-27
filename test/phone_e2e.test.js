@@ -8,7 +8,10 @@
    from the editor view) or had no Exit button (from the preview view).
    The last four failed before the mobile-audit fixes: status warnings
    hidden in every view, submenus a tap could not open, a stale HTML
-   export, and an About dialog with no way out on a short screen.
+   export, and an About dialog with no way out on a short screen. The
+   three after them failed before the second pass: a blank Preview view
+   with Show Preview off, an Outline drawer that left its inline position
+   behind, and no Find/Undo/Redo without a keyboard.
    Skipped when no display is available. */
 
 const { test } = require('node:test');
@@ -54,5 +57,8 @@ test('phone layout: views, toggle label, reader mode', { skip: !hasDisplay, time
   assert.equal(r.tapOpensSubmenu, true, 'a tap must open a submenu (its mouseenter must not open it for the click to shut)');
   assert.equal(r.htmlExportFresh, true, 'Export as .html must carry the latest text, not the last rendered preview');
   assert.equal(r.aboutClosable, true, 'About must be closable: Close on screen, Escape, backdrop tap');
+  assert.equal(r.previewViewWithPreviewOff, true, 'the Preview view must show the preview even with Settings → Show Preview off');
+  assert.equal(r.drawerClosesCleanly, true, 'the Outline drawer closes on scrim, heading pick and view change, leaving no inline position');
+  assert.equal(r.toolbarFindUndoRedo, true, 'Find, Undo and Redo must work from the Toolbar menu (no keyboard on a phone)');
   assert.equal(r.noHorizontalOverflow, true, 'nothing may be wider than the phone');
 });

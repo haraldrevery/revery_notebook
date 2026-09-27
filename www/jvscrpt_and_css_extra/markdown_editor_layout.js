@@ -349,6 +349,15 @@ function updateMobileBtn() {
   if (!narrow && lastWasNarrow) {
     if (typeof render === 'function') render();
   }
+  /* Crossing the phone/desktop line either way: the phone Outline drawer
+     does not exist on the other side, and the Settings menu offers some
+     entries only on one side (Show Outline, Mobile View, Drag to adjust).
+     It is built for the width at build time, so rebuild it here, not on
+     every resize. */
+  if (narrow !== lastWasNarrow) {
+    if (typeof window.closeMobileOutline === 'function') window.closeMobileOutline();
+    if (typeof buildSettingsMenu === 'function') buildSettingsMenu();
+  }
   lastWasNarrow = narrow;
 
   if (!narrow) {
@@ -382,23 +391,26 @@ updateMobileBtn();
 /* The Outline button's click is handled entirely by toggleOutline() in
    markdown_editor_menus.js, which now contains a mobile branch that calls
    renderOutline() and toggles .mobile-outline-open directly.
-   This IIFE only needs to handle the scrim tap and the view-switch close. */
+   This IIFE only needs to handle the scrim tap and the view-switch close.
+   Both go through closeMobileOutline (menus.js), which also drops the
+   drawer's inline position. */
 (function () {
   const scrim = document.getElementById('mobile-outline-scrim');
 
   /* Tap the scrim to close */
   if (scrim) {
-    scrim.addEventListener('click', () => {
-      document.body.classList.remove('mobile-outline-open');
-    });
+    scrim.addEventListener('click', () => window.closeMobileOutline());
   }
 
-  /* Close the drawer when switching back to editor view */
-  if (typeof btnView !== 'undefined' && btnView) {
-    btnView.addEventListener('click', () => {
-      document.body.classList.remove('mobile-outline-open');
-    });
-  }
+  /* The drawer belongs to the Preview view: close it whenever the view
+     becomes anything else — the toggle, the sidebar button, or any other
+     writer of data-view (they all go through the attribute). */
+  new MutationObserver(() => {
+    if (document.body.getAttribute('data-view') !== 'preview'
+        && document.body.classList.contains('mobile-outline-open')) {
+      window.closeMobileOutline();
+    }
+  }).observe(document.body, { attributes: true, attributeFilter: ['data-view'] });
 })();
 /* ── Top bar fit (desktop, > 820px) ───────────────────────────────────────
    The bar's content width depends on the UI size (90–270%), the language,

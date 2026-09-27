@@ -594,12 +594,24 @@ the project-sidebar button exists only there. Status warnings: the top
 bar's `#size-warning` is hidden in every phone view, so
 `_renderStatusWarning` (core_cm.js) also writes the text to
 `#phone-status`, a bar under the header shown only in this layout.
-Submenus open on a tap: a tap's compatibility `mouseenter` is ignored
-(`attachSubmenuHandlers`, menus.js) and its click toggles, since hover
-open plus click toggle shut every submenu on touch. About / Legal /
-User Guide are capped to the window (their text area scrolls) and also
-close on Escape or a backdrop tap. `test/phone_e2e.test.js` covers it at
-390px.
+Submenus open on a tap: a tap's compatibility `mouseenter` and
+`mouseleave` are ignored (`attachSubmenuHandlers`, menus.js) and its
+click toggles. Hover-open plus click-toggle shut every submenu on touch,
+and the accordion's own layout shift under the finger fired a
+`mouseleave` that shut it 80 ms later. Every menu opens with its
+submenus collapsed (`smartPositionDropdown`). Phone menus sit under the
+header's measured bottom, 16px from the sides, and long submenu entries
+wrap. About / Legal / User Guide are capped to the window (their text
+area scrolls) and also close on Escape or a backdrop tap. The Outline
+drawer has one close path, `closeMobileOutline` (menus.js), which also
+drops its inline position. It closes on a scrim tap, a picked heading,
+any view change and a widen. Crossing 820px either way also rebuilds
+the Settings menu, whose entries depend on the layout. On a phone the
+Preview view always shows the preview, even with Show Preview off. The
+desktop "Mobile View" frame applies only in the desktop layout. Find,
+Undo and Redo are in the Toolbar menu for keyboardless devices; Undo and
+Redo are CodeMirror's own history commands, text only.
+`test/phone_e2e.test.js` covers it at 390px.
 
 ---
 
@@ -912,6 +924,15 @@ localStorage autosave. In desktop mode this handler fires only if the user
 somehow has two browser tabs open to the same Electron renderer, which is
 prevented by `app.requestSingleInstanceLock()` (add to `electron/main.js`
 for production).
+
+The web autosave write rides the render debounce, which the CPU-delay
+setting can stretch to seconds, and a phone may discard a backgrounded
+tab before it fires. So a *pending* write is flushed on
+`visibilitychange` → hidden and on `pagehide` (`flushWebAutosave`).
+Only a pending one: a tab with no unwritten typing never writes on hide,
+so it cannot overwrite another tab's newer autosave, and neither can
+its old debounce timer after a flush. `test/web_autosave_e2e.test.js`
+pins both directions.
 
 ---
 

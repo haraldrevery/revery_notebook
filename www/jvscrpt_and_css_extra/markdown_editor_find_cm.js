@@ -621,9 +621,9 @@ replaceOneBtn.addEventListener('click', replaceCurrent);
 replaceAllBtn.addEventListener('click', replaceAll);
 findCloseBtn .addEventListener('click', closeFindBar);
 
-/* ── Ctrl+F global shortcut ── */
+/* ── Ctrl+F global shortcut (Cmd+F on macOS / an iPad keyboard) ── */
 document.addEventListener('keydown', e => {
-  if (e.ctrlKey && e.key.toLowerCase() === 'f') {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
     e.preventDefault(); // Suppress the browser's native find dialog
     if (findBar.style.display === 'none' || findBar.style.display === '') {
       openFindBar();

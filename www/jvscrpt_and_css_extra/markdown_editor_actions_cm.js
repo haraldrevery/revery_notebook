@@ -19,7 +19,12 @@ const menuActions = [
   { label: 'Horizontal Rule', action: 'hr' },
   { label: 'Footnote', action: 'footnote' },
   { type: 'divider' },
-  { label: 'Copy MD', action: 'copy' }
+  { label: 'Copy MD', action: 'copy' },
+  /* The keyboard-only commands, reachable without a keyboard (a phone) */
+  { type: 'divider' },
+  { label: 'Find / Replace (Ctrl+F)', action: 'find' },
+  { label: 'Undo (Ctrl+Z)', action: 'undo' },
+  { label: 'Redo (Ctrl+Y)', action: 'redo' }
 ];
 
 
@@ -156,6 +161,14 @@ function executeAction(action) {
       document.getElementById('date-picker-modal').classList.add('show');
       break;
     }
+    /* Ctrl+F / Ctrl+Z / Ctrl+Y from the menu. Undo/Redo are CodeMirror's
+       own history commands, exactly what the keys run in the editor: the
+       TEXT only. (Ctrl+Z outside the editor undoes a file move/rename —
+       never reached from here.) */
+    case 'find': openFindBar(); break;
+    case 'undo': if (window.CM && window.cmView) CM.undo(window.cmView); break;
+    case 'redo': if (window.CM && window.cmView) CM.redo(window.cmView); break;
+
     case 'file_new': newFile(); break;
 
 

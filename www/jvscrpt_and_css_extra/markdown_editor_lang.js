@@ -360,6 +360,9 @@ window.uiTranslations = {
   "Horizontal Rule": { "Swedish": "Horisontell linje" },
   "Footnote": { "Swedish": "Fotnot" },
   "Copy MD": { "Swedish": "Kopiera MD" },
+  "Find / Replace (Ctrl+F)": { "Swedish": "Sök / ersätt (Ctrl+F)" },
+  "Undo (Ctrl+Z)": { "Swedish": "Ångra (Ctrl+Z)" },
+  "Redo (Ctrl+Y)": { "Swedish": "Gör om (Ctrl+Y)" },
   "Insert YAML ▸": { "Swedish": "Infoga YAML ▸" },
   
   // Modals & UI Actions

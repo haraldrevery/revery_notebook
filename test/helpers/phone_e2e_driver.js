@@ -52,8 +52,11 @@
   clearStatusWarning('e2e'); await sleep(50);
   out.warningsVisible = warned && !vis($('phone-status'));
 
-  /* A tap opens a submenu. Its compatibility mouseenter used to open it
-     and the click then shut it again. A tap's event order, synthesized. */
+  /* A tap opens a submenu, and it stays open. Its compatibility
+     mouseenter used to open it and the click then shut it again; and the
+     opened accordion moves the layout under the resting finger, whose
+     boundary mouseleave then shut it 80 ms later. A tap's event order,
+     synthesized. */
   $('btn-settings').click(); await sleep(100);
   const row = document.querySelector('#settings-dropdown > .has-submenu');
   const rowLabel = row.querySelector(':scope > span');
@@ -61,6 +64,8 @@
   rowLabel.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
   row.dispatchEvent(new MouseEvent('mouseenter'));
   rowLabel.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  row.dispatchEvent(new MouseEvent('mouseleave'));
+  await sleep(200);
   out.tapOpensSubmenu = row.querySelector('.submenu').style.display === 'flex';
   document.body.click(); await sleep(100);
 
@@ -91,6 +96,49 @@
   about.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   out.aboutClosable = closeOnScreen && escapeCloses && !about.classList.contains('show');
   about.classList.remove('show');
+
+  /* Settings → Show Preview off: the phone Preview view still shows the
+     preview (the desktop split hides the pane inline — it was blank). */
+  togglePreview(); await sleep(100);
+  toggle.click(); await sleep(250);
+  out.previewViewWithPreviewOff = view() === 'preview' && vis($('preview-pane'))
+    && $('preview-pane').getBoundingClientRect().height > 200;
+  toggle.click(); await sleep(250);
+  togglePreview(); await sleep(100);
+
+  /* Outline drawer: every close drops its inline position (a leftover
+     broke the desktop outline after a widen), and picking a heading
+     closes it. */
+  cm.dispatch({ changes: { from: cm.state.doc.length, insert: '\n\n## E2E heading\n\ntext' } });
+  toggle.click(); await sleep(250);
+  const pane = $('outline-pane');
+  const drawerClosedClean = () => !document.body.classList.contains('mobile-outline-open')
+    && !['position', 'top', 'right', 'left', 'bottom'].some((k) => pane.style[k]);
+  toggleOutline(); await sleep(100);
+  const drawerOpened = document.body.classList.contains('mobile-outline-open') && vis(pane);
+  $('mobile-outline-scrim').click(); await sleep(50);
+  const scrimCloses = drawerClosedClean();
+  toggleOutline(); await sleep(100);
+  document.querySelector('#outline-nav .outline-item').click(); await sleep(50);
+  const headingCloses = drawerClosedClean();
+  toggleOutline(); await sleep(100);
+  toggle.click(); await sleep(100); // → editor
+  const viewChangeCloses = drawerClosedClean();
+  out.drawerClosesCleanly = drawerOpened && scrimCloses && headingCloses && viewChangeCloses;
+
+  /* Find, Undo and Redo are reachable without a keyboard (Toolbar). */
+  const clickToolbarItem = (re) => {
+    const item = [...document.querySelectorAll('#toolbar-dropdown > .menu-item')].find((b) => re.test(b.textContent));
+    if (item) item.click();
+    return !!item;
+  };
+  cm.dispatch({ changes: { from: cm.state.doc.length, insert: ' E2E_UNDO_ME' }, userEvent: 'input.type' });
+  await sleep(50);
+  const undone = clickToolbarItem(/^Undo/) && (await sleep(50), !editor.value.includes('E2E_UNDO_ME'));
+  const redone = clickToolbarItem(/^Redo/) && (await sleep(50), editor.value.includes('E2E_UNDO_ME'));
+  const findOpen = clickToolbarItem(/^Find/) && (await sleep(100), vis($('find-bar')));
+  closeFindBar();
+  out.toolbarFindUndoRedo = undone && redone && findOpen;
 
   /* Nothing is wider than the phone. */
   out.noHorizontalOverflow = document.documentElement.scrollWidth <= window.innerWidth;
