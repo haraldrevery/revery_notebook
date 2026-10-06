@@ -10,6 +10,7 @@ import { saveActiveFile, markClean, scheduleAutoSave, cancelPendingAutoSave,
          replaceOpenDocument, SWITCH_CANCELLED, saveBeforeLeaving,
          resumeScratchpadAfterSwitch, hasTextWithoutProject } from './save.js';
 import { renderTree, updateMultiSelectHighlight, updateSelectedDirHighlight, highlightActiveFile } from './tree.js';
+import { restoreCardViewDir } from './cards.js';
 import { openSidebar, switchFromMobileSidebar } from './panel.js';
 import { startWatchingFile, stopWatchingFile, watchedPath } from './watcher.js';
 import { recordProjectOpen } from './projects.js';
@@ -1239,7 +1240,7 @@ async function openFolder(folderPath) {
        below, a note created there was refused as outside the root). */
     S.rootPath = folderPath;
     S.selectedDirPath = folderPath;
-    S.cardViewDir = folderPath;
+    restoreCardViewDir(folderPath); // where the card view was in this project (cards.js)
     clearUndoStack(); // file undo never reaches into another project
     try { localStorage.setItem('revery_root_path', S.rootPath); } catch (e) {}
     

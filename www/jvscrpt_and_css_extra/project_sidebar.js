@@ -14,7 +14,7 @@
       __defProp(target, name, { get: all[name], enumerable: true });
   };
 
-  // src/sidebar/dialogs.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/dialogs.js
   function initDialogStyles() {
     (function injectInputDialogStyles() {
       if (document.getElementById("revery-input-dialog-styles")) return;
@@ -672,7 +672,7 @@
     });
   }
 
-  // src/sidebar/state.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/state.js
   var btnSidebar = document.getElementById("btn-sidebar");
   var sidebarPanel = document.getElementById("project-sidebar");
   var sidebarDivider = document.getElementById("sidebar-divider");
@@ -759,7 +759,7 @@
     return i === 0 ? p[0] : p.slice(0, i);
   }
 
-  // src/sidebar/paths.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/paths.js
   var paths_exports = {};
   __export(paths_exports, {
     MEDIA_EXTS: () => MEDIA_EXTS,
@@ -962,7 +962,7 @@
     return `![${name}](${encodeLinkDest(rel)})`;
   }
 
-  // src/sidebar/drop_transport.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/drop_transport.js
   function decideFileDropTransport(env, platform) {
     if (env !== "tauri") return "dom";
     return /^win/i.test(String(platform || "")) ? "dom" : "native";
@@ -1001,7 +1001,7 @@
     }
   }
 
-  // src/sidebar/helpers.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/helpers.js
   function arrayBufferToBase64(buf) {
     const bytes = new Uint8Array(buf);
     let binary = "";
@@ -1108,7 +1108,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
   }
 
-  // src/sidebar/icons.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/icons.js
   var ICONS = {
     /* folder.svg (glyph-u1F4C1) */
     "folder": {
@@ -1187,7 +1187,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return svg;
   }
 
-  // src/sidebar/eol.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/eol.js
   function detectEol(raw) {
     if (typeof raw !== "string" || raw.indexOf("\r\n") < 0) return "\n";
     return /(^|[^\r])\n/.test(raw) || /\r(?!\n)/.test(raw) ? "\n" : "\r\n";
@@ -1199,7 +1199,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return eol === "\r\n" ? editorText.replace(/\n/g, "\r\n") : editorText;
   }
 
-  // src/sidebar/watcher.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/watcher.js
   var _watchedPath = null;
   function startWatchingFile(filePath) {
     if (_watchedPath) {
@@ -1402,7 +1402,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return _watchedPath;
   }
 
-  // src/sidebar/projects.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/projects.js
   var PROJECTS_KEY = "revery_projects";
   var MAX_PROJECTS = 20;
   var _cachedProjects = null;
@@ -1608,7 +1608,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
   }
 
-  // src/sidebar/save.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/save.js
   var _autoSaveTimer = null;
   function autosaveDelayMs() {
     return window.slowHardwareMode ? 4e3 : 1500;
@@ -2346,7 +2346,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return _panelArmed;
   }
 
-  // src/sidebar/panel.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/panel.js
   function openSidebar() {
     S.sidebarOpen = true;
     sidebarPanel.style.display = "flex";
@@ -2430,7 +2430,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
   }
 
-  // src/sidebar/link_rewrite.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/link_rewrite.js
   function buildAbsMapper(records) {
     const pairs = records.map((r) => [normalizePath(r.oldPath), normalizePath(r.newPath)]);
     return (abs) => {
@@ -2490,7 +2490,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return { text: out.join("\n"), changes };
   }
 
-  // src/sidebar/project_scan.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/project_scan.js
   var MAX_FILES = 800;
   var LIST_TTL_MS = 15 * 1e3;
   var _cache = { at: 0, root: null, files: null };
@@ -2530,7 +2530,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     _cache = { at: 0, root: null, files: null };
   }
 
-  // src/sidebar/import_text.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/import_text.js
   function decodeImportedText(bytes) {
     const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     if (b.length >= 4 && b[0] === 255 && b[1] === 254 && b[2] === 0 && b[3] === 0) {
@@ -2545,7 +2545,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(b);
   }
 
-  // src/sidebar/fileops.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/fileops.js
   function errText(err) {
     return String(err && err.message || err).replace(/^Error invoking remote method '[^']*': /, "").replace(/^Error: /, "");
   }
@@ -3422,7 +3422,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (typeof canonical === "string" && canonical) folderPath = canonical;
     S.rootPath = folderPath;
     S.selectedDirPath = folderPath;
-    S.cardViewDir = folderPath;
+    restoreCardViewDir(folderPath);
     clearUndoStack();
     try {
       localStorage.setItem("revery_root_path", S.rootPath);
@@ -3602,7 +3602,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     };
   }
 
-  // src/sidebar/tree.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/tree.js
   var _treeRenderGeneration = 0;
   var sortKey = "name";
   var sortDir = "asc";
@@ -4118,8 +4118,55 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
   }
 
-  // src/sidebar/cards.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/card_memory.js
+  var CARD_DIRS_KEY = "revery_card_view_dirs";
+  var MAX_REMEMBERED_PROJECTS = 30;
+  function parseCardDirs(raw) {
+    let list;
+    try {
+      list = JSON.parse(raw);
+    } catch (_) {
+      return [];
+    }
+    if (!Array.isArray(list)) return [];
+    return list.filter((e) => e && typeof e.root === "string" && e.root && typeof e.dir === "string" && e.dir);
+  }
+  function rememberedCardDir(list, root) {
+    if (!root || !Array.isArray(list)) return null;
+    const key = pathKey(root);
+    const hit = list.find((e) => pathKey(e.root) === key);
+    return hit && isInsideRoot(hit.dir, root) ? hit.dir : null;
+  }
+  function withCardDir(list, root, dir) {
+    const key = pathKey(root);
+    const rest = (Array.isArray(list) ? list : []).filter((e) => pathKey(e.root) !== key);
+    return [{ root, dir }, ...rest].slice(0, MAX_REMEMBERED_PROJECTS);
+  }
+
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/cards.js
   var _cardGeneration = 0;
+  function loadCardDirs() {
+    try {
+      return parseCardDirs(localStorage.getItem(CARD_DIRS_KEY) || "[]");
+    } catch (_) {
+      return [];
+    }
+  }
+  function rememberCardDir(root, dir) {
+    if (!root || !dir || !isInsideRoot(dir, root)) return;
+    const list = loadCardDirs();
+    if (rememberedCardDir(list, root) === dir) return;
+    try {
+      localStorage.setItem(CARD_DIRS_KEY, JSON.stringify(withCardDir(list, root, dir)));
+    } catch (_) {
+    }
+  }
+  function restoreCardViewDir(root) {
+    if (!root) return;
+    const sel = S.selectedDirPath && isInsideRoot(S.selectedDirPath, root) ? S.selectedDirPath : null;
+    S.cardViewDir = rememberedCardDir(loadCardDirs(), root) || sel || root;
+    if (S.sidebarViewMode === "card") S.selectedDirPath = S.cardViewDir;
+  }
   var CARD_SIZE_STEPS = [60, 80, 110, 145, 185];
   var cardSizeIdx = 1;
   try {
@@ -4398,6 +4445,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       S.cardViewDir = dirPath;
     }
     const generation = ++_cardGeneration;
+    const root = S.rootPath;
     treeEl.innerHTML = "";
     treeEl.scrollTop = 0;
     treeEl.classList.add("sidebar-card-view");
@@ -4413,9 +4461,16 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     } catch (err) {
       console.warn("[Sidebar] renderCards readDirectory failed:", dirPath, err);
       if (treeEl.contains(loadingEl)) treeEl.removeChild(loadingEl);
+      const up = parentPathOf(dirPath);
+      if (_cardGeneration === generation && root && S.rootPath === root && !samePath(dirPath, root) && up && isInsideRoot(up, root)) {
+        if (samePath(S.cardViewDir, dirPath)) S.cardViewDir = up;
+        if (S.selectedDirPath && isInsideRoot(S.selectedDirPath, dirPath)) S.selectedDirPath = up;
+        return renderCards(up);
+      }
       return;
     }
     if (_cardGeneration !== generation) return;
+    if (S.rootPath === root) rememberCardDir(root, dirPath);
     if (treeEl.contains(loadingEl)) treeEl.removeChild(loadingEl);
     entries = sortEntries(entries).filter((e) => !e.name.startsWith("."));
     if (entries.length === 0) {
@@ -4521,14 +4576,14 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     })();
   }
 
-  // src/sidebar/block_insert.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/block_insert.js
   function paragraphInsertion(before, after, block) {
     const lead = before === "" || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
     const trail = after.startsWith("\n\n") ? "" : after === "" || after.startsWith("\n") ? "\n" : "\n\n";
     return { insert: lead + block + trail, cursor: lead.length + block.length + 1 };
   }
 
-  // src/sidebar/media_ingest.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/media_ingest.js
   var DROP_MAX_BYTES = 20 * 1024 * 1024;
   var sourceName = (src) => src.kind === "file" ? src.file.name : baseNameOf(src.path);
   var isMediaSource = (src) => getFileCategory(sourceName(src)) === "media";
@@ -4742,7 +4797,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }, true);
   }
 
-  // src/sidebar/dnd.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/dnd.js
   function getDropTargetDir(eventTarget) {
     const navTarget = eventTarget.closest && eventTarget.closest("[data-drop-dir]");
     if (navTarget) {
@@ -4878,7 +4933,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     })();
   }
 
-  // src/sidebar/lifecycle.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/lifecycle.js
   var CLOSE_STUCK_MS = 5e3;
   var _closing = null;
   async function sidebarHandleClose() {
@@ -5353,7 +5408,6 @@ More information, click the \xBD logo in the center top of the screen.
             expandedDirs.clear();
             expandedDirs.add(folder);
             await recordProjectOpen(folder);
-            S.cardViewDir = folder;
             if (canonicalLast && canonicalLast.replace(/\\/g, "/").startsWith(folder.replace(/\\/g, "/"))) {
               const relPath = canonicalLast.replace(/\\/g, "/").substring(folder.length).replace(/^\//, "");
               const relParts = relPath.split("/");
@@ -5365,6 +5419,7 @@ More information, click the \xBD logo in the center top of the screen.
               }
               S.selectedDirPath = currentPath;
             }
+            restoreCardViewDir(folder);
             openSidebar();
             updateViewBtn();
             await renderTree();
@@ -5550,7 +5605,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
           }
           recordProjectOpen(defaultFolder);
           S.selectedDirPath = defaultFolder;
-          S.cardViewDir = defaultFolder;
+          restoreCardViewDir(defaultFolder);
           const parts = defaultFolder.replace(/\\/g, "/").split("/");
           folderNameEl.textContent = parts[parts.length - 1] || defaultFolder;
           expandedDirs.clear();
@@ -5576,7 +5631,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
     })();
   }
 
-  // src/sidebar/yaml_index.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/yaml_index.js
   var INDEX_TTL_MS = 30 * 1e3;
   var MAX_FILE_BYTES = 1024 * 1024;
   var MAX_KEYS = 200;
@@ -5668,7 +5723,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
     return serialize(merged);
   }
 
-  // src/sidebar/search.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/search.js
   var DEBOUNCE_MS = () => window.slowHardwareMode ? 600 : 250;
   var MIN_QUERY = 2;
   var MAX_MATCHES_PER_FILE = 5;
@@ -5900,7 +5955,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
     openSearch();
   }
 
-  // src/sidebar/link_complete.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/link_complete.js
   async function listLinkCompletions(rawDest) {
     if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return null;
     if (typeof rawDest !== "string") return null;
@@ -5939,7 +5994,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
     return { rawSegLength: rawSeg.length, entries: out.slice(0, 60) };
   }
 
-  // src/sidebar/index.js
+  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/index.js
   window.sidebarYamlIndex = getYamlIndex;
   window.sidebarListLinkCompletions = listLinkCompletions;
   window.sidebarIcon = icon;

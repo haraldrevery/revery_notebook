@@ -256,6 +256,13 @@ The `●` marker indicates the currently active file (`.active` CSS class).
   (re-checked when the panel is resized). Every ancestor segment and the
   Back button are drop targets: dropping cards there moves them up. Nothing
   above the project root is ever offered (`cards.js` NAVIGATION BAR)
+- The card view's folder is remembered per project (`card_memory.js`, in
+  localStorage like the view mode): a restart or a project switch reopens
+  the folder it showed — else the last note's folder, else the root — and
+  in card view the selected folder (where New File and new notes go)
+  follows it. A remembered folder that is gone falls back to the nearest
+  folder above it that still exists (`renderCards`). It used to open at
+  the root at every start while the editor reopened the last note
 - Links (symlinks/junctions) show the link glyph and are never walked into
 
 ### Context Menu Actions (translated EN/SV)
@@ -1308,6 +1315,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/fs_core.paths.test.js` | Path traversal / symlink-escape rejection, dropped-filename sanitisation |
 | `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
 | `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup |
+| `test/card_memory.test.js` | The card view's per-project folder memory: malformed storage dropped, only a folder inside its project offered, Windows spellings case-insensitive, one entry per project, newest first, bounded |
 | `test/fs_core.read.test.js` | Strict UTF-8 reads: valid UTF-8 / BOM / CRLF round-trip byte for byte; Windows-1252 and UTF-16 are refused and left untouched |
 | `test/fs_core.rename.test.js` | The only rename-over-existing exception (case-only alias of the SAME file); two different files differing only in case are never treated as one |
 | `test/fs_core.entry.test.js` | Entry operations (`validateEntryInside`, `renameEntry`, `trashableEntry`): a link is the link, never its target (also one pointing outside); nothing behind an outside link is reachable; a symlinked root resolves to the real spelling; never overwrites (a dangling link included); absolute links move as links, relative ones are refused across folders; into-itself / root / bad names refused, a pure move keeps a legacy name; EXDEV refused with nothing changed; EBUSY is never a copy (retried on every platform, then it fails); the Windows retry, and a destination appearing during it is never overwritten; `checkEntryName` agrees with the renderer's |

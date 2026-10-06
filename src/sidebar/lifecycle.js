@@ -6,7 +6,7 @@ import { saveActiveFile, markClean, markDirty, scheduleAutoSave, cancelPendingAu
          rememberDiskContent, retargetActiveFile } from './save.js';
 import { normalizeEol } from './eol.js';
 import { renderTree, highlightActiveFile } from './tree.js';
-import { updateViewBtn } from './cards.js';
+import { updateViewBtn, restoreCardViewDir } from './cards.js';
 import { openSidebar } from './panel.js';
 import { startWatchingFile } from './watcher.js';
 import { openFile } from './fileops.js';
@@ -591,7 +591,6 @@ try {
           expandedDirs.add(folder);
 
           await recordProjectOpen(folder);
-          S.cardViewDir = folder;
 
           if (canonicalLast && canonicalLast.replace(/\\/g, '/').startsWith(folder.replace(/\\/g, '/'))) {
             const relPath = canonicalLast.replace(/\\/g, '/').substring(folder.length).replace(/^\//, '');
@@ -605,8 +604,12 @@ try {
               currentPath = joinPath(currentPath, p);
               expandedDirs.add(currentPath);
             }
-            S.selectedDirPath = currentPath; 
+            S.selectedDirPath = currentPath;
           }
+          /* The card view opens where it was when this project was last
+             open — else at the last note's folder (selected just above).
+             It used to open at the root every time (cards.js). */
+          restoreCardViewDir(folder);
           openSidebar();
           updateViewBtn();
           await renderTree();
@@ -829,7 +832,7 @@ try {
         try { localStorage.setItem('revery_root_path', S.rootPath); } catch (e) {}
         recordProjectOpen(defaultFolder);
         S.selectedDirPath = defaultFolder;
-        S.cardViewDir = defaultFolder;
+        restoreCardViewDir(defaultFolder);
         const parts = defaultFolder.replace(/\\/g, '/').split('/');
         folderNameEl.textContent = parts[parts.length - 1] || defaultFolder;
         expandedDirs.clear();
