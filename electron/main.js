@@ -26,7 +26,9 @@ const {
   ipcMain,
   dialog,
   shell,
+  session,
 } = require('electron');
+const { setUpSpellChecker } = require('./spellcheck');
 
 const path  = require('path');
 const fs    = require('fs');
@@ -365,6 +367,17 @@ ipcMain.on('window:close-failed', (event, message) => {
 app.whenReady().then(() => {
   /* A second instance is already quitting — never create its window. */
   if (!gotSingleInstanceLock) return;
+
+  /* Spell check with the bundled dictionaries only — never a download
+     (spellcheck.js). Before anything creates a session: Chromium looks for
+     its dictionaries the moment one exists. Should the setup fail, spell
+     check is off; the app starts regardless. */
+  try {
+    setUpSpellChecker(app, () => session.defaultSession);
+  } catch (err) {
+    console.warn('[revery] spell check setup failed — turned off:', err.message);
+    try { session.defaultSession.setSpellCheckerEnabled(false); } catch (_) { /* nothing more to do */ }
+  }
 
   createWindow();
 
