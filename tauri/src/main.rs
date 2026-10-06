@@ -219,9 +219,21 @@ fn prepare_durable_dir(app: &AppHandle) -> Result<&'static std::path::PathBuf, &
 
 /* ── Backup primitives, parameterized by directory ──────────────────────
    Both the volatile (temp) and durable (app data) locations use the SAME
-   on-disk format: <fnv1a(path)>.revery_volatile + <key>.meta.json. Keep
-   the key and file naming stable — existing users' backups must remain
-   readable across updates. Callers hold VOLATILE_LOCK.                  */
+   on-disk format: <fnv1a(path)>.revery_volatile + <key>.meta.json
+   { originalPath, ts, base? }. Keep the key and file naming stable —
+   existing users' backups must remain readable across updates. `base`
+   (optional): the fingerprint of the disk version the text was edited
+   from; start-up recovery compares it with the file to tell unsaved edits
+   from a file that was changed since (src/sidebar/fingerprint.js). Older
+   backups have none. MIRROR of setVolatileContent / getVolatileContent in
+   electron/fs_core.js. Callers hold VOLATILE_LOCK.                       */
+
+/// A base is a short string the renderer computed; anything else is
+/// dropped (the backup then counts as one without a base).
+fn valid_backup_base(base: Option<&str>) -> Option<&str> {
+    base.filter(|b| !b.is_empty() && b.len() <= 200)
+}
+
 fn backup_key(path: &str) -> String {
     // Deterministic FNV-1a hash of the original path.
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -232,7 +244,7 @@ fn backup_key(path: &str) -> String {
     format!("{:016x}", hash)
 }
 
-fn write_backup_to(dir: &Path, path: &str, content: &str) -> Result<(), String> {
+fn write_backup_to(dir: &Path, path: &str, content: &str, base: Option<&str>) -> Result<(), String> {
     let key = backup_key(path);
     let data_file = dir.join(format!("{key}.revery_volatile"));
     let meta_file = dir.join(format!("{key}.meta.json"));
@@ -242,22 +254,28 @@ fn write_backup_to(dir: &Path, path: &str, content: &str) -> Result<(), String> 
         .map(|d| d.as_nanos())
         .unwrap_or(0);
 
+    // Data first (see fs_core.js): a crash between the two writes can only
+    // pair the new text with an OLDER base — recovery then defaults to
+    // keeping both, never to restoring over a changed file.
     let data_tmp = dir.join(format!("{key}.{now}.revery_volatile.tmp"));
     atomic_write_file(&data_tmp, &data_file, content.as_bytes())?;
 
-    let meta = serde_json::json!({
+    let mut meta = serde_json::json!({
         "originalPath": path,
         "ts": std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0u64),
     });
+    if let Some(b) = valid_backup_base(base) {
+        meta["base"] = serde_json::Value::String(b.to_string());
+    }
     let meta_tmp = dir.join(format!("{key}.{now}.meta.json.tmp"));
     atomic_write_file(&meta_tmp, &meta_file, meta.to_string().as_bytes())
 }
 
-/// Returns (content, ts) for the backup of `path` in `dir`, if present.
-fn read_backup_from(dir: &Path, path: &str) -> Option<(String, u64)> {
+/// Returns (content, ts, base) for the backup of `path` in `dir`, if present.
+fn read_backup_from(dir: &Path, path: &str) -> Option<(String, u64, Option<String>)> {
     let key = backup_key(path);
     let data_file = dir.join(format!("{key}.revery_volatile"));
     let meta_file = dir.join(format!("{key}.meta.json"));
@@ -266,7 +284,8 @@ fn read_backup_from(dir: &Path, path: &str) -> Option<(String, u64)> {
     let meta: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&meta_file).ok()?).ok()?;
     let ts = meta["ts"].as_u64().unwrap_or(0);
-    Some((content, ts))
+    let base = valid_backup_base(meta["base"].as_str()).map(str::to_string);
+    Some((content, ts, base))
 }
 
 fn delete_backup_from(dir: &Path, path: &str) {
@@ -1656,12 +1675,14 @@ fn delete_node_blocking(path: String, root: PathBuf) -> Result<(), String> {
 /// seconds while typing): on the blocking pool, never the UI thread.
 /// Ordering between backup calls is guaranteed JS-side (_enqueueVolatileOp
 /// awaits each one); VOLATILE_LOCK serializes against get/list/purge.
+/// `base`: the fingerprint of the disk version the text was edited from
+/// (stored with the backup; see write_backup_to). Absent from older callers.
 #[tauri::command]
-async fn set_volatile_content(path: String, content: String) -> Result<(), String> {
+async fn set_volatile_content(path: String, content: String, base: Option<String>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let volatile_dir = prepare_volatile_dir().map_err(|s| s.to_string())?;
         let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        write_backup_to(volatile_dir, &path, &content)
+        write_backup_to(volatile_dir, &path, &content, base.as_deref())
     })
     .await
     .map_err(|e| format!("Background backup task failed: {e}"))?
@@ -1672,11 +1693,11 @@ async fn set_volatile_content(path: String, content: String) -> Result<(), Strin
 /// failure cooldown) — see prepare_durable_dir(). Same on-disk format as
 /// the volatile slot; recovery reads both via get_volatile_content.
 #[tauri::command]
-async fn set_durable_backup(app: AppHandle, path: String, content: String) -> Result<(), String> {
+async fn set_durable_backup(app: AppHandle, path: String, content: String, base: Option<String>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let durable_dir = prepare_durable_dir(&app).map_err(|s| s.to_string())?;
         let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        write_backup_to(durable_dir, &path, &content)
+        write_backup_to(durable_dir, &path, &content, base.as_deref())
     })
     .await
     .map_err(|e| format!("Background backup task failed: {e}"))?
@@ -1695,16 +1716,17 @@ async fn get_volatile_content(app: AppHandle, path: String) -> Option<serde_json
         // renamed in, meta file still in temp" half-state.
         let _guard = VOLATILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        let mut best: Option<(String, u64)> = None;
+        let mut best: Option<(String, u64, Option<String>)> = None;
         for dir in backup_dirs(&app) {
-            if let Some((content, ts)) = read_backup_from(dir, &path) {
-                if best.as_ref().map_or(true, |(_, best_ts)| ts > *best_ts) {
-                    best = Some((content, ts));
+            if let Some((content, ts, base)) = read_backup_from(dir, &path) {
+                if best.as_ref().map_or(true, |(_, best_ts, _)| ts > *best_ts) {
+                    best = Some((content, ts, base));
                 }
             }
         }
-        best.map(|(content, ts)| {
-            serde_json::json!({ "content": content, "ts": ts, "originalPath": path })
+        // The base travels with its own text: the newest snapshot's.
+        best.map(|(content, ts, base)| {
+            serde_json::json!({ "content": content, "ts": ts, "originalPath": path, "base": base })
         })
     })
     .await;
@@ -2872,6 +2894,60 @@ fn set_project_history(
     }
 }
 
+/* ── The OS asks the app to quit (Linux, macOS) ─────────────────────────
+   SIGTERM (logging out, shutting down, `kill`), SIGHUP (the terminal that
+   started the app closed) and SIGINT (Ctrl+C) used to end the process at
+   once: typing from the last moments (autosave runs 1.5 s after the last
+   keystroke) was lost, without a crash backup. They now start the normal
+   close, exactly like the window's close button: the page saves, keeps a
+   crash backup of anything it could not save, then confirms
+   (confirm_close). The close watchdog covers a page that does not answer.
+   Electron behaves the same way on its own. Signals arriving while that
+   close runs are ignored — the session manager's SIGKILL after its
+   timeout stays the last resort, so nothing is cut short mid-save. No
+   window (yet, or any more): nothing can be unsaved — exit at once. */
+#[cfg(unix)]
+fn close_on_quit_signals(app: AppHandle) {
+    use tokio::signal::unix::{signal, SignalKind};
+    tauri::async_runtime::spawn(async move {
+        let (mut term, mut hup, mut int) = match (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::hangup()),
+            signal(SignalKind::interrupt()),
+        ) {
+            (Ok(t), Ok(h), Ok(i)) => (t, h, i),
+            _ => {
+                // Handlers not installed: the signals keep their default
+                // action (the OS ends the app as before).
+                eprintln!("[revery] could not watch quit signals");
+                return;
+            }
+        };
+        let mut closing = false;
+        loop {
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = hup.recv() => {}
+                _ = int.recv() => {}
+            }
+            if closing {
+                eprintln!("[revery] quit signal ignored: the close is already running");
+                continue;
+            }
+            closing = true;
+            match app.get_webview_window("main") {
+                Some(w) => {
+                    if let Err(e) = w.close() {
+                        eprintln!("[revery] close on quit signal failed ({e}); exiting");
+                        app.exit(0);
+                    }
+                }
+                None => app.exit(0),
+            }
+        }
+    });
+}
+
 /// Request a window close.  Because CloseAllowed is still false this re-enters
 /// on_window_event → CloseRequested → emits 'window-close-request' to the
 /// frontend, which shows the quit-confirmation modal just like the OS button.
@@ -3414,6 +3490,10 @@ tauri::Builder::default()
                 let _ = window.set_decorations(false);
             }
 
+            // Logging out / shutting down closes like the close button.
+            #[cfg(unix)]
+            close_on_quit_signals(app.handle().clone());
+
             // Purge crash-backups (volatile AND durable) older than 7 days.
             let purge_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -3878,10 +3958,11 @@ mod tests {
         // (written by older builds with the inline hash) must stay readable.
         assert_eq!(backup_key("/home/u/note.md").len(), 16);
 
-        write_backup_to(&dir, "/home/u/note.md", "hello world").unwrap();
-        let (content, ts) = read_backup_from(&dir, "/home/u/note.md").unwrap();
+        write_backup_to(&dir, "/home/u/note.md", "hello world", None).unwrap();
+        let (content, ts, base) = read_backup_from(&dir, "/home/u/note.md").unwrap();
         assert_eq!(content, "hello world");
         assert!(ts > 0);
+        assert_eq!(base, None, "no base given → none recorded");
 
         // Listing sees it; a non-matching prefix filters it out.
         assert_eq!(list_backups_from(&dir, "/home/u").len(), 1);
@@ -3892,14 +3973,49 @@ mod tests {
     }
 
     #[test]
+    fn backup_records_the_base_it_was_edited_from() {
+        let dir = test_dir("backup-base");
+        let base = "v1:11:0123456789abcdef";
+        write_backup_to(&dir, "/n.md", "edited text", Some(base)).unwrap();
+        let (content, _, got) = read_backup_from(&dir, "/n.md").unwrap();
+        assert_eq!(content, "edited text");
+        assert_eq!(got.as_deref(), Some(base));
+        // The meta keeps the fields every reader (and older builds) expect.
+        let meta: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.join(format!("{}.meta.json", backup_key("/n.md")))).unwrap(),
+        ).unwrap();
+        assert_eq!(meta["originalPath"], "/n.md");
+        assert!(meta["ts"].as_u64().unwrap() > 0);
+        assert_eq!(meta["base"], base);
+
+        // A later write replaces the base along with the text — or drops it.
+        write_backup_to(&dir, "/n.md", "newer", None).unwrap();
+        let (content, _, got) = read_backup_from(&dir, "/n.md").unwrap();
+        assert_eq!((content.as_str(), got), ("newer", None));
+
+        // Nothing unusable is recorded: empty or oversized bases are dropped.
+        write_backup_to(&dir, "/n.md", "x", Some("")).unwrap();
+        assert_eq!(read_backup_from(&dir, "/n.md").unwrap().2, None);
+        let huge = "v".repeat(201);
+        write_backup_to(&dir, "/n.md", "x", Some(&huge)).unwrap();
+        assert_eq!(read_backup_from(&dir, "/n.md").unwrap().2, None);
+
+        // A backup written by an older build (meta without "base") still reads.
+        fs::write(dir.join(format!("{}.meta.json", backup_key("/old.md"))),
+                  r#"{"originalPath":"/old.md","ts":5}"#).unwrap();
+        fs::write(dir.join(format!("{}.revery_volatile", backup_key("/old.md"))), "old text").unwrap();
+        assert_eq!(read_backup_from(&dir, "/old.md"), Some(("old text".to_string(), 5, None)));
+    }
+
+    #[test]
     fn backup_dirs_are_independent() {
         // Same original path in two locations (volatile + durable in prod):
         // each dir holds its own snapshot; newest-wins merging happens in
         // the command layer on top of these primitives.
         let a = test_dir("backup-dir-a");
         let b = test_dir("backup-dir-b");
-        write_backup_to(&a, "/n.md", "older").unwrap();
-        write_backup_to(&b, "/n.md", "newer").unwrap();
+        write_backup_to(&a, "/n.md", "older", None).unwrap();
+        write_backup_to(&b, "/n.md", "newer", None).unwrap();
         assert_eq!(read_backup_from(&a, "/n.md").unwrap().0, "older");
         assert_eq!(read_backup_from(&b, "/n.md").unwrap().0, "newer");
         delete_backup_from(&a, "/n.md");
@@ -4101,9 +4217,9 @@ mod tests {
     #[test]
     fn purge_keeps_listed_paths_and_deletes_other_old_pairs() {
         let dir = test_dir("purge-keep");
-        write_backup_to(&dir, "/n/keep.md", "k").unwrap();
-        write_backup_to(&dir, "/n/old.md", "o").unwrap();
-        write_backup_to(&dir, "/n/young.md", "y").unwrap();
+        write_backup_to(&dir, "/n/keep.md", "k", None).unwrap();
+        write_backup_to(&dir, "/n/old.md", "o", Some("v1:1:0000000000000001")).unwrap();
+        write_backup_to(&dir, "/n/young.md", "y", None).unwrap();
         // Age two pairs far past the 7-day limit (ts = 1 ms after epoch).
         for p in ["/n/keep.md", "/n/old.md"] {
             let meta = dir.join(format!("{}.meta.json", backup_key(p)));

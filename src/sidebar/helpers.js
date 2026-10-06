@@ -2,8 +2,9 @@
    Path spelling (resolve / relative / encode / containment) lives in
    paths.js; this file adds the pieces that need sidebar state or the
    filesystem. */
-import { pendingNoteDir } from './state.js';
-import { mediaLinkMarkdown, baseNameOf, uniqueName, joinPath, TEXT_EXTS, MEDIA_EXTS } from './paths.js';
+import { S, pendingNoteDir } from './state.js';
+import { mediaLinkMarkdown, baseNameOf, uniqueName, joinPath, parentPathOf, isInsideRoot,
+         checkEntryName, TEXT_EXTS, MEDIA_EXTS } from './paths.js';
 import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
 
   /* File bytes → base64 in 32 KB chunks (fromCharCode arg-count limits).
@@ -131,6 +132,53 @@ import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
 
 
 
+  /* Text that must not be lost → a NEW file beside the note it belongs to:
+     "<name><suffix>.<ext>" ("chapter_recovered.md" for a crash backup,
+     "chapter_local.md" for a version kept in the editor), at the project
+     root when that folder is gone or outside the project. → the new
+     file's path. Nothing is ever overwritten: a free name (uniquePath) plus
+     an exclusive create, retried on the backends' "already exists"
+     contract. The name stays short on purpose (≤ 150 bytes): the suffix
+     and a numbering suffix ("_2") must still fit the 255-byte limit, and a
+     very long note name falls back to the bare suffix word ("recovered",
+     "local"). The empty file of a write that failed is removed again (it
+     is ours, created exclusively a moment ago). Throws when the text could
+     not be written. */
+  async function saveTextBesideNote(notePath, content, suffix = '_recovered') {
+    let dir = parentPathOf(notePath);
+    if (!dir || !S.rootPath || !isInsideRoot(dir, S.rootPath)) dir = S.rootPath;
+    try { await window.NativeAPI.readDirectory(dir); } catch (_) { dir = S.rootPath; }
+    if (!dir) throw new Error('No project folder is open.');
+
+    const base = baseNameOf(notePath);
+    const dot = base.lastIndexOf('.');
+    const oldExt = dot > 0 ? base.slice(dot + 1) : '';
+    const ext = /^(md|txt)$/i.test(oldExt) ? oldExt : 'md';
+    let stem = (dot > 0 ? base.slice(0, dot) : base) + suffix;
+    if (checkEntryName(`${stem}.${ext}`) || new TextEncoder().encode(`${stem}.${ext}`).length > 150) {
+      stem = suffix.replace(/^_+/, '') || 'recovered';
+    }
+
+    let newPath = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      newPath = await uniquePath(dir, stem, ext);
+      try {
+        await window.NativeAPI.createFile(newPath);
+        break;
+      } catch (err) {
+        if (String(err).includes('already exists') && attempt < 4) continue;
+        throw err;
+      }
+    }
+    try {
+      await window.NativeAPI.writeFile(newPath, content);
+    } catch (err) {
+      window.NativeAPI.deleteNode(newPath).catch(() => {});
+      throw err;
+    }
+    return newPath;
+  }
+
   /* Does `p` exist as a file? Answered from its parent directory listing,
      NOT by reading the file: a read also fails for reasons that say
      nothing about existence (not UTF-8, over the size cap, locked).
@@ -206,4 +254,4 @@ import { SIDEBAR_ITEM_MIME, encodeSidebarPayload } from './drop_transport.js';
 
 export { stripMarkdownForPreview, getFileCategory, mediaMarkdown, setSidebarDragData, uniqueDestPath,
          uniquePath, scanBakOrphansIn, reportBakOrphans, arrayBufferToBase64,
-         fileExistsViaListing };
+         fileExistsViaListing, saveTextBesideNote };

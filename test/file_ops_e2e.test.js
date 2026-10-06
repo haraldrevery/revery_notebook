@@ -32,7 +32,12 @@
    Symlink mode (project opened through a symlink):
      the renderer adopts the canonical root and note spelling; a file
      dropped on its own folder is not renamed to name_2; the card view
-     never offers a way above the root. */
+     never offers a way above the root.
+   Windows without Developer Mode or admin rights cannot create symlinks:
+   the fixture then uses directory junctions (absolute only), and the
+   relative-link checks of step 6 do not apply (result.links). Both tests
+   used to be skipped on Windows altogether. REVERY_E2E_NO_SYMLINKS=1
+   runs that variant anywhere. */
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -40,7 +45,6 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 
 const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY || process.platform !== 'linux');
-const canSymlink = process.platform !== 'win32';
 
 function runApp(mode) {
   const electronBin = require('electron');
@@ -62,7 +66,7 @@ function runApp(mode) {
   });
 }
 
-test('file operations end-to-end (plain project)', { skip: !hasDisplay || !canSymlink, timeout: 150000 }, async () => {
+test('file operations end-to-end (plain project)', { skip: !hasDisplay, timeout: 150000 }, async () => {
   const r = await runApp('plain');
   const why = JSON.stringify(r, null, 2);
   assert.equal(r.booted, true, 'boot must open the seeded temp project\n' + why);
@@ -112,14 +116,17 @@ test('file operations end-to-end (plain project)', { skip: !hasDisplay || !canSy
   // 6. links
   assert.ok(r.afterAbsLinkMove_box.includes('abslink'), why);
   assert.equal(r.disk['realfolder/inside.md'], 'inside\n', 'a link target is never moved or trashed\n' + why);
-  assert.equal(r.relLinkDialogs.length, 1, why);
-  assert.match(r.relLinkDialogs[0].detail, /relative link/, why);
-  assert.ok(r.afterRelLinkMove_root.includes('rellink'), why);
+  if (r.links.relative) {
+    assert.equal(r.relLinkDialogs.length, 1, why);
+    assert.match(r.relLinkDialogs[0].detail, /relative link/, why);
+    assert.ok(r.afterRelLinkMove_root.includes('rellink'), why);
+  } // else: Windows without symlink rights — links are junctions, none is relative
   assert.equal(r.linkRowMarked, true, why);
   assert.ok(!r.linkMenuLabels.includes('Open'), why);
   assert.equal(r.linkDeleteDialogs[0].title, 'Delete Link', why);
   assert.deepEqual(r.trashCalls[0], 'Notes/rellink', 'the trash receives the link itself\n' + why);
-  assert.equal(r.trash['1-rellink'], '-> realfolder', why);
+  if (r.links.relative) assert.equal(r.trash['1-rellink'], '-> realfolder', why);
+  else assert.match(r.trash['1-rellink'], /^-> .*realfolder[\\/]?$/, 'the trash received the junction, not its target\n' + why);
 
   // 7. names
   assert.ok(r.afterDottedRename.includes('Meeting 26.09.2026.md'), why);
@@ -146,7 +153,7 @@ test('file operations end-to-end (plain project)', { skip: !hasDisplay || !canSy
   assert.ok(r.trashCalls.includes('Notes/one.md') && r.trashCalls.includes('Notes/two.md'), why);
 });
 
-test('file operations end-to-end (project opened through a symlink)', { skip: !hasDisplay || !canSymlink, timeout: 150000 }, async () => {
+test('file operations end-to-end (project opened through a symlink)', { skip: !hasDisplay, timeout: 150000 }, async () => {
   const r = await runApp('symlink');
   const why = JSON.stringify(r, null, 2);
   assert.equal(r.booted, true, why);

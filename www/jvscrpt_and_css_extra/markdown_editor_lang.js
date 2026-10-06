@@ -290,6 +290,10 @@ window.uiTranslations = {
   "Save Failed": { "Swedish": "Sparande misslyckades" },
   "Could not write to:": { "Swedish": "Kunde inte skriva till:" },
   "A file could not be created to save your work.": { "Swedish": "En fil kunde inte skapas för att spara ditt arbete." },
+  "Could Not Save Copy": { "Swedish": "Kunde inte spara kopian" },
+  "The version of \"{name}\" you kept could not be saved as a copy, so the note stays open.": { "Swedish": "Versionen av \"{name}\" som du behöll kunde inte sparas som en kopia, så anteckningen förblir öppen." },
+  "Press Ctrl+S to save it over the file, or use \"Save as...\" in the File menu.": { "Swedish": "Tryck Ctrl+S för att spara den över filen, eller använd \"Spara som...\" i menyn Arkiv." },
+  "The version of \"{name}\" you kept was saved as \"{copy}\".": { "Swedish": "Versionen av \"{name}\" som du behöll sparades som \"{copy}\"." },
   "Recent Projects": { "Swedish": "Senaste projekt" },
   "No recent projects yet": { "Swedish": "Inga projekt ännu" },
   "Manage Projects": { "Swedish": "Hantera projekt" },
@@ -551,6 +555,7 @@ window.uiTemplates = {
           <li><strong>Web version — document content</strong> — the markdown text you are currently editing, kept in your browser's <code class="mod-mono-sm">localStorage</code> (key: <code class="mod-mono-sm">revery_md_autosave</code>).</li>
           <li><strong>Desktop app — your notes</strong> — ordinary <code class="mod-mono-sm">.md</code> files in the project folder you choose, written with crash-safe atomic saves. While you type, a temporary crash backup of unsaved text is kept in the app's data folder and removed once it is no longer needed.</li>
           <li><strong>Editor preferences</strong> — UI settings such as theme, layout, and font sizes (key: <code class="mod-mono-sm">revery_md_settings</code>); the desktop app additionally keeps a small <code class="mod-mono-sm">revery_settings.json</code> in the operating system's app-data folder (recently opened folders and window state).</li>
+          <li><strong>Desktop app — spell checking</strong> — runs entirely on your computer, with dictionaries that come with the app (English and Swedish) or with your operating system. The app never downloads dictionaries. In the web version, your browser's own spell checker and its settings apply.</li>
         </ul>
         <p class="mod-p"><strong>No data is ever transmitted to any server.</strong> Harald Mark Thirslund has no access to, and does not collect, any content you write in this editor.</p>
         <p class="mod-p-0">You can delete all locally stored data at any time: your notes are your own files and can be deleted like any other, and the "Total Reset" option in the quit dialog clears every stored setting (in the browser, clearing this domain's site data does the same).</p>
@@ -824,6 +829,7 @@ END OF TERMS AND CONDITIONS</pre>
           <li><strong>Webbversionen — dokumentinnehåll</strong> — markdowntexten du redigerar, i webbläsarens <code class="mod-mono-sm">localStorage</code> (nyckel: <code class="mod-mono-sm">revery_md_autosave</code>).</li>
           <li><strong>Skrivbordsappen — dina anteckningar</strong> — vanliga <code class="mod-mono-sm">.md</code>-filer i den projektmapp du väljer, skrivna med kraschsäkra atomära sparningar. Medan du skriver hålls en tillfällig kraschsäkerhetskopia av osparad text i appens datamapp och tas bort när den inte längre behövs.</li>
           <li><strong>Editorinställningar</strong> — gränssnittsinställningar som tema, layout och teckenstorlekar (nyckel: <code class="mod-mono-sm">revery_md_settings</code>); skrivbordsappen har dessutom en liten <code class="mod-mono-sm">revery_settings.json</code> i operativsystemets appdatamapp (senast öppnade mappar och fönsterläge).</li>
+          <li><strong>Skrivbordsappen — stavningskontroll</strong> — körs helt på din dator, med ordlistor som följer med appen (engelska och svenska) eller med operativsystemet. Appen laddar aldrig ner ordlistor. I webbversionen gäller webbläsarens egen stavningskontroll och dess inställningar.</li>
         </ul>
         <p class="mod-p"><strong>Ingen data skickas någonsin till någon server.</strong> Harald Mark Thirslund har inte tillgång till, och samlar inte in, något innehåll du skriver i denna editor.</p>
         <p class="mod-p-0">Du kan radera all lokalt lagrad data när som helst: dina anteckningar är dina egna filer och kan raderas som vilka filer som helst, och alternativet "Total återställning" i avsluta-dialogen rensar alla sparade inställningar (i webbläsaren gör en rensning av domänens webbplatsdata samma sak).</p>

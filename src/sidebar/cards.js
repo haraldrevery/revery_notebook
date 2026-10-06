@@ -5,8 +5,41 @@ import { sortEntries, renderTree, updateMultiSelectHighlight, showContextMenu } 
 import { openFile, openMediaFile, openUnsupportedFile } from './fileops.js';
 import { icon } from './icons.js';
 import { samePath, isInsideRoot, baseNameOf, normalizePath, parentPathOf } from './paths.js';
+import { CARD_DIRS_KEY, parseCardDirs, rememberedCardDir, withCardDir } from './card_memory.js';
 
 let _cardGeneration = 0;
+
+  /* ── The folder the card view shows, remembered per project ──────────
+     S.cardViewDir lived only in memory: every start (and every project
+     switch) opened the card view at the project root, while the editor
+     reopened the last note — the folder the user was in was forgotten.
+     Each folder the card view has listed is now remembered for its
+     project (card_memory.js) and restored from there. */
+  function loadCardDirs() {
+    try { return parseCardDirs(localStorage.getItem(CARD_DIRS_KEY) || '[]'); } catch (_) { return []; }
+  }
+
+  function rememberCardDir(root, dir) {
+    if (!root || !dir || !isInsideRoot(dir, root)) return;
+    const list = loadCardDirs();
+    if (rememberedCardDir(list, root) === dir) return; // unchanged — no write
+    try { localStorage.setItem(CARD_DIRS_KEY, JSON.stringify(withCardDir(list, root, dir))); } catch (_) { /* ignore */ }
+  }
+
+  /** Where the card view opens for project `root` (at start and on a
+      project switch): the folder it showed when this project was last
+      open, else the folder already selected (at start: the last note's
+      folder), else the root. In card view the selected folder — where New
+      File and the first keystroke's note go — is the folder on screen,
+      exactly as when navigating. Synchronous on purpose: project switches
+      rely on the selected folder pointing into the new root at once. A
+      remembered folder that no longer exists is replaced by renderCards. */
+  function restoreCardViewDir(root) {
+    if (!root) return;
+    const sel = S.selectedDirPath && isInsideRoot(S.selectedDirPath, root) ? S.selectedDirPath : null;
+    S.cardViewDir = rememberedCardDir(loadCardDirs(), root) || sel || root;
+    if (S.sidebarViewMode === 'card') S.selectedDirPath = S.cardViewDir;
+  }
 
   /* ── Card size steps (px) — persisted to localStorage ─────────────────
      cardSizeIdx indexes into CARD_SIZE_STEPS.  Buttons clamp to [0, max]. */
@@ -385,6 +418,7 @@ let _cardGeneration = 0;
     /* Bump generation so any in-flight preview loads for a previous render
        will notice they are stale and stop updating the DOM.              */
     const generation = ++_cardGeneration;
+    const root = S.rootPath;
 
     treeEl.innerHTML = '';
     treeEl.scrollTop = 0;
@@ -407,11 +441,25 @@ let _cardGeneration = 0;
     } catch (err) {
       console.warn('[Sidebar] renderCards readDirectory failed:', dirPath, err);
       if (treeEl.contains(loadingEl)) treeEl.removeChild(loadingEl);
+      /* The folder cannot be listed — deleted, moved or renamed by another
+         program, or remembered from an earlier session: show the nearest
+         folder above it instead of an empty panel, and point the selected
+         folder there too (New File and new notes must never target a
+         folder that is gone). Never above the project root. */
+      const up = parentPathOf(dirPath);
+      if (_cardGeneration === generation && root && S.rootPath === root
+          && !samePath(dirPath, root) && up && isInsideRoot(up, root)) {
+        if (samePath(S.cardViewDir, dirPath)) S.cardViewDir = up;
+        if (S.selectedDirPath && isInsideRoot(S.selectedDirPath, dirPath)) S.selectedDirPath = up;
+        return renderCards(up);
+      }
       return;
     }
 
     /* Bail if a newer render started while we were waiting */
     if (_cardGeneration !== generation) return;
+
+    if (S.rootPath === root) rememberCardDir(root, dirPath);
 
     if (treeEl.contains(loadingEl)) treeEl.removeChild(loadingEl);
 
@@ -499,7 +547,7 @@ treeEl.appendChild(gridEl);
     }
   }
 
-export { renderCards, highlightActiveFileCards, updateViewBtn, setViewMode };
+export { renderCards, highlightActiveFileCards, updateViewBtn, setViewMode, restoreCardViewDir };
 
 export function initCardView() {
   observeNavWidth();

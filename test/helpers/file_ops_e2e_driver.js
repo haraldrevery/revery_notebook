@@ -8,6 +8,7 @@
   const PROJECT = __PROJECT__;   // as opened (a symlink in MODE=symlink)
   const REAL    = __REAL__;      // the real folder
   const MODE    = __MODE__;
+  const LINKS   = __LINKS__;   // { relative, kind } — see file_ops_e2e_main.js
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const until = async (fn, ms = 6000) => {
     const t0 = Date.now();
@@ -235,11 +236,13 @@
   await drag(row('abslink'), row('box'));
   await until(async () => has('box', 'abslink'));
   out.afterAbsLinkMove_box = await names('box');
-  d0 = window.__fileOpsDialogs.length;
-  await drag(row('rellink'), row('box'));
-  await until(() => lastDialog(d0).length);
-  out.relLinkDialogs = lastDialog(d0);
-  out.afterRelLinkMove_root = await names('');
+  if (LINKS.relative) {
+    d0 = window.__fileOpsDialogs.length;
+    await drag(row('rellink'), row('box'));
+    await until(() => lastDialog(d0).length);
+    out.relLinkDialogs = lastDialog(d0);
+    out.afterRelLinkMove_root = await names('');
+  } // else: no relative link here (Windows without symlink rights) — "rellink" is absolute
   out.linkRowMarked = !!(row('rellink') && row('rellink').classList.contains('sidebar-link')
     && row('a.md') && !row('a.md').classList.contains('sidebar-link'));
   d0 = window.__fileOpsDialogs.length;

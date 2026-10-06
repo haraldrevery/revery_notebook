@@ -5,9 +5,10 @@
 import { S, docTitleEl, folderNameEl, treeEl, expandedDirs, _previewCache,
          SCRATCHPAD_PREFIX, ensureScratchpadVolatileKey,
          pendingNoteDir, sidebarPanel } from './state.js';
-import { uniquePath, stripMarkdownForPreview, fileExistsViaListing } from './helpers.js';
-import { baseNameOf, pathKey, samePath, sanitizeEntryName, checkEntryName } from './paths.js';
+import { uniquePath, stripMarkdownForPreview, fileExistsViaListing, saveTextBesideNote } from './helpers.js';
+import { baseNameOf, pathKey, samePath, sanitizeEntryName, checkEntryName, parentPathOf } from './paths.js';
 import { detectEol, normalizeEol, toDiskText } from './eol.js';
+import { textFingerprint } from './fingerprint.js';
 import { renderTree, highlightActiveFile } from './tree.js';
 import { startWatchingFile, stopWatchingFile, checkActiveFileOnDisk } from './watcher.js';
 import { pushUndo, hasUndoOperations, undoLastOperation, hasRedoOperations,
@@ -26,7 +27,7 @@ const AUTOSAVE_FAILURE_COOLDOWN_MS   = 30000; // After a save failure, suppress
                                               // automatic retries for 30 s.
 
 /** Cancel any pending debounced auto-save (watcher + close flow use this). */
-export function cancelPendingAutoSave() { clearTimeout(_autoSaveTimer); }
+export function cancelPendingAutoSave() { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
 
 let _diskOpsChain = Promise.resolve();
 
@@ -205,7 +206,7 @@ function createNoteFromScratchpad(session, targetDir, baseName) {
       markDirty();
       scheduleAutoSave();
       try {
-        await window.NativeAPI.writeVolatileNow(newPath, editor.value);
+        await window.NativeAPI.writeVolatileNow(newPath, editor.value, noteBackupBase());
       } catch (e) {
         console.warn('[Sidebar] note backup after scratchpad create failed (placeholder kept):', e);
         placeholderStillNeeded = true;
@@ -308,10 +309,12 @@ function _durableExposed() {
         || Date.now() < _autoSaveCooldownUntil);
 }
 
-export function writeDurableSnapshot(path, content) {
+/* `base`: the disk version `content` was edited from (noteBackupBase) —
+   null for text that has no file yet (scratchpad keys). */
+export function writeDurableSnapshot(path, content, base = null) {
   if (typeof window.NativeAPI.setDurableBackup !== 'function') return;
   _durableMirrorLast = Date.now();
-  window.NativeAPI.setDurableBackup(path, content).catch((e) =>
+  window.NativeAPI.setDurableBackup(path, content, base).catch((e) =>
     console.warn('[Sidebar] durable backup failed (non-fatal):', e));
 }
 
@@ -335,7 +338,7 @@ export function hasTextWithoutProject() {
 
 function _fireDurableMirror() {
   const key = _durableMirrorKey(); // null: state ended or buffer saved
-  if (key) writeDurableSnapshot(key, editor.value);
+  if (key) writeDurableSnapshot(key, editor.value, key === S.activeFilePath ? noteBackupBase() : null);
 }
 
 function mirrorDurableWhileExposed() {
@@ -365,12 +368,40 @@ function mirrorDurableWhileExposed() {
   ══════════════════════════════════════════════════════════════════ */
 /** Record `raw` as what the active file now holds on disk. */
 export function rememberDiskContent(raw) {
+  _baselineFp = undefined; // a new disk version: its fingerprint is computed on demand
   if (typeof raw !== 'string') { S._diskBaseline = null; S._diskEol = '\n'; return; }
   /* The backend stores lone UTF-16 surrogates as U+FFFD (native_api.js);
      record the same form, or reading our own write back would not match. */
   const api = window.NativeAPI;
   S._diskBaseline = (api && typeof api.wellFormedText === 'function') ? api.wellFormedText(raw) : raw;
   S._diskEol = detectEol(raw);
+}
+
+/* ── Which disk version a crash backup is based on ───────────────────
+   Every backup of the open note's text records the fingerprint of the disk
+   text it was edited from — S._diskBaseline (fingerprint.js). Start-up
+   recovery compares it with the file (lifecycle.js): the same → "Restore"
+   only puts the unsaved edits back; changed since (another program, a
+   sync service, another device, or "Keep my version") → restoring would
+   replace that newer text, so keeping both is the default. Timestamps
+   could not tell: sync tools keep the other device's modification time.
+   rememberDiskContent is the only writer of S._diskBaseline, so resetting
+   the cached fingerprint there keeps it exact; it is computed once per
+   disk version, on the first backup that needs it. */
+let _baselineFp; // undefined: not computed yet for the current S._diskBaseline
+
+/** The base to record with a backup of the open note's text, or null. */
+export function noteBackupBase() {
+  if (typeof S._diskBaseline !== 'string') return null;
+  if (_baselineFp === undefined) _baselineFp = textFingerprint(S._diskBaseline);
+  return _baselineFp;
+}
+
+/** The fingerprint of `raw` (text as read from disk) in the form backups
+    record — the same form noteBackupBase fingerprints. */
+export function diskFingerprint(raw) {
+  const api = window.NativeAPI;
+  return textFingerprint((api && typeof api.wellFormedText === 'function') ? api.wellFormedText(raw) : raw);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -543,7 +574,7 @@ const execRename = async () => {
          screen is no longer the one the title belonged to. */
       if (!samePath(S.activeFilePath, oldPath)) return;
 
-      await window.NativeAPI.writeVolatileNow(finalNewPath, editor.value).catch(e =>
+      await window.NativeAPI.writeVolatileNow(finalNewPath, editor.value, noteBackupBase()).catch(e =>
         console.warn('[Sidebar] Pre-rename volatile migration failed (non-fatal):', e)
       );
 
@@ -642,6 +673,7 @@ async function saveActiveFile(opts) {
   const report = (opts && typeof opts.onOutcome === 'function') ? opts.onOutcome : () => {};
   if (!S.activeFilePath) { report('no-file'); return false; }
   clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = null;
 
   const contentToSave = editor.value;
 
@@ -683,6 +715,7 @@ async function saveActiveFile(opts) {
 
 
 let writeResult;
+let savedOpenNote = false; // the text written (or already on disk) was the open note's
 
 try {
   writeResult = await _enqueueDiskOp(async () => {
@@ -706,7 +739,7 @@ try {
         return 'deferred-verify';
       }
       // The disk already holds exactly this text (recorded as such): done.
-      if (disk.kind === 'adopted') return 'ok';
+      if (disk.kind === 'adopted') { savedOpenNote = true; return 'ok'; }
       // 'same', 'unknown' (cannot tell — the write reports real errors),
       // or 'missing' on an explicit save (recreate): write.
     }
@@ -716,6 +749,7 @@ try {
     /* Record what is on disk now INSIDE the lock, so a watcher check queued
        behind this write recognises it as ours. */
     if (isActive) rememberDiskContent(diskText);
+    savedOpenNote = isActive;
     return 'ok';
   });
 } catch (err) {
@@ -727,7 +761,9 @@ try {
   // (reboot-safe, different location) backup slot immediately. contentToSave,
   // not editor.value: it is guaranteed to belong to pathToSave, and the
   // mirror keeps refreshing with newer keystrokes while the cooldown lasts.
-  writeDurableSnapshot(pathToSave, contentToSave);
+  // The write failed, so the file is still the version we last recorded.
+  writeDurableSnapshot(pathToSave, contentToSave,
+    pathToSave === S.activeFilePath ? noteBackupBase() : null);
   _firstDirtyTime = 0;
   report('error');
   await window.NativeAPI.showMessageBox({
@@ -766,18 +802,26 @@ _autoSaveCooldownUntil = 0;
 // An explicit save of this file discharges any hold on it.
 if (S._conflictHoldPath === pathToSave) clearAutosaveHold();
 
-if (editor.value === contentToSave) {
-  markClean();
-  if (typeof showSavedIndicator === 'function') showSavedIndicator();
-  window.NativeAPI.deleteVolatileContent(pathToSave).catch(() => {});
-} else {
-  // Don't markClean, don't showSavedIndicator (visible state is
-  // ahead of disk; the next autosave will show the indicator once
-  // editor and disk converge).
-  window.NativeAPI.writeVolatileNow(pathToSave, editor.value).catch(err =>
-    console.warn('[Sidebar] post-save volatile refresh failed:', err)
-  );
-  scheduleAutoSave();
+/* The dirty flag and the crash backup belong to the note on screen: they
+   follow this write only when it was of that note and the note is still
+   on screen (the write of a note that left the editor meanwhile must
+   neither mark the open one saved nor pair its text with this path). */
+if (savedOpenNote && S.activeFilePath === pathToSave && docGen === currentDocGeneration()) {
+  if (editor.value === contentToSave) {
+    markClean();
+    if (typeof showSavedIndicator === 'function') showSavedIndicator();
+    window.NativeAPI.deleteVolatileContent(pathToSave).catch(() => {});
+  } else {
+    // Don't markClean, don't showSavedIndicator (visible state is
+    // ahead of disk; the next autosave will show the indicator once
+    // editor and disk converge). The backup now names the version just
+    // written as its base, and replaces a debounced one still waiting
+    // with the older base (native_api.js writeVolatileNow).
+    window.NativeAPI.writeVolatileNow(pathToSave, editor.value, noteBackupBase()).catch(err =>
+      console.warn('[Sidebar] post-save volatile refresh failed:', err)
+    );
+    scheduleAutoSave();
+  }
 }
 
 // Update card view preview
@@ -841,14 +885,77 @@ export const SWITCH_CANCELLED = Symbol('switch-cancelled');
 const SWITCH_ATTEMPTS = 5;
 
 const unsavedNote = () => S.isDirty && !!S.activeFilePath;
-const hasUnsavedWork = () => unsavedNote() || !!pendingScratchpad();
+const hasUnsavedWork = () => unsavedNote() || keptVersionOnScreen() || !!pendingScratchpad();
 
-/* Get the document on screen onto disk: the open note's edits saved, or
-   text typed with no note open put into its note. False when that failed
-   — the user has been told (Save Failed / Could Not Create File) — and the
-   document must stay on screen. */
+/* ── A version kept in the editor only ───────────────────────────────
+   "Keep my version" on a note WITHOUT unsaved edits (watcher.js): the file
+   now holds another program's text and the editor the version the user
+   chose to keep — on disk nowhere, yet not "unsaved" (nothing was typed,
+   S.isDirty is false). Closing the app keeps it: its snapshot is offered
+   at the next start, as a copy by default (lifecycle.js). Leaving the note
+   dropped it: that snapshot was never offered again and expired. */
+function keptVersionOnScreen() {
+  return !!S.activeFilePath && !S.isDirty && !window._showingUnsupportedFile
+    && S._holdReason === 'conflict' && S._conflictHoldPath === S.activeFilePath;
+}
+
+/* Before the note is left: the kept version goes into a copy beside it
+   ("<name>_local", as "Save my version & reload" does) — the file keeps
+   the other program's text, nothing is overwritten. Not needed when the
+   file holds this version again (the other program or a sync tool put it
+   back). False when the copy could not be written: the user is told and
+   the note stays on screen. */
+async function saveKeptVersionCopy() {
+  const path = S.activeFilePath;
+  const text = editor.value;
+  const disk = await compareDiskWithBaseline(path, text);
+  if (!keptVersionOnScreen() || S.activeFilePath !== path) return true; // saved or edited meanwhile
+  if (disk.kind === 'same' || disk.kind === 'adopted') {
+    clearAutosaveHold();
+    window.NativeAPI.deleteVolatileContent(path).catch(() => {});
+    return true;
+  }
+  let copyPath;
+  try {
+    copyPath = await saveTextBesideNote(path, text, '_local');
+  } catch (err) {
+    console.error('[Sidebar] saving the kept version as a copy failed:', err);
+    await window.NativeAPI.showMessageBox({
+      type: 'error',
+      title: window.t('Could Not Save Copy'),
+      message: window.t('The version of "{name}" you kept could not be saved as a copy, so the note stays open.')
+        .replace('{name}', baseNameOf(path)),
+      detail: String(err) + '\n\n' + window.t('Press Ctrl+S to save it over the file, or use "Save as..." in the File menu.'),
+      buttons: ['OK'],
+    }).catch(() => {});
+    return false;
+  }
+  /* The version is in its own file: the hold and the snapshot have nothing
+     left to protect — unless the user started typing meanwhile (then the
+     note is unsaved and saved the normal way, and its backup stays). */
+  if (S.activeFilePath === path && !S.isDirty) {
+    clearAutosaveHold();
+    window.NativeAPI.deleteVolatileContent(path).catch(() => {});
+  }
+  expandedDirs.add(parentPathOf(copyPath));
+  try { await renderTree(); } catch (_) { /* the copy is saved; the tree catches up later */ }
+  if (typeof window.showStatusWarning === 'function') {
+    window.showStatusWarning('kept-version-copy',
+      window.t('The version of "{name}" you kept was saved as "{copy}".')
+        .replace('{name}', baseNameOf(path)).replace('{copy}', baseNameOf(copyPath)),
+      { priority: 30, ttl: 8000 });
+  }
+  return true;
+}
+
+/* Get the document on screen onto disk: the open note's edits saved, a
+   version kept in the editor saved as a copy, or text typed with no note
+   open put into its note. False when that failed — the user has been
+   told (Save Failed / Could Not Create File / Could Not Save Copy) — and
+   the document must stay on screen. */
 async function saveOpenDocument() {
   if (unsavedNote()) return saveActiveFile();
+  if (keptVersionOnScreen()) return saveKeptVersionCopy();
   const pending = pendingScratchpad();
   if (!pending || (await scratchpadToNote(pending))) return true;
   await tellScratchpadNotSaved(pending);
@@ -918,13 +1025,15 @@ export async function retargetActiveFile(oldPath, newPath) {
   if (docTitleEl) docTitleEl.value = baseNameOf(newPath).replace(/\.(md|txt)$/, '');
   startWatchingFile(newPath);
 
-  /* Crash backups are keyed by path. While the buffer holds unsaved text,
-     move them: write the new-path backup FIRST, and delete the old one only
-     once that succeeded. */
-  if (S.isDirty) {
+  /* Crash backups are keyed by path. While the buffer holds text that is
+     not on disk — unsaved edits, or a version kept with "Keep my version"
+     (keptVersionOnScreen: its snapshot under the old name would never be
+     offered again) — move them: write the new-path backup FIRST, and
+     delete the old one only once that succeeded. Same content, same base. */
+  if (S.isDirty || keptVersionOnScreen()) {
     try {
-      await window.NativeAPI.writeVolatileNow(newPath, editor.value);
-      if (_durableExposed()) writeDurableSnapshot(newPath, editor.value);
+      await window.NativeAPI.writeVolatileNow(newPath, editor.value, noteBackupBase());
+      if (_durableExposed()) writeDurableSnapshot(newPath, editor.value, noteBackupBase());
       await window.NativeAPI.deleteVolatileContent(oldPath);
     } catch (e) {
       console.warn('[Sidebar] could not move the crash backup to the new path (old one kept):', e);
@@ -946,6 +1055,7 @@ export async function retargetActiveFile(oldPath, newPath) {
   function scheduleAutoSave() {
     if (!S.activeFilePath) return;
     clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = null;
 
     // Conflict hold ("Keep my version"): the user chose to keep the disk
     // file as the external program left it. Background autosave stays off
@@ -975,8 +1085,35 @@ export async function retargetActiveFile(oldPath, newPath) {
       return;
     }
 
-    _autoSaveTimer = setTimeout(() => saveActiveFile({ auto: true }), autosaveDelayMs());
+    _autoSaveTimer = setTimeout(() => { _autoSaveTimer = null; saveActiveFile({ auto: true }); }, autosaveDelayMs());
   }
+
+/* ══════════════════════════════════════════════════════════════════
+     FLUSH — get the typing onto disk NOW
+   When the window loses focus, is hidden, or the OS session ends
+   (Windows shutdown/log off: main.js asks). Shutting the computer down
+   right after typing used to lose the last moments: autosave waits
+   1.5 s after the last keystroke, the crash backup 2 s. Only what was
+   already due runs early — the autosave that is scheduled (the timer
+   exists only when scheduleAutoSave let it: not for a held file, not
+   during a failure cooldown; saveActiveFile checks the hold again) and
+   the crash backup waiting in its debounce. Nothing else is saved, no
+   question is asked.
+  ══════════════════════════════════════════════════════════════════ */
+function flushPendingAutoSave() {
+  if (!_autoSaveTimer) return Promise.resolve(false);
+  clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = null;
+  return saveActiveFile({ auto: true });
+}
+
+export function flushPendingWork() {
+  const api = window.NativeAPI;
+  const backup = (api && typeof api.flushVolatileBackup === 'function')
+    ? api.flushVolatileBackup() : Promise.resolve();
+  return Promise.all([backup, flushPendingAutoSave()]).catch((e) =>
+    console.warn('[Sidebar] flush failed:', e));
+}
 
 export { markDirty, markClean, saveActiveFile, scheduleAutoSave };
 
@@ -992,6 +1129,16 @@ export function initSaveEngine() {
         editor.focus();
       }
     });
+  }
+
+  /* Get the typing onto disk as soon as the window loses focus or is
+     hidden, and when Windows ends the session (see FLUSH above). */
+  window.addEventListener('blur', () => { flushPendingWork(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPendingWork();
+  });
+  if (window.NativeAPI && typeof window.NativeAPI.onFlushRequest === 'function') {
+    window.NativeAPI.onFlushRequest(() => { flushPendingWork(); });
   }
 
 /* Expose save for actions.js and other modules */
@@ -1054,7 +1201,7 @@ export function initSaveEngine() {
     // Save As wrote `savedContent` (editor text, LF) to the new file.
     rememberDiskContent(typeof savedContent === 'string' ? savedContent : null);
     if (scratch) {
-      (S.isDirty ? window.NativeAPI.writeVolatileNow(newPath, editor.value) : Promise.resolve())
+      (S.isDirty ? window.NativeAPI.writeVolatileNow(newPath, editor.value, noteBackupBase()) : Promise.resolve())
         .then(() => window.NativeAPI.deleteVolatileContent(scratch.key))
         .catch((e) => console.warn('[Sidebar] Save As: scratchpad backup kept:', e));
     }
@@ -1167,8 +1314,10 @@ export function initSaveEngine() {
     if (S.activeFilePath) {
       markDirty();
       scheduleAutoSave();
-      /* Volatile crash backup (separate from the debounced disk auto-save) */
-      window.NativeAPI.setVolatileContent(S.activeFilePath, editor.value);
+      /* Volatile crash backup (separate from the debounced disk auto-save),
+         with the disk version this text was edited from — taken NOW, with
+         the text, not when the debounced write happens. */
+      window.NativeAPI.setVolatileContent(S.activeFilePath, editor.value, noteBackupBase());
       /* Reboot-safe mirror — only active while autosave is suspended */
       mirrorDurableWhileExposed();
     }

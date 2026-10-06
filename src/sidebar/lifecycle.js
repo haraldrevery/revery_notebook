@@ -3,16 +3,17 @@
 import { S, docTitleEl, folderNameEl, expandedDirs,
          SCRATCHPAD_PREFIX } from './state.js';
 import { saveActiveFile, markClean, markDirty, scheduleAutoSave, cancelPendingAutoSave,
-         rememberDiskContent, retargetActiveFile } from './save.js';
+         rememberDiskContent, retargetActiveFile, noteBackupBase, diskFingerprint } from './save.js';
+import { isTextFingerprint } from './fingerprint.js';
 import { normalizeEol } from './eol.js';
 import { renderTree, highlightActiveFile } from './tree.js';
-import { updateViewBtn } from './cards.js';
+import { updateViewBtn, restoreCardViewDir } from './cards.js';
 import { openSidebar } from './panel.js';
 import { startWatchingFile } from './watcher.js';
 import { openFile } from './fileops.js';
-import { uniquePath, reportBakOrphans, fileExistsViaListing } from './helpers.js';
+import { uniquePath, reportBakOrphans, fileExistsViaListing, saveTextBesideNote } from './helpers.js';
 import { loadProjects, recordProjectOpen, seedProjectsCache, PROJECTS_KEY } from './projects.js';
-import { joinPath, baseNameOf, parentPathOf, isInsideRoot, checkEntryName } from './paths.js';
+import { joinPath, baseNameOf, parentPathOf } from './paths.js';
 
 /* ── One close at a time ──────────────────────────────────────────────
    Every close — the title-bar button, Alt+F4, the OS — reaches this as the
@@ -82,6 +83,14 @@ async function handleCloseRequest(whileSaving) {
       }
 
       if (!saved) {
+        /* The text is not on disk and a question is coming. Keep a crash
+           backup of it FIRST: when the OS is logging out or shutting down
+           (SIGTERM starts this close), nobody answers, and the app is
+           ended while the question waits — the backup is then all there
+           is, offered at the next start. */
+        if (S.isDirty && typeof window.NativeAPI.writeVolatileNow === 'function') {
+          try { await whileSaving(() => window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value, noteBackupBase())); } catch (_) {}
+        }
         /* The save stopped because the file on disk is no longer what we
            last read or wrote (another program changed it): the "File
            Changed Externally" question is on its way and is the user's
@@ -116,7 +125,7 @@ async function handleCloseRequest(whileSaving) {
       }
     }
     if (S.isDirty && typeof window.NativeAPI.writeVolatileNow === 'function') {
-      try { await whileSaving(() => window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value)); } catch (_) {}
+      try { await whileSaving(() => window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value, noteBackupBase())); } catch (_) {}
     }
     window.isQuitting = true;
     window.NativeAPI.confirmClose();
@@ -332,59 +341,15 @@ window.NativeAPI.onWindowClose(sidebarHandleClose);
     }
   }
 
-  /* ── Recovered text → a NEW file ──────────────────────────────────────
-     Written beside the note it belongs to (or at the project root when
-     that folder is gone or outside the project) and returns the path.
-     Nothing is ever overwritten: a free name (uniquePath) plus an exclusive
-     create, retried on the backends' "already exists" contract. The name
-     stays short on purpose (≤ 150 bytes): "_recovered" and a numbering
-     suffix ("_2") must still fit the 255-byte limit, and a very long
-     note name falls back to plain "recovered". */
-  async function saveRecoveredTextAsNewFile(notePath, content) {
-    let dir = parentPathOf(notePath);
-    if (!dir || !S.rootPath || !isInsideRoot(dir, S.rootPath)) dir = S.rootPath;
-    try { await window.NativeAPI.readDirectory(dir); } catch (_) { dir = S.rootPath; }
-    if (!dir) throw new Error('No project folder is open.');
-
-    const base = baseNameOf(notePath);
-    const dot = base.lastIndexOf('.');
-    const oldExt = dot > 0 ? base.slice(dot + 1) : '';
-    const ext = /^(md|txt)$/i.test(oldExt) ? oldExt : 'md';
-    let stem = (dot > 0 ? base.slice(0, dot) : base) + '_recovered';
-    if (checkEntryName(`${stem}.${ext}`) || new TextEncoder().encode(`${stem}.${ext}`).length > 150) {
-      stem = 'recovered';
-    }
-
-    let newPath = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      newPath = await uniquePath(dir, stem, ext);
-      try {
-        await window.NativeAPI.createFile(newPath);
-        break;
-      } catch (err) {
-        if (String(err).includes('already exists') && attempt < 4) continue;
-        throw err;
-      }
-    }
-    try {
-      await window.NativeAPI.writeFile(newPath, content);
-    } catch (err) {
-      /* The empty file is ours (created exclusively a moment ago): do not
-         leave it behind looking like a recovered note. */
-      window.NativeAPI.deleteNode(newPath).catch(() => {});
-      throw err;
-    }
-    return newPath;
-  }
-
   /* "Save as a copy": the crash backup becomes a separate note beside the
-     one it belongs to; the saved note stays exactly as it is. The backup
-     is deleted only once the copy is on disk — if that fails it stays, and
-     the user is told. → the copy's path, or null on failure. */
+     one it belongs to ("<name>_recovered", helpers.saveTextBesideNote); the
+     saved note stays exactly as it is. The backup is deleted only once the
+     copy is on disk — if that fails it stays, and the user is told. → the
+     copy's path, or null on failure. */
   async function saveBackupBesideNote(notePath, content) {
     let copyPath;
     try {
-      copyPath = await saveRecoveredTextAsNewFile(notePath, content);
+      copyPath = await saveTextBesideNote(notePath, content, '_recovered');
     } catch (err) {
       console.error('[Sidebar Boot] Saving the crash backup as a separate file failed:', err);
       await window.NativeAPI.showMessageBox({
@@ -591,7 +556,6 @@ try {
           expandedDirs.add(folder);
 
           await recordProjectOpen(folder);
-          S.cardViewDir = folder;
 
           if (canonicalLast && canonicalLast.replace(/\\/g, '/').startsWith(folder.replace(/\\/g, '/'))) {
             const relPath = canonicalLast.replace(/\\/g, '/').substring(folder.length).replace(/^\//, '');
@@ -605,8 +569,12 @@ try {
               currentPath = joinPath(currentPath, p);
               expandedDirs.add(currentPath);
             }
-            S.selectedDirPath = currentPath; 
+            S.selectedDirPath = currentPath;
           }
+          /* The card view opens where it was when this project was last
+             open — else at the last note's folder (selected just above).
+             It used to open at the root every time (cards.js). */
+          restoreCardViewDir(folder);
           openSidebar();
           updateViewBtn();
           await renderTree();
@@ -669,7 +637,24 @@ try {
                     (backupLen === 0 && diskLen > 0) ||
                     (diskLen > 200 && backupLen < diskLen * 0.1);
 
-                  /* ── Staleness guard ────────────────────────────────────
+                  /* ── Was the backup made on top of the file as it is now? ──
+                     Every backup records the disk version its text was
+                     edited from (save.js noteBackupBase). That version still
+                     on disk → "Restore" only puts the unsaved edits back.
+                     Another version → the file was changed after this text
+                     was made (another program, a sync service, another
+                     device — or "Keep my version"): restoring would REPLACE
+                     that newer text, so keeping both is the default. The
+                     timestamp check that decided this before was wrong
+                     whenever a sync tool kept the other device's time: a
+                     newer file looked older and Enter restored over it.
+                     true | false | null (no base recorded: older backups). */
+                  const based = isTextFingerprint(backup.base)
+                    ? backup.base === diskFingerprint(diskContent)
+                    : null;
+                  const changed = !suspicious && based === false;
+
+                  /* ── Staleness guard (backups without a base only) ──────
                      A backup OLDER than the file's last save means the disk
                      moved on after the backup was written — e.g. the user
                      accepted an external "Reload from disk", never edited
@@ -681,14 +666,16 @@ try {
                      platforms; either being unavailable (0) disables the
                      guard — when unsure, keep today's behavior.          */
                   let fileMtime = 0;
-                  try {
-                    const dirPath = lastFile.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-                    const entries = await window.NativeAPI.readDirectory(dirPath);
-                    const norm = (p) => String(p).replace(/\\/g, '/');
-                    const me = (entries || []).find((e) => norm(e.path) === norm(lastFile));
-                    if (me && typeof me.mtime === 'number') fileMtime = me.mtime;
-                  } catch (_) { /* stat failed — content-only heuristics below */ }
-                  const stale = !suspicious
+                  if (based === null) {
+                    try {
+                      const dirPath = lastFile.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+                      const entries = await window.NativeAPI.readDirectory(dirPath);
+                      const norm = (p) => String(p).replace(/\\/g, '/');
+                      const me = (entries || []).find((e) => norm(e.path) === norm(lastFile));
+                      if (me && typeof me.mtime === 'number') fileMtime = me.mtime;
+                    } catch (_) { /* stat failed — content-only heuristics below */ }
+                  }
+                  const stale = !suspicious && based === null
                     && fileMtime > 0 && backup.ts > 0 && backup.ts < fileMtime;
 
                   /* Every answer except an explicit "Discard" keeps the text.
@@ -717,6 +704,14 @@ try {
                       message: 'A crash backup was found, but it looks incomplete.',
                       detail:  `Last edited: ${ts}\n\nThe backup is much shorter than the saved file (${backupLen} vs ${diskLen} characters) \u2014 the crash may have damaged it. Restoring it would REPLACE your saved file with this content.` + KEEP_BOTH,
                       choices: [['restore', 'Restore incomplete backup'], ['copy', 'Save backup as a copy'], ['discard', 'Discard backup']],
+                      defaultAction: 'copy', cancelAction: 'copy',
+                    };
+                  } else if (changed) {
+                    dialog = {
+                      type:    'warning',
+                      message: 'Unsaved text from a previous session was found, but the file has changed since.',
+                      detail:  `Last edited: ${ts}\n\nThe file on disk is no longer the version this text was based on — another program, a sync service or another device changed it afterwards (or you chose “Keep my version”). Restoring would REPLACE that newer version with this text.` + KEEP_BOTH,
+                      choices: [['restore', 'Restore backup'], ['copy', 'Save backup as a copy'], ['discard', 'Discard backup']],
                       defaultAction: 'copy', cancelAction: 'copy',
                     };
                   } else if (stale) {
@@ -759,9 +754,10 @@ try {
                     }
                     markDirty();
                     scheduleAutoSave();
-                    // Immediately create a fresh volatile backup of the restored content
+                    // Immediately create a fresh volatile backup of the restored
+                    // content — based on the file as it is now (rememberDiskContent above)
                     if (typeof window.NativeAPI.writeVolatileNow === 'function') {
-                      await window.NativeAPI.writeVolatileNow(lastFile, backup.content).catch(e =>
+                      await window.NativeAPI.writeVolatileNow(lastFile, backup.content, noteBackupBase()).catch(e =>
                         console.warn('[Sidebar] Refreshing backup after restore failed:', e)
                       );
                     }
@@ -829,7 +825,7 @@ try {
         try { localStorage.setItem('revery_root_path', S.rootPath); } catch (e) {}
         recordProjectOpen(defaultFolder);
         S.selectedDirPath = defaultFolder;
-        S.cardViewDir = defaultFolder;
+        restoreCardViewDir(defaultFolder);
         const parts = defaultFolder.replace(/\\/g, '/').split('/');
         folderNameEl.textContent = parts[parts.length - 1] || defaultFolder;
         expandedDirs.clear();

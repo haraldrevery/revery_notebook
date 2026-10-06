@@ -256,6 +256,13 @@ The `●` marker indicates the currently active file (`.active` CSS class).
   (re-checked when the panel is resized). Every ancestor segment and the
   Back button are drop targets: dropping cards there moves them up. Nothing
   above the project root is ever offered (`cards.js` NAVIGATION BAR)
+- The card view's folder is remembered per project (`card_memory.js`, in
+  localStorage like the view mode): a restart or a project switch reopens
+  the folder it showed — else the last note's folder, else the root — and
+  in card view the selected folder (where New File and new notes go)
+  follows it. A remembered folder that is gone falls back to the nearest
+  folder above it that still exists (`renderCards`). It used to open at
+  the root at every start while the editor reopened the last note
 - Links (symlinks/junctions) show the link glyph and are never walked into
 
 ### Context Menu Actions (translated EN/SV)
@@ -668,7 +675,7 @@ Redo are CodeMirror's own history commands, text only.
 | FS | `fs:read-directory`, `fs:read-file` (20 MB cap), `fs:write-file` (atomic via `fs_core.atomicWriteFile`), `fs:create-file`, `fs:create-directory` (name rule), `fs:rename-node` (`fs_core.renameEntry`), `fs:delete-node` (→ trash, the entry itself), `fs:canonical-entry`, `fs:copy-into-folder`, `fs:set-root-path` (trustedRoots-verified on the real folder; returns the canonical root) |
 | Crash backup | `fs:set/get/delete-volatile-content`, `fs:get-volatile-status`, `fs:list-volatile-backups` |
 | Watch | `fs:watch-file`, `fs:unwatch-file` |
-| Dialogs | `dialog:open-folder`, `dialog:save-file`, `dialog:show-message-box` |
+| Dialogs | `dialog:open-folder`, `dialog:save-file`, `dialog:show-message-box` — file dialogs open where the user last was this session (since Electron 43 one without a folder opens in Downloads, and the OS no longer remembers the last folder) |
 | Export | `project:export-zip` (no renderer args), `export:pdf` (temp file → hidden sandboxed window → `printToPDF` → atomic write), `export:latex-zip` (image paths root-validated; `bundleFonts` allowlisted) |
 | Window | `window:confirm-close`, `window:close`, `window:minimize`, `window:toggle-maximize`, `window:set-fullscreen`; renderer → main (fire-and-forget): `window:close-ack`, `window:close-failed` |
 | Settings | `settings:get/set-last-opened-file`, `settings:get/set-last-root-path`, `settings:get/set-pending-rename`, `settings:get/set-project-history`, `settings:clear-all` |
@@ -827,6 +834,34 @@ on_window_event: CloseRequested fires
                                window.close() in Rust
 ```
 
+### Shutdown, log out, focus loss (both wrappers)
+
+Autosave runs 1.5 s after the last keystroke, the crash backup 2 s after
+it. An operating system that ends the app in between — shutting down,
+restarting, logging out — used to lose the text typed in those moments.
+
+- **Focus loss** (`save.js` FLUSH, `flushPendingWork`): when the window
+  loses focus or is hidden, the autosave that is already scheduled runs at
+  once and the crash backup waiting in its debounce is written
+  (`NativeAPI.flushVolatileBackup`). Opening the Start menu, the logout
+  dialog or another app does that before the OS acts. Nothing beyond what
+  was already due: a held file (`Keep my version`, deleted or unreadable
+  file) is never written by it, a save-failure cooldown has no timer to
+  run, and no question is asked.
+- **Windows ending the session** (Electron): `main.js` hands
+  `query-session-end` / `session-end` to the page (`app:flush-now`) — the
+  same flush. Best effort; the shutdown is never blocked.
+- **SIGTERM / SIGHUP / SIGINT** (Linux, macOS — logging out, shutting
+  down, `kill`, Ctrl+C): Electron turns them into the normal close flow on
+  its own. Tauri used to end at once; `close_on_quit_signals` (`main.rs`)
+  now closes the window exactly like the close button, so the page saves
+  first. Signals during that close are ignored; the session manager's
+  SIGKILL after its timeout stays the last resort.
+- **The close flow** (`lifecycle.js`): when it cannot save (the file
+  changed on disk, the disk refused), it writes the crash backup BEFORE
+  asking anything — at logout nobody answers, the app is ended while the
+  question waits, and the backup is then what the next start offers.
+
 ### Tauri Scopes & Capabilities (actual model)
 
 There is NO fs-plugin scope — all filesystem access goes through the custom
@@ -856,17 +891,41 @@ Every 2 seconds after the last keystroke, `NativeAPI.setVolatileContent(path, co
 **Electron temp path**: `os.tmpdir()/revery-volatile/<hash>.revery_volatile`  
 **Tauri temp path**: `env::temp_dir()/revery-volatile/<hash>.revery_volatile`
 
-A `.meta.json` sibling file records the original path and timestamp. At
-startup the boot recovery offers the last opened file's backup (and any
-scratchpad backup); the 7-day purge never deletes the last opened file's
-backup, since it runs on a timer, not after that offer.
+A `.meta.json` sibling file records the original path, the timestamp and
+the **base**: the fingerprint (`src/sidebar/fingerprint.js`) of the disk
+version the backed-up text was edited from — `S._diskBaseline`, taken
+together with the text (`save.js noteBackupBase`), never when a debounced
+write happens. At startup the boot recovery offers the last opened file's
+backup (and any scratchpad backup); the 7-day purge never deletes the last
+opened file's backup, since it runs on a timer, not after that offer.
 
 **The recovery question** (lifecycle.js) has three answers: Restore / Save
 as a copy / Discard. Only an explicit click on Discard deletes the backup.
 Escape (and closing the dialog) saves the backup as a separate file beside
 the note (`<name>_recovered.md`, never overwriting); a doubtful backup
-(much shorter than the file, or older than its last save) makes that the
-recommended default too. A blank backup only offers "Keep saved version".
+makes that the recommended default too: much shorter than the file, or
+**made on top of another version than the file now holds** (its base ≠ the
+file's fingerprint — another program, a sync service, another device, or
+"Keep my version" changed the file after the text was made; Restore would
+replace that newer text). Only backups without a base (written by older
+versions) still fall back to comparing timestamps, which a sync tool that
+keeps the other device's modification time defeats — Enter then used to
+restore over the newer file. A blank backup only offers "Keep saved
+version".
+
+Backups never come back after the user discarded them or resolved them
+elsewhere: "Reload from disk" deletes the backup of the edits it discards
+(and a debounced write of it still waiting); `writeVolatileNow` supersedes
+a debounced write of the same path (its text is the current one), so a
+backup taken while a save was in flight cannot land afterwards with the
+older base. A version kept with **"Keep my version" on a note without
+unsaved edits** exists only in the editor: closing keeps its snapshot
+(offered at the next start, as a copy by default), leaving the note saves
+it as `<name>_local.md` first unless the file holds it again
+(`save.js keptVersionOnScreen`), and a rename moves its snapshot along
+(`retargetActiveFile`). All copies are written by one helper
+(`helpers.saveTextBesideNote`: free name, exclusive create, the empty file
+of a failed write removed).
 When the last note cannot be opened at all (deleted or moved while the
 app was closed, no longer UTF-8, too large), its backup is offered as a new
 note that then opens — the start used to show the welcome text and forget
@@ -978,6 +1037,8 @@ pins both directions.
 | Oversized payloads | Files > 20 MB are rejected at the IPC handler level |
 | Dialog spoofing | Only `dialog.*` APIs in main process; renderer cannot fake them |
 | Acting as a browser | `will-navigate` cancels everything except same-URL reloads (the target comes from `details.url`, the page's own URL from the webContents — `event.sender` no longer exists on Electron's details object, and reading it threw an uncaught exception on every reload, e.g. Total Reset); `setWindowOpenHandler` denies all; links are never forwarded to the OS browser (policy: the app never opens links) |
+| Network contact | None. Chromium's spell checker (Windows, Linux) downloaded its dictionaries from Google at every start — IP address and language to Google, against the privacy statement. `spellcheck.js` ships English and Swedish (`electron/dictionaries/`), copies them into the profile's `Dictionaries` folder before any session exists (Chromium looks for them the moment one is created) and points every session's download address at a local folder that does not exist (`session-created`). Spell checking covers the system's preferred languages that are bundled, else it is off (another language would be all red). macOS uses the system spell checker |
+| Unsupported Electron | Electron 44 (supported: the three latest majors). Electron 41 had been without security fixes since 25 Aug 2026 |
 
 ### Tauri
 
@@ -1097,8 +1158,22 @@ npm install
 
 | Command | macOS | Windows | Linux |
 |---|---|---|---|
-| `build:electron` | `.dmg` | `.exe` (NSIS assisted wizard, branded) + portable `.exe` | `.AppImage`, `.deb` |
-| `build:tauri` | `.dmg`, `.app` | `.msi` (WiX, branded), `.exe` (NSIS, branded) | `.AppImage`, `.deb` |
+| `build:electron` | `.dmg` | `.exe` (NSIS assisted wizard, branded) + portable `.exe` | `.deb` |
+| `build:tauri` | `.dmg`, `.app` | `.msi` (WiX, branded), `.exe` (NSIS, branded) | `.AppImage`, `.deb`, `.rpm` |
+
+**No Electron AppImage.** Chromium's sandbox needs unprivileged user
+namespaces, which Ubuntu 23.10+/24.04+ (and Mint 22, Pop!_OS 24.04 …) only
+grant to programs with an AppArmor profile. The Electron `.deb` installs one
+(and falls back to the setuid `chrome-sandbox` where namespaces are missing
+entirely); an AppImage cannot, so it aborted at start there ("The SUID
+sandbox helper binary was found, but is not configured correctly"), with no
+window and no message. A launcher that starts the AppImage without the
+Chromium sandbox on those systems was considered and not taken: weaker
+isolation for a renderer that displays untrusted documents, and a custom
+build step to maintain. On Ubuntu and its derivatives the Electron `.deb`
+keeps the full sandbox; other distributions use the Tauri build
+(`.AppImage`, `.rpm` — on a system with that restriction it starts WebKit
+without its own sandbox, see `fn main` in `main.rs`).
 
 Windows installer branding comes from `images_for_installer/` (spec-exact
 BMPs for NSIS header/sidebar and WiX banner/dialog). **Version numbers**
@@ -1296,24 +1371,37 @@ after touching anything in `electron/fs_core.js`, the IPC handlers in
 
 ```bash
 # JS side — no dependencies beyond Node itself (node:test)
-npm test
+npm test                 # `pretest` first installs the Electron binary: since
+                         # Electron 42, `npm install` no longer downloads it
 
 # Rust side
 npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 ```
+
+The same `npm test` runs on Windows, and should before every release:
+the end-to-end suites boot the real app there too (only the Linux-specific
+checks skip themselves). Where creating symlinks needs Developer Mode or
+admin rights, the file-operations fixture uses directory junctions.
 
 | Suite | What it proves |
 |---|---|
 | `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails; a Windows lock is retried (0.1/0.2/0.4 s) and one that does not let go fails with the old file intact; EBUSY is retried the same way on Linux/macOS (SMB) and never answered with a copy, while EPERM there fails at once; short writes are completed, a short write followed by ENOSPC fails with the target untouched, a zero-progress write cannot loop, and a REAL kernel short write (`ulimit -f`, Linux) is reported instead of truncating; a note name near the 255-byte limit saves (bounded temp names, whole characters), and the permission bits of the replaced file are kept |
 | `test/fs_core.paths.test.js` | Path traversal / symlink-escape rejection, dropped-filename sanitisation |
 | `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
-| `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup |
+| `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup; the base travels with its own text (per directory, newest snapshot wins), unusable bases are not recorded, backups from before the field read with base null |
+| `test/fingerprint.test.js` | The backup base fingerprint: equal text → equal fingerprint (versioned format), every kind of change a note sees (newline, CRLF, BOM, case, swapped lines, one character, emoji) → another one, no collisions over 20 000 similar notes, only `v1` values accepted, a ~10 M-character note in well under 2 s |
+| `test/card_memory.test.js` | The card view's per-project folder memory: malformed storage dropped, only a folder inside its project offered, Windows spellings case-insensitive, one entry per project, newest first, bounded |
+| `test/backup_safety_e2e.test.js` | Boots the REAL desktop app across several SESSIONS of one profile (restart = reload, crash = killed renderer; `helpers/restart_e2e_main.js` + `restart_e2e_driver.js`, which can change files as a sync tool would, keeping an old modification time): "Keep my version" then close/crash → Enter keeps both versions (the newer file is never restored over); "Reload from disk" then a crash → the discarded edits never come back; typing during a slow save then a crash → plain Restore, no false "changed" warning; "Keep my version" then opening another note → `<name>_local.md` (none when the file holds it again); a rename moves the kept version's backup; "Save my version & reload" |
+| `test/card_restore_e2e.test.js` | Same multi-session harness: a restart reopens the card view's folder and New File goes there; a folder removed meanwhile falls back to the nearest existing one (New File follows); nothing remembered → the last note's folder; each project keeps its own folder across project switches |
 | `test/fs_core.read.test.js` | Strict UTF-8 reads: valid UTF-8 / BOM / CRLF round-trip byte for byte; Windows-1252 and UTF-16 are refused and left untouched |
 | `test/fs_core.rename.test.js` | The only rename-over-existing exception (case-only alias of the SAME file); two different files differing only in case are never treated as one |
 | `test/fs_core.entry.test.js` | Entry operations (`validateEntryInside`, `renameEntry`, `trashableEntry`): a link is the link, never its target (also one pointing outside); nothing behind an outside link is reachable; a symlinked root resolves to the real spelling; never overwrites (a dangling link included); absolute links move as links, relative ones are refused across folders; into-itself / root / bad names refused, a pure move keeps a legacy name; EXDEV refused with nothing changed; EBUSY is never a copy (retried on every platform, then it fails); the Windows retry, and a destination appearing during it is never overwritten; `checkEntryName` agrees with the renderer's |
 | `test/entry_names.test.js` | The one name rule (`checkEntryName` reasons, Windows device names, byte length), `sanitizeEntryName`, the rename extension rule (`renamedFileName`: "Meeting 26.09.2026" keeps ".md", note ↔ note and image ↔ image only, extensionless names kept), `samePath` / `pathKey`, `joinPath` / `parentPathOf` / `remapUnder` in the listing's own spelling |
 | `test/file_history_e2e.test.js` | Boots the REAL Electron app twice on a temp project. History run: links the user DECLINED on a move are never touched by Ctrl+Z / Ctrl+Y (undo used to break the moved note's relative links); accepted links follow undo and redo unasked; Ctrl+Y / Ctrl+Shift+Z in the title or editor never move files, in the panel they redo; a new operation ends the redo chain; a delete ends the history; autosave never renames to a title still being typed; "File Changed Externally" defaults to "Save my version & reload" with unsaved edits, "Reload from disk" without. No-project run (last project folder missing): "Could Not Open Project" at start, typed text gets a crash backup, New File / Import leave it alone, Open Folder keeps it and gives it a note there |
-| `test/file_ops_e2e.test.js` | Boots the REAL Electron app twice on a temp project (a recorder replaces the system trash): card-view path bar and its root-segment drop, the narrow-panel "← Back" drop target, nothing above the root; "Move to…" (picker rules, the link update still runs) and "Move up one level"; Ctrl+Z in the title never undoes a file move, after working in the panel it does (with a status message); links moved as links, a relative link not moved away, deleting a link trashes the link; rename rules and refusals; the open note's folder moved while a save is queued (save lands first, later typing saved at the new place, old folder never recreated); the open note deleted with a save in flight (the save lands first, never resurrected); multi-delete wording. Second run with the project opened through a symlink: canonical root and note, no name_2 on a drop into the own folder, no escape above the root |
+| `test/file_ops_e2e.test.js` | Boots the REAL Electron app twice on a temp project (a recorder replaces the system trash): card-view path bar and its root-segment drop, the narrow-panel "← Back" drop target, nothing above the root; "Move to…" (picker rules, the link update still runs) and "Move up one level"; Ctrl+Z in the title never undoes a file move, after working in the panel it does (with a status message); links moved as links, a relative link not moved away, deleting a link trashes the link; rename rules and refusals; the open note's folder moved while a save is queued (save lands first, later typing saved at the new place, old folder never recreated); the open note deleted with a save in flight (the save lands first, never resurrected); multi-delete wording. Second run with the project opened through a symlink: canonical root and note, no name_2 on a drop into the own folder, no escape above the root. Runs on Windows too (it used to skip there): without symlink rights the links are junctions and the relative-link checks do not apply; `REVERY_E2E_NO_SYMLINKS=1` runs that variant anywhere |
+| `test/spellcheck.test.js` | `electron/spellcheck.js`: the bundled dictionaries and licence texts are there; the system's preferred languages map onto the bundled ones (any English → en-US, Swedish → sv-SE, order kept, none → spell check off); the install copies them, leaves an identical copy alone, replaces a damaged one, never throws |
+| `test/spellcheck_offline_e2e.test.js` | Boots the REAL app while the OS reports a language (Linux): English or Swedish → Chromium loads the BUNDLED dictionary and flags a misspelled word typed into the editor; another language → spell check off; and in every run Chromium's own network log holds not one http(s) request (it used to download dictionaries from Google). Fails after an Electron upgrade if the bundled dictionaries are not the version Chromium expects |
+| `test/shutdown_flush_e2e.test.js` | Same multi-session harness: typing reaches the disk at once when the window loses focus or Windows ends the session (it used to wait for the 1.5 s autosave); a held file is still never written by it, only its crash backup; closing (as at logout) right after another program changed the file — the close cannot save, nobody answers its question, the app is gone — the typing was backed up before the question and comes back as a copy beside the newer file |
 | `test/eol.test.js` | Line-ending rules: which files keep CRLF, normalisation, byte-exact round-trip |
 | `test/unique_name.test.js` | New/renamed/imported/moved names: case-insensitive collisions, trailing `_2024` kept, the renamed file does not block its own spelling |
 | `test/data_safety_e2e.test.js` | Boots the REAL desktop app on a temp project: Replace after edits / file switch / regex context; scratchpad race (the switch waits for the note); sidebar Ctrl+Z; rename during a "Keep my version" hold; open-note links follow a rename; CRLF kept; external write right after an autosave detected; a note moved away by another program not recreated |
@@ -1337,7 +1425,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/custom_theme.test.js` | The custom theme generator (theme.js in a vm): it sets exactly the variables every palette block defines; stored values are normalized or rejected (the earlier offset layout is converted); saturation 0 is neutral gray; each control changes only what it names (text sliders never touch a background variable and vice versa; Vivid text changes only `--doc-text`); no part of the Text saturation slider is flat; Vivid text makes dark red red; for every control combination (exact, via the extreme text and surface luminances, since any text color can meet any surface): text ≥ 7:1, muted text ≥ 4.5:1 (4:1 on hover), highlight ≥ 4.5:1 (3:1 on hover), vivid document text ≥ 4.5:1 on bg and both gradient ends, editor gradient visible but gentle (≥ 1.12:1 on dark bases); selection tint visible on a dense grid; the text-slider tracks paint with the generator; boot and live switching never leave an empty palette |
 | `test/theme_e2e.test.js` | Boots the REAL app (web mode) once with the OS in light mode and once in dark: every built-in palette and six custom ones are measured on screen (html.dark matches the actual background, body/footnote/editor-code contrast, visible selection, background-image overlay tinted with the palette's own `--bg`, click flashes yellow in built-ins and the highlight color in custom themes, one text color everywhere in a custom theme — the document on `--doc-text`, menus on `--text`, separate only with Vivid text — and the solid editor background equals `--bg`), identical under both OS settings; in-app PDF print stays dark-on-white under every palette, Vivid text included; plus the custom theme dialog through the real menu: the text sliders apply the generator's color without moving the background and the background sliders leave the text alone, Vivid text changes only the document text, live preview, Escape/outside click/Cancel restore, Save stores the base + custom values, Reset, the Background opacity override stays independent |
 | `test/typography_e2e.test.js` | Boots the REAL app (web mode) at a desktop, a phone and a short landscape size: after −/+ or a font change the first click in the classic editor lands on the line under the pointer and live preview's height map matches the screen; Settings has the two font rows; the popup's lists and sliders apply and save (a slider saves on release), the −/+ buttons update an open popup, spacing never reaches menus or a page-level element (the PDF print root), Reset, Escape, click-outside, custom fonts added/deleted from inside it, live preview opens the Preview popup; damaged stored values keep their defaults; the phone bottom panel and the short window keep Close reachable |
-| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `safe_entry_inside` (links as links, symlinked root), `rename_entry_blocking` (no overwrite, dangling link kept, relative link refused, into-itself/bad names), `case_only_alias_in_listing`, `classify_rename_error` (pins errno 17 = EEXIST on Unix), `check_entry_name` (same table as the renderer), `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `retry_rename_on_lock` (a brief Windows lock is retried, a lasting one ends as a failure; off Windows only EBUSY is retried), zip export roundtrip/symlink-skip/self-exclusion |
+| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `safe_entry_inside` (links as links, symlinked root), `rename_entry_blocking` (no overwrite, dangling link kept, relative link refused, into-itself/bad names), `case_only_alias_in_listing`, `classify_rename_error` (pins errno 17 = EEXIST on Unix), `check_entry_name` (same table as the renderer), `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `retry_rename_on_lock` (a brief Windows lock is retried, a lasting one ends as a failure; off Windows only EBUSY is retried), zip export roundtrip/symlink-skip/self-exclusion, crash backups (`write_backup_to`/`read_backup_from`: key stability, the recorded base, older metas without one) |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side
 atomic-write strategy — both `fs:write-file` and `dialog:save-file` call

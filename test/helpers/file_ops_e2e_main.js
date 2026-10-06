@@ -60,13 +60,42 @@ w('sub/inner.md', 'inner\n');
 w('sub/deep/x.md', 'x\n');
 w('sub/deep/y.md', 'y\n');
 w('realfolder/inside.md', 'inside\n');
-fs.symlinkSync(path.join(real, 'realfolder'), path.join(real, 'abslink')); // absolute
-fs.symlinkSync('realfolder', path.join(real, 'rellink'));                  // relative
+
+/* Links. On Windows a symbolic link needs Developer Mode or admin rights
+   (EPERM otherwise); a directory JUNCTION needs neither, but always points
+   at an absolute path — so there the absolute links are junctions (the app
+   treats both as links) and "rellink" is a second absolute one: the
+   relative-link checks are reported as not run (LINKS.relative false).
+   REVERY_E2E_NO_SYMLINKS=1 takes that path anywhere (on Linux/macOS the
+   junction type is ignored: an absolute symlink). */
+const LINKS = { relative: true, kind: 'symlink' };
+function dirLink(target, at) {
+  if (LINKS.kind === 'symlink') {
+    try {
+      if (process.env.REVERY_E2E_NO_SYMLINKS === '1') {
+        throw Object.assign(new Error('symlinks unavailable (simulated)'), { code: 'EPERM' });
+      }
+      fs.symlinkSync(target, at, 'dir');
+      return;
+    } catch (err) {
+      if (err.code !== 'EPERM') throw err;
+      LINKS.kind = 'junction';
+      LINKS.relative = false;
+    }
+  }
+  fs.symlinkSync(path.resolve(path.dirname(at), target), at, 'junction');
+}
+dirLink(path.join(real, 'realfolder'), path.join(real, 'abslink'));   // absolute
+if (LINKS.relative) {
+  fs.symlinkSync('realfolder', path.join(real, 'rellink'), 'dir');      // relative
+} else {
+  dirLink(path.join(real, 'realfolder'), path.join(real, 'rellink'));   // (absolute: see above)
+}
 
 let project = real;
 if (MODE === 'symlink') {
   project = path.join(base, 'NotesLink');
-  fs.symlinkSync(real, project);
+  dirLink(real, project);
 }
 
 fs.writeFileSync(path.join(userData, 'revery_settings.json'), JSON.stringify({
@@ -126,10 +155,12 @@ app.on('browser-window-created', (_event, win) => {
       const driver = fs.readFileSync(path.join(__dirname, 'file_ops_e2e_driver.js'), 'utf8')
         .replace(/__PROJECT__/g, JSON.stringify(project))
         .replace(/__REAL__/g, JSON.stringify(real))
-        .replace(/__MODE__/g, JSON.stringify(MODE));
+        .replace(/__MODE__/g, JSON.stringify(MODE))
+        .replace(/__LINKS__/g, JSON.stringify(LINKS));
       const result = await win.webContents.executeJavaScript(driver, true);
       result.dialogs = dialogs;
-      result.trashCalls = trashCalls.map((p) => path.relative(base, p));
+      result.links = LINKS;
+      result.trashCalls = trashCalls.map((p) => path.relative(base, p).split(path.sep).join('/'));
       result.disk = walk(real, '', {});
       result.trash = walk(trashed, '', {});
       console.log('E2E-RESULT: ' + JSON.stringify(result));

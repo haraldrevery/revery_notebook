@@ -516,10 +516,21 @@ function sanitizeDropFilename(raw) {
 /* ── Volatile (crash backup) storage ────────────────────────────────────
    One backup slot per original file path, keyed by sha256 of the path:
      <dir>/<key>.revery_volatile   the note text
-     <dir>/<key>.meta.json         { originalPath, ts }
+     <dir>/<key>.meta.json         { originalPath, ts, base? }
+   `base` (optional): the fingerprint of the disk version the text was
+   edited from — recovery compares it with the file to tell unsaved edits
+   from a file that was changed since (src/sidebar/fingerprint.js). Older
+   backups have none; older app versions ignore it. MIRROR of
+   write_backup_to / read_backup_from in tauri/src/main.rs.
    Writes are atomic (unique temp + rename) so a crash mid-backup keeps the
    PREVIOUS backup intact — exactly what crash recovery is supposed to
    provide. */
+
+/* A base is a short string the renderer computed; anything else is
+   dropped (the backup is then treated like an older one: no base). */
+function validBackupBase(base) {
+  return (typeof base === 'string' && base.length > 0 && base.length <= 200) ? base : null;
+}
 
 /* Verify the volatile directory is safe to write user-note backups into.
    On Unix, the OS temp dir is a shared namespace with predictable
@@ -586,8 +597,11 @@ function volatilePaths(dir, originalPath) {
   };
 }
 
-function setVolatileContent(dir, originalPath, content) {
+function setVolatileContent(dir, originalPath, content, base = null) {
   const { dataFile, metaFile } = volatilePaths(dir, originalPath);
+  const meta = { originalPath, ts: 0 };
+  const b = validBackupBase(base);
+  if (b) meta.base = b;
 
   const uniq    = Date.now() + '_' + crypto.randomBytes(4).toString('hex');
   const dataTmp = dataFile + '.' + uniq + '.tmp';
@@ -596,7 +610,9 @@ function setVolatileContent(dir, originalPath, content) {
   // Data first: if the meta write fails afterward, the user still has
   // current text on disk paired with a stale ts — recoverable. Reverse
   // ordering would lose text on the same crash. The fsync matters here:
-  // the crash backup must be durable precisely at crash time.
+  // the crash backup must be durable precisely at crash time. (A stale
+  // meta can only pair the text with an OLDER base: recovery then sees
+  // "changed since" and defaults to keeping both — never the reverse.)
   try {
     writeFileWithFsync(dataTmp, content, 'utf8');
     fs.renameSync(dataTmp, dataFile);
@@ -607,7 +623,8 @@ function setVolatileContent(dir, originalPath, content) {
   }
 
   try {
-    writeFileWithFsync(metaTmp, JSON.stringify({ originalPath, ts: Date.now() }), 'utf8');
+    meta.ts = Date.now();
+    writeFileWithFsync(metaTmp, JSON.stringify(meta), 'utf8');
     fs.renameSync(metaTmp, metaFile);
     syncParentDir(metaFile);
   } catch (err) {
@@ -621,7 +638,7 @@ function getVolatileContent(dir, originalPath) {
   try {
     const content = fs.readFileSync(dataFile, 'utf8');
     const meta    = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-    return { content, ts: meta.ts, originalPath: meta.originalPath };
+    return { content, ts: meta.ts, originalPath: meta.originalPath, base: validBackupBase(meta.base) };
   } catch {
     return null; /* No backup exists — not an error */
   }

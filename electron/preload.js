@@ -50,11 +50,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyFileIntoFolder: (destDir, filename, contentB64) =>
     ipcRenderer.invoke('fs:copy-into-folder', destDir, filename, contentB64),
 
-  setVolatileContent: (originalPath, content) =>
-    ipcRenderer.invoke('fs:set-volatile-content', originalPath, content),
+  /* `base`: fingerprint of the disk version the text was edited from
+     (stored with the backup; recovery compares it with the file). */
+  setVolatileContent: (originalPath, content, base) =>
+    ipcRenderer.invoke('fs:set-volatile-content', originalPath, content, base),
 
-  setDurableBackup: (originalPath, content) =>
-    ipcRenderer.invoke('fs:set-durable-backup', originalPath, content),
+  setDurableBackup: (originalPath, content, base) =>
+    ipcRenderer.invoke('fs:set-durable-backup', originalPath, content, base),
 
   getVolatileContent: (originalPath) =>
     ipcRenderer.invoke('fs:get-volatile-content', originalPath),
@@ -78,6 +80,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('dialog:save-file', defaultFilename, content, options),
 
   /* ── Window lifecycle ───────────────────────────────────────────── */
+  /**
+   * Windows is ending the session (shutdown, restart, log off): the page
+   * gets its typing onto disk at once (main.js 'session-end'). Replaces a
+   * previous listener, like onWindowClose.
+   */
+  onFlushRequest: (callback) => {
+    ipcRenderer.removeAllListeners('app:flush-now');
+    ipcRenderer.on('app:flush-now', () => callback());
+  },
+
   /**
    * Registers a one-time callback that fires when the OS window-close
    * button is clicked. The callback should show the quit-confirmation UI

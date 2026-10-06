@@ -26,7 +26,9 @@ const {
   ipcMain,
   dialog,
   shell,
+  session,
 } = require('electron');
+const { setUpSpellChecker } = require('./spellcheck');
 
 const path  = require('path');
 const fs    = require('fs');
@@ -323,6 +325,21 @@ mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     }
   });
 
+  /* ── Windows ends the session (shutdown, restart, log off) ─────────────
+     Windows ends the app without the normal close: neither 'before-quit'
+     nor the close flow runs, and what was typed in the last moments
+     (autosave runs 1.5 s after the last keystroke) was lost. Ask the page
+     to get it onto disk NOW: the pending autosave and the crash backup —
+     the same flush as when the window loses focus, which has usually run
+     already (the Start menu took the focus). Best effort; the shutdown is
+     never blocked. Linux and macOS ask with SIGTERM instead, which
+     Electron turns into the normal close flow. */
+  const flushNow = () => {
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('app:flush-now');
+  };
+  win.on('query-session-end', flushNow);
+  win.on('session-end', flushNow);
+
   /* The page's process died (crash, out of memory, GPU failure): what is on
      screen is dead and cannot save or close. Offer a reload — the boot
      recovery then offers the crash backup — or closing. */
@@ -365,6 +382,17 @@ ipcMain.on('window:close-failed', (event, message) => {
 app.whenReady().then(() => {
   /* A second instance is already quitting — never create its window. */
   if (!gotSingleInstanceLock) return;
+
+  /* Spell check with the bundled dictionaries only — never a download
+     (spellcheck.js). Before anything creates a session: Chromium looks for
+     its dictionaries the moment one exists. Should the setup fail, spell
+     check is off; the app starts regardless. */
+  try {
+    setUpSpellChecker(app, () => session.defaultSession);
+  } catch (err) {
+    console.warn('[revery] spell check setup failed — turned off:', err.message);
+    try { session.defaultSession.setSpellCheckerEnabled(false); } catch (_) { /* nothing more to do */ }
+  }
 
   createWindow();
 
@@ -454,15 +482,43 @@ app.on('activate', () => {
 ══════════════════════════════════════════════════════════════════════════ */
 
 
+/* ── Where the file dialogs open ─────────────────────────────────────────
+   Since Electron 43 a dialog given no folder opens in Downloads, and the
+   OS no longer remembers the last folder used. Start where the user last
+   was (this session) instead: the folder picker beside the project chosen
+   last (else beside the open project, else in Documents), the save
+   dialogs in the folder last saved to (else Documents). */
+let lastPickedFolderParent = null;
+let lastSaveDir = null;
+
+function documentsDir() {
+  try { return app.getPath('documents'); } catch (_) { return os.homedir(); }
+}
+
+function folderPickerStart() {
+  return lastPickedFolderParent || (currentRootPath ? path.dirname(currentRootPath) : documentsDir());
+}
+
+/* `fileName` is a suggestion: only its last segment is used. */
+function saveDialogDefault(fileName) {
+  return path.join(lastSaveDir || documentsDir(), path.basename(String(fileName || '')));
+}
+
+function rememberSaveDir(filePath) {
+  lastSaveDir = path.dirname(filePath);
+}
+
 /* ── Folder dialog ────────────────────────────────────────────────────── */
 ipcMain.handle('dialog:open-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory', 'createDirectory'],
     title: 'Open Project Folder',
+    defaultPath: folderPickerStart(),
   });
   if (result.canceled || !result.filePaths.length) return null;
-  
+
   const chosenPath = result.filePaths[0];
+  lastPickedFolderParent = path.dirname(chosenPath);
 
   // SECURITY FIX: Add user-selected folders to trustedRoots
   const settings = readSettings();
@@ -697,11 +753,11 @@ ipcMain.handle('fs:delete-node', async (_event, targetPath) => {
 });
 
 /* ── Volatile (crash backup) write ───────────────────────────────────── */
-ipcMain.handle('fs:set-volatile-content', (_event, originalPath, content) => {
+ipcMain.handle('fs:set-volatile-content', (_event, originalPath, content, base) => {
   if (typeof originalPath !== 'string') return; // same guard as get/delete
   if (typeof content !== 'string') throw new Error('Content must be a string');
   if (!volatileDirReady) return;          // graceful no-op — dir failed its safety check
-  setVolatileContent(VOLATILE_DIR, originalPath, content);
+  setVolatileContent(VOLATILE_DIR, originalPath, content, base); // fs_core validates `base`
 });
 
 
@@ -728,11 +784,11 @@ ipcMain.handle('fs:get-volatile-content', (_event, originalPath) => {
    Same file format as the volatile slot, different location (userData).
    The renderer calls this only for the autosave-suspended states; the
    recovery read/delete paths above already cover both locations. */
-ipcMain.handle('fs:set-durable-backup', (_event, originalPath, content) => {
+ipcMain.handle('fs:set-durable-backup', (_event, originalPath, content, base) => {
   if (typeof originalPath !== 'string') return;
   if (typeof content !== 'string') throw new Error('Content must be a string');
   if (!ensureDurableReady()) return;    // graceful no-op, same policy as volatile
-  setVolatileContent(getDurableDir(), originalPath, content);
+  setVolatileContent(getDurableDir(), originalPath, content, base);
 });
 
 /* ── Volatile (crash backup) delete — clears ALL backup locations ────── */
@@ -783,7 +839,7 @@ ipcMain.handle('dialog:save-file', async (_event, defaultFilename, content, opti
   const primaryFilter = filterMap[ext] || { name: 'All Files', extensions: ['*'] };
 
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: defaultFilename,
+    defaultPath: saveDialogDefault(defaultFilename),
     filters: [primaryFilter, { name: 'All Files', extensions: ['*'] }],
   });
 
@@ -795,6 +851,7 @@ ipcMain.handle('dialog:save-file', async (_event, defaultFilename, content, opti
   /* Atomic write — same code path as fs:write-file (fs_core.atomicWriteFile) */
   const safe = validatePath(result.filePath);
   atomicWriteFile(safe, content);
+  rememberSaveDir(safe);
 
   // Mirror what openFolderDialog does: grant this directory as a trusted root
   // so subsequent auto-saves via writeFile (which enforces validatePathInside)
@@ -843,7 +900,7 @@ ipcMain.handle('project:export-zip', async () => {
                 `_${p(d.getHours())}_${p(d.getMinutes())}_${p(d.getSeconds())}`;
 
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `${folderName}_${stamp}.zip`,
+    defaultPath: saveDialogDefault(`${folderName}_${stamp}.zip`),
     filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
@@ -851,6 +908,7 @@ ipcMain.handle('project:export-zip', async () => {
   const dest = validatePath(result.filePath);
   const { buffer, entries, bytes } = buildZip(root, { excludePath: dest });
   atomicWriteFile(dest, buffer);
+  rememberSaveDir(dest);
   return { ok: true, path: dest, entries, bytes };
 });
 
@@ -872,11 +930,12 @@ ipcMain.handle('export:pdf', async (_event, html, opts) => {
   const base = (typeof opts.baseName === 'string' && opts.baseName.trim())
     ? opts.baseName.trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '') : 'document';
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `${base}_${stamp}.pdf`,
+    defaultPath: saveDialogDefault(`${base}_${stamp}.pdf`),
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   const dest = validatePath(result.filePath);
+  rememberSaveDir(dest);
 
   const tmpHtml = path.join(
     app.getPath('userData'),
@@ -970,7 +1029,7 @@ ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName, bundleF
   const base = (typeof baseName === 'string' && baseName.trim())
     ? baseName.trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '') : 'latex-project';
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `${base}_${stamp}.zip`,
+    defaultPath: saveDialogDefault(`${base}_${stamp}.zip`),
     filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
@@ -978,6 +1037,7 @@ ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName, bundleF
 
   const { buffer, entries: count, bytes } = buildZipFromEntries(entries);
   atomicWriteFile(dest, buffer);
+  rememberSaveDir(dest);
   return { ok: true, path: dest, entries: count, bytes };
 });
 
