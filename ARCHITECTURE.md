@@ -1129,8 +1129,22 @@ npm install
 
 | Command | macOS | Windows | Linux |
 |---|---|---|---|
-| `build:electron` | `.dmg` | `.exe` (NSIS assisted wizard, branded) + portable `.exe` | `.AppImage`, `.deb` |
-| `build:tauri` | `.dmg`, `.app` | `.msi` (WiX, branded), `.exe` (NSIS, branded) | `.AppImage`, `.deb` |
+| `build:electron` | `.dmg` | `.exe` (NSIS assisted wizard, branded) + portable `.exe` | `.deb` |
+| `build:tauri` | `.dmg`, `.app` | `.msi` (WiX, branded), `.exe` (NSIS, branded) | `.AppImage`, `.deb`, `.rpm` |
+
+**No Electron AppImage.** Chromium's sandbox needs unprivileged user
+namespaces, which Ubuntu 23.10+/24.04+ (and Mint 22, Pop!_OS 24.04 …) only
+grant to programs with an AppArmor profile. The Electron `.deb` installs one
+(and falls back to the setuid `chrome-sandbox` where namespaces are missing
+entirely); an AppImage cannot, so it aborted at start there ("The SUID
+sandbox helper binary was found, but is not configured correctly"), with no
+window and no message. A launcher that starts the AppImage without the
+Chromium sandbox on those systems was considered and not taken: weaker
+isolation for a renderer that displays untrusted documents, and a custom
+build step to maintain. On Ubuntu and its derivatives the Electron `.deb`
+keeps the full sandbox; other distributions use the Tauri build
+(`.AppImage`, `.rpm` — on a system with that restriction it starts WebKit
+without its own sandbox, see `fn main` in `main.rs`).
 
 Windows installer branding comes from `images_for_installer/` (spec-exact
 BMPs for NSIS header/sidebar and WiX banner/dialog). **Version numbers**

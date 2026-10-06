@@ -115,10 +115,12 @@ the browser (a live demo of the software before you install it).
 
 ### Option 1 — The desktop app (recommended)
 
-If you received an installer (`.exe`, `.msi`, `.AppImage`, `.deb`, `.dmg`):
+If you received an installer (`.exe`, `.msi`, `.AppImage`, `.deb`, `.rpm`, `.dmg`):
 run it like any other program, open the app, click **the folder button** in the
 top-left, and pick (or create) a folder for your notes. That's it — your notes
-are ordinary `.md` files in that folder.
+are ordinary `.md` files in that folder. On Linux, pick the `.deb` on Ubuntu,
+Debian and Mint, the `.rpm` on Fedora and openSUSE, or the `.AppImage`
+anywhere else.
 
 ### Option 2 — The web version (zero install)
 
