@@ -129,7 +129,7 @@ app.on('browser-window-created', (_event, win) => {
         .replace(/__MODE__/g, JSON.stringify(MODE));
       const result = await win.webContents.executeJavaScript(driver, true);
       result.dialogs = dialogs;
-      result.trashCalls = trashCalls.map((p) => path.relative(base, p));
+      result.trashCalls = trashCalls.map((p) => path.relative(base, p).split(path.sep).join('/'));
       result.disk = walk(real, '', {});
       result.otherDisk = walk(other, '', {});
       console.log('E2E-RESULT: ' + JSON.stringify(result));
