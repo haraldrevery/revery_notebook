@@ -454,15 +454,43 @@ app.on('activate', () => {
 ══════════════════════════════════════════════════════════════════════════ */
 
 
+/* ── Where the file dialogs open ─────────────────────────────────────────
+   Since Electron 43 a dialog given no folder opens in Downloads, and the
+   OS no longer remembers the last folder used. Start where the user last
+   was (this session) instead: the folder picker beside the project chosen
+   last (else beside the open project, else in Documents), the save
+   dialogs in the folder last saved to (else Documents). */
+let lastPickedFolderParent = null;
+let lastSaveDir = null;
+
+function documentsDir() {
+  try { return app.getPath('documents'); } catch (_) { return os.homedir(); }
+}
+
+function folderPickerStart() {
+  return lastPickedFolderParent || (currentRootPath ? path.dirname(currentRootPath) : documentsDir());
+}
+
+/* `fileName` is a suggestion: only its last segment is used. */
+function saveDialogDefault(fileName) {
+  return path.join(lastSaveDir || documentsDir(), path.basename(String(fileName || '')));
+}
+
+function rememberSaveDir(filePath) {
+  lastSaveDir = path.dirname(filePath);
+}
+
 /* ── Folder dialog ────────────────────────────────────────────────────── */
 ipcMain.handle('dialog:open-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory', 'createDirectory'],
     title: 'Open Project Folder',
+    defaultPath: folderPickerStart(),
   });
   if (result.canceled || !result.filePaths.length) return null;
-  
+
   const chosenPath = result.filePaths[0];
+  lastPickedFolderParent = path.dirname(chosenPath);
 
   // SECURITY FIX: Add user-selected folders to trustedRoots
   const settings = readSettings();
@@ -783,7 +811,7 @@ ipcMain.handle('dialog:save-file', async (_event, defaultFilename, content, opti
   const primaryFilter = filterMap[ext] || { name: 'All Files', extensions: ['*'] };
 
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: defaultFilename,
+    defaultPath: saveDialogDefault(defaultFilename),
     filters: [primaryFilter, { name: 'All Files', extensions: ['*'] }],
   });
 
@@ -795,6 +823,7 @@ ipcMain.handle('dialog:save-file', async (_event, defaultFilename, content, opti
   /* Atomic write — same code path as fs:write-file (fs_core.atomicWriteFile) */
   const safe = validatePath(result.filePath);
   atomicWriteFile(safe, content);
+  rememberSaveDir(safe);
 
   // Mirror what openFolderDialog does: grant this directory as a trusted root
   // so subsequent auto-saves via writeFile (which enforces validatePathInside)
@@ -843,7 +872,7 @@ ipcMain.handle('project:export-zip', async () => {
                 `_${p(d.getHours())}_${p(d.getMinutes())}_${p(d.getSeconds())}`;
 
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `${folderName}_${stamp}.zip`,
+    defaultPath: saveDialogDefault(`${folderName}_${stamp}.zip`),
     filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
@@ -851,6 +880,7 @@ ipcMain.handle('project:export-zip', async () => {
   const dest = validatePath(result.filePath);
   const { buffer, entries, bytes } = buildZip(root, { excludePath: dest });
   atomicWriteFile(dest, buffer);
+  rememberSaveDir(dest);
   return { ok: true, path: dest, entries, bytes };
 });
 
@@ -872,11 +902,12 @@ ipcMain.handle('export:pdf', async (_event, html, opts) => {
   const base = (typeof opts.baseName === 'string' && opts.baseName.trim())
     ? opts.baseName.trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '') : 'document';
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `${base}_${stamp}.pdf`,
+    defaultPath: saveDialogDefault(`${base}_${stamp}.pdf`),
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   const dest = validatePath(result.filePath);
+  rememberSaveDir(dest);
 
   const tmpHtml = path.join(
     app.getPath('userData'),
@@ -970,7 +1001,7 @@ ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName, bundleF
   const base = (typeof baseName === 'string' && baseName.trim())
     ? baseName.trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '') : 'latex-project';
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `${base}_${stamp}.zip`,
+    defaultPath: saveDialogDefault(`${base}_${stamp}.zip`),
     filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
@@ -978,6 +1009,7 @@ ipcMain.handle('export:latex-zip', async (_event, tex, images, baseName, bundleF
 
   const { buffer, entries: count, bytes } = buildZipFromEntries(entries);
   atomicWriteFile(dest, buffer);
+  rememberSaveDir(dest);
   return { ok: true, path: dest, entries: count, bytes };
 });
 

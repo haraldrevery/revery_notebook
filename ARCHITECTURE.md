@@ -675,7 +675,7 @@ Redo are CodeMirror's own history commands, text only.
 | FS | `fs:read-directory`, `fs:read-file` (20 MB cap), `fs:write-file` (atomic via `fs_core.atomicWriteFile`), `fs:create-file`, `fs:create-directory` (name rule), `fs:rename-node` (`fs_core.renameEntry`), `fs:delete-node` (→ trash, the entry itself), `fs:canonical-entry`, `fs:copy-into-folder`, `fs:set-root-path` (trustedRoots-verified on the real folder; returns the canonical root) |
 | Crash backup | `fs:set/get/delete-volatile-content`, `fs:get-volatile-status`, `fs:list-volatile-backups` |
 | Watch | `fs:watch-file`, `fs:unwatch-file` |
-| Dialogs | `dialog:open-folder`, `dialog:save-file`, `dialog:show-message-box` |
+| Dialogs | `dialog:open-folder`, `dialog:save-file`, `dialog:show-message-box` — file dialogs open where the user last was this session (since Electron 43 one without a folder opens in Downloads, and the OS no longer remembers the last folder) |
 | Export | `project:export-zip` (no renderer args), `export:pdf` (temp file → hidden sandboxed window → `printToPDF` → atomic write), `export:latex-zip` (image paths root-validated; `bundleFonts` allowlisted) |
 | Window | `window:confirm-close`, `window:close`, `window:minimize`, `window:toggle-maximize`, `window:set-fullscreen`; renderer → main (fire-and-forget): `window:close-ack`, `window:close-failed` |
 | Settings | `settings:get/set-last-opened-file`, `settings:get/set-last-root-path`, `settings:get/set-pending-rename`, `settings:get/set-project-history`, `settings:clear-all` |
@@ -1009,6 +1009,7 @@ pins both directions.
 | Oversized payloads | Files > 20 MB are rejected at the IPC handler level |
 | Dialog spoofing | Only `dialog.*` APIs in main process; renderer cannot fake them |
 | Acting as a browser | `will-navigate` cancels everything except same-URL reloads (the target comes from `details.url`, the page's own URL from the webContents — `event.sender` no longer exists on Electron's details object, and reading it threw an uncaught exception on every reload, e.g. Total Reset); `setWindowOpenHandler` denies all; links are never forwarded to the OS browser (policy: the app never opens links) |
+| Unsupported Electron | Electron 44 (supported: the three latest majors). Electron 41 had been without security fixes since 25 Aug 2026 |
 
 ### Tauri
 
@@ -1327,7 +1328,8 @@ after touching anything in `electron/fs_core.js`, the IPC handlers in
 
 ```bash
 # JS side — no dependencies beyond Node itself (node:test)
-npm test
+npm test                 # `pretest` first installs the Electron binary: since
+                         # Electron 42, `npm install` no longer downloads it
 
 # Rust side
 npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
