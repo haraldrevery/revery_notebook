@@ -94,7 +94,75 @@
   const syncReplacesNote = () => external({ op: 'write', rel: 'note.md', text: TEXT.V2, mtimeAgoMs: HOUR });
   const held = () => until(() => statusText().includes('Auto-save is paused'), 8000);
 
+  /* Typed a moment ago — autosave (1.5 s after the last keystroke) has not
+     run — then `trigger`: how long until the text is on disk? */
+  const TYPED = 'typed just before the computer went down\n';
+  const flushedWithin = async (trigger) => {
+    out.booted = await bootedOnNote();
+    await sleep(500);
+    typeAtEnd(TYPED);
+    await sleep(150);
+    out.diskBefore = await disk('note.md');
+    const t0 = Date.now();
+    trigger();
+    out.onDiskAfterMs = await until(async () => (await disk('note.md')) === TEXT.V1 + TYPED && Date.now() - t0 + 1, 1300);
+    out.dirtyAfter = window.sidebarIsDirty();
+  };
+
   const steps = {
+    /* The window loses focus (the Start menu, another app, the logout
+       dialog): the pending autosave runs at once. */
+    'flush-blur': [async () => flushedWithin(() => window.dispatchEvent(new Event('blur')))],
+
+    /* Windows ends the session (shutdown, restart, log off). */
+    'flush-session-end': [async () => flushedWithin(() => external({ op: 'session-end' }))],
+
+    /* "Keep my version", then typing, then the window loses focus: the
+       held file is NOT written (a flush only runs what was already due),
+       but the crash backup of the typing is. */
+    'flush-hold': [async () => {
+      out.booted = await bootedOnNote();
+      await sleep(800);
+      syncReplacesNote();
+      out.held = !!(await held());
+      await sleep(800);
+      typeAtEnd(TYPED);
+      await sleep(150);
+      window.dispatchEvent(new Event('blur'));
+      out.backupAfterBlur = await until(async () => {
+        const b = await backupOf('note.md');
+        return b && b.content === TEXT.V1 + TYPED && b.content;
+      }, 1000);
+      await sleep(1000);
+      out.diskAfterBlur = await disk('note.md');
+    }],
+
+    /* Typing, a sync tool changes the file, the app is closed at once (as
+       when logging out): the close cannot save, a question opens that
+       nobody answers, then the app is gone. The typing must survive —
+       as a copy beside the newer file, never over it. */
+    'close-external-change': [
+      async () => {
+        out.booted = await bootedOnNote();
+        await sleep(500);
+        typeAtEnd(TYPED);
+        await sleep(100);
+        syncReplacesNote();
+        out.closing = true;
+        closeApp(); // never answered: no await
+        out.backupBeforeCrash = await until(async () => {
+          const b = await backupOf('note.md');
+          return b && b.content === TEXT.V1 + TYPED && b.content;
+        }, 1500);
+        out.diskBeforeCrash = await disk('note.md');
+      },
+      async () => {
+        out.booted = !!(await until(() => active() === 'note.md', 10000));
+        out.copied = !!(await until(async () => (await disk('note_recovered.md')) !== null, 8000));
+        await sleep(800);
+      },
+    ],
+
     /* "Keep my version" with NO unsaved edits, then the app is closed.
        The next start must not overwrite the newer file by default. */
     'keep-clean-close': [

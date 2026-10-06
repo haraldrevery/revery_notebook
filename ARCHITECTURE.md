@@ -834,6 +834,34 @@ on_window_event: CloseRequested fires
                                window.close() in Rust
 ```
 
+### Shutdown, log out, focus loss (both wrappers)
+
+Autosave runs 1.5 s after the last keystroke, the crash backup 2 s after
+it. An operating system that ends the app in between — shutting down,
+restarting, logging out — used to lose the text typed in those moments.
+
+- **Focus loss** (`save.js` FLUSH, `flushPendingWork`): when the window
+  loses focus or is hidden, the autosave that is already scheduled runs at
+  once and the crash backup waiting in its debounce is written
+  (`NativeAPI.flushVolatileBackup`). Opening the Start menu, the logout
+  dialog or another app does that before the OS acts. Nothing beyond what
+  was already due: a held file (`Keep my version`, deleted or unreadable
+  file) is never written by it, a save-failure cooldown has no timer to
+  run, and no question is asked.
+- **Windows ending the session** (Electron): `main.js` hands
+  `query-session-end` / `session-end` to the page (`app:flush-now`) — the
+  same flush. Best effort; the shutdown is never blocked.
+- **SIGTERM / SIGHUP / SIGINT** (Linux, macOS — logging out, shutting
+  down, `kill`, Ctrl+C): Electron turns them into the normal close flow on
+  its own. Tauri used to end at once; `close_on_quit_signals` (`main.rs`)
+  now closes the window exactly like the close button, so the page saves
+  first. Signals during that close are ignored; the session manager's
+  SIGKILL after its timeout stays the last resort.
+- **The close flow** (`lifecycle.js`): when it cannot save (the file
+  changed on disk, the disk refused), it writes the crash backup BEFORE
+  asking anything — at logout nobody answers, the app is ended while the
+  question waits, and the backup is then what the next start offers.
+
 ### Tauri Scopes & Capabilities (actual model)
 
 There is NO fs-plugin scope — all filesystem access goes through the custom
@@ -1368,6 +1396,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/file_ops_e2e.test.js` | Boots the REAL Electron app twice on a temp project (a recorder replaces the system trash): card-view path bar and its root-segment drop, the narrow-panel "← Back" drop target, nothing above the root; "Move to…" (picker rules, the link update still runs) and "Move up one level"; Ctrl+Z in the title never undoes a file move, after working in the panel it does (with a status message); links moved as links, a relative link not moved away, deleting a link trashes the link; rename rules and refusals; the open note's folder moved while a save is queued (save lands first, later typing saved at the new place, old folder never recreated); the open note deleted with a save in flight (the save lands first, never resurrected); multi-delete wording. Second run with the project opened through a symlink: canonical root and note, no name_2 on a drop into the own folder, no escape above the root |
 | `test/spellcheck.test.js` | `electron/spellcheck.js`: the bundled dictionaries and licence texts are there; the system's preferred languages map onto the bundled ones (any English → en-US, Swedish → sv-SE, order kept, none → spell check off); the install copies them, leaves an identical copy alone, replaces a damaged one, never throws |
 | `test/spellcheck_offline_e2e.test.js` | Boots the REAL app while the OS reports a language (Linux): English or Swedish → Chromium loads the BUNDLED dictionary and flags a misspelled word typed into the editor; another language → spell check off; and in every run Chromium's own network log holds not one http(s) request (it used to download dictionaries from Google). Fails after an Electron upgrade if the bundled dictionaries are not the version Chromium expects |
+| `test/shutdown_flush_e2e.test.js` | Same multi-session harness: typing reaches the disk at once when the window loses focus or Windows ends the session (it used to wait for the 1.5 s autosave); a held file is still never written by it, only its crash backup; closing (as at logout) right after another program changed the file — the close cannot save, nobody answers its question, the app is gone — the typing was backed up before the question and comes back as a copy beside the newer file |
 | `test/eol.test.js` | Line-ending rules: which files keep CRLF, normalisation, byte-exact round-trip |
 | `test/unique_name.test.js` | New/renamed/imported/moved names: case-insensitive collisions, trailing `_2024` kept, the renamed file does not block its own spelling |
 | `test/data_safety_e2e.test.js` | Boots the REAL desktop app on a temp project: Replace after edits / file switch / regex context; scratchpad race (the switch waits for the note); sidebar Ctrl+Z; rename during a "Keep my version" hold; open-note links follow a rename; CRLF kept; external write right after an autosave detected; a note moved away by another program not recreated |

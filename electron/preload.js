@@ -81,6 +81,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /* ── Window lifecycle ───────────────────────────────────────────── */
   /**
+   * Windows is ending the session (shutdown, restart, log off): the page
+   * gets its typing onto disk at once (main.js 'session-end'). Replaces a
+   * previous listener, like onWindowClose.
+   */
+  onFlushRequest: (callback) => {
+    ipcRenderer.removeAllListeners('app:flush-now');
+    ipcRenderer.on('app:flush-now', () => callback());
+  },
+
+  /**
    * Registers a one-time callback that fires when the OS window-close
    * button is clicked. The callback should show the quit-confirmation UI
    * and eventually call confirmClose() if the user agrees.

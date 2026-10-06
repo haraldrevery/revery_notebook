@@ -109,15 +109,17 @@
   function volatileDebounceMs() { return window.slowHardwareMode ? 5000  : 2000; }
   function volatileMaxWaitMs()  { return window.slowHardwareMode ? 30000 : 15000; } // force backup during continuous typing
 
+/* Write the pending (debounced) backup now. → resolves once it is on disk
+   or has failed (reported); at once when nothing was pending. */
 function flushVolatile() {
     clearTimeout(_volatileTimer);        _volatileTimer = null;
     clearTimeout(_volatileMaxWaitTimer); _volatileMaxWaitTimer = null;
 
-    if (!_volatilePending) return;
+    if (!_volatilePending) return Promise.resolve();
     const { path, content, base } = _volatilePending;
     _volatilePending = null;
 
-    _enqueueVolatileOp(() => window.NativeAPI._writeVolatileNow(path, content, base)).then(
+    return _enqueueVolatileOp(() => window.NativeAPI._writeVolatileNow(path, content, base)).then(
       ()  => { reportVolatileOutcome(true,  null); },
       err => {
         console.warn('[NativeAPI] Volatile backup failed:', err);
@@ -390,6 +392,20 @@ setDurableBackup(path, content, base) {
       return _enqueueVolatileOp(() => window.electronAPI.deleteVolatileContent(path));
     },
 
+    /* The window lost focus or the OS session ends: write the backup that
+       is waiting in its debounce now (sidebar save.js flushPendingWork). */
+    flushVolatileBackup() {
+      return flushVolatile();
+    },
+
+    /* Windows is ending the session (shutdown, restart, log off): main.js
+       asks the page to get its typing onto disk at once. */
+    onFlushRequest(callback) {
+      if (typeof window.electronAPI.onFlushRequest === 'function') {
+        window.electronAPI.onFlushRequest(() => callback());
+      }
+    },
+
     getVolatileStatus() {
       return window.electronAPI.getVolatileStatus();
     },
@@ -653,6 +669,15 @@ getVolatileContent(path) {
       cancelVolatileFor(path);
       return _enqueueVolatileOp(() => this._invoke('delete_volatile_content', { path }));
     },
+
+    /* See electronImpl. */
+    flushVolatileBackup() {
+      return flushVolatile();
+    },
+
+    /* The Rust side closes the window on SIGTERM/SIGHUP/SIGINT (main.rs
+       close_on_quit_signals) — the full close flow, no separate flush. */
+    onFlushRequest(_callback) {},
 
     getVolatileStatus() {
       return this._invoke('get_volatile_status');
@@ -1072,6 +1097,10 @@ getVolatileContent(path) {
       try { localStorage.removeItem('revery_volatile_backup'); } catch { /* ignore */ }
       return Promise.resolve();
     },
+
+    /* No debounced crash backup in the web version: nothing to flush. */
+    flushVolatileBackup() { return Promise.resolve(); },
+    onFlushRequest(_callback) {},
 
     getVolatileStatus() {
       return Promise.resolve({ ready: false, error: 'Browser environment — no crash backup' });

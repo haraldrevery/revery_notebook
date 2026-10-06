@@ -27,7 +27,7 @@ const AUTOSAVE_FAILURE_COOLDOWN_MS   = 30000; // After a save failure, suppress
                                               // automatic retries for 30 s.
 
 /** Cancel any pending debounced auto-save (watcher + close flow use this). */
-export function cancelPendingAutoSave() { clearTimeout(_autoSaveTimer); }
+export function cancelPendingAutoSave() { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
 
 let _diskOpsChain = Promise.resolve();
 
@@ -673,6 +673,7 @@ async function saveActiveFile(opts) {
   const report = (opts && typeof opts.onOutcome === 'function') ? opts.onOutcome : () => {};
   if (!S.activeFilePath) { report('no-file'); return false; }
   clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = null;
 
   const contentToSave = editor.value;
 
@@ -1054,6 +1055,7 @@ export async function retargetActiveFile(oldPath, newPath) {
   function scheduleAutoSave() {
     if (!S.activeFilePath) return;
     clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = null;
 
     // Conflict hold ("Keep my version"): the user chose to keep the disk
     // file as the external program left it. Background autosave stays off
@@ -1083,8 +1085,35 @@ export async function retargetActiveFile(oldPath, newPath) {
       return;
     }
 
-    _autoSaveTimer = setTimeout(() => saveActiveFile({ auto: true }), autosaveDelayMs());
+    _autoSaveTimer = setTimeout(() => { _autoSaveTimer = null; saveActiveFile({ auto: true }); }, autosaveDelayMs());
   }
+
+/* ══════════════════════════════════════════════════════════════════
+     FLUSH — get the typing onto disk NOW
+   When the window loses focus, is hidden, or the OS session ends
+   (Windows shutdown/log off: main.js asks). Shutting the computer down
+   right after typing used to lose the last moments: autosave waits
+   1.5 s after the last keystroke, the crash backup 2 s. Only what was
+   already due runs early — the autosave that is scheduled (the timer
+   exists only when scheduleAutoSave let it: not for a held file, not
+   during a failure cooldown; saveActiveFile checks the hold again) and
+   the crash backup waiting in its debounce. Nothing else is saved, no
+   question is asked.
+  ══════════════════════════════════════════════════════════════════ */
+function flushPendingAutoSave() {
+  if (!_autoSaveTimer) return Promise.resolve(false);
+  clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = null;
+  return saveActiveFile({ auto: true });
+}
+
+export function flushPendingWork() {
+  const api = window.NativeAPI;
+  const backup = (api && typeof api.flushVolatileBackup === 'function')
+    ? api.flushVolatileBackup() : Promise.resolve();
+  return Promise.all([backup, flushPendingAutoSave()]).catch((e) =>
+    console.warn('[Sidebar] flush failed:', e));
+}
 
 export { markDirty, markClean, saveActiveFile, scheduleAutoSave };
 
@@ -1100,6 +1129,16 @@ export function initSaveEngine() {
         editor.focus();
       }
     });
+  }
+
+  /* Get the typing onto disk as soon as the window loses focus or is
+     hidden, and when Windows ends the session (see FLUSH above). */
+  window.addEventListener('blur', () => { flushPendingWork(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPendingWork();
+  });
+  if (window.NativeAPI && typeof window.NativeAPI.onFlushRequest === 'function') {
+    window.NativeAPI.onFlushRequest(() => { flushPendingWork(); });
   }
 
 /* Expose save for actions.js and other modules */

@@ -83,6 +83,14 @@ async function handleCloseRequest(whileSaving) {
       }
 
       if (!saved) {
+        /* The text is not on disk and a question is coming. Keep a crash
+           backup of it FIRST: when the OS is logging out or shutting down
+           (SIGTERM starts this close), nobody answers, and the app is
+           ended while the question waits — the backup is then all there
+           is, offered at the next start. */
+        if (S.isDirty && typeof window.NativeAPI.writeVolatileNow === 'function') {
+          try { await whileSaving(() => window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value, noteBackupBase())); } catch (_) {}
+        }
         /* The save stopped because the file on disk is no longer what we
            last read or wrote (another program changed it): the "File
            Changed Externally" question is on its way and is the user's

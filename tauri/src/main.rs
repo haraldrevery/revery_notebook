@@ -2894,6 +2894,60 @@ fn set_project_history(
     }
 }
 
+/* ── The OS asks the app to quit (Linux, macOS) ─────────────────────────
+   SIGTERM (logging out, shutting down, `kill`), SIGHUP (the terminal that
+   started the app closed) and SIGINT (Ctrl+C) used to end the process at
+   once: typing from the last moments (autosave runs 1.5 s after the last
+   keystroke) was lost, without a crash backup. They now start the normal
+   close, exactly like the window's close button: the page saves, keeps a
+   crash backup of anything it could not save, then confirms
+   (confirm_close). The close watchdog covers a page that does not answer.
+   Electron behaves the same way on its own. Signals arriving while that
+   close runs are ignored — the session manager's SIGKILL after its
+   timeout stays the last resort, so nothing is cut short mid-save. No
+   window (yet, or any more): nothing can be unsaved — exit at once. */
+#[cfg(unix)]
+fn close_on_quit_signals(app: AppHandle) {
+    use tokio::signal::unix::{signal, SignalKind};
+    tauri::async_runtime::spawn(async move {
+        let (mut term, mut hup, mut int) = match (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::hangup()),
+            signal(SignalKind::interrupt()),
+        ) {
+            (Ok(t), Ok(h), Ok(i)) => (t, h, i),
+            _ => {
+                // Handlers not installed: the signals keep their default
+                // action (the OS ends the app as before).
+                eprintln!("[revery] could not watch quit signals");
+                return;
+            }
+        };
+        let mut closing = false;
+        loop {
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = hup.recv() => {}
+                _ = int.recv() => {}
+            }
+            if closing {
+                eprintln!("[revery] quit signal ignored: the close is already running");
+                continue;
+            }
+            closing = true;
+            match app.get_webview_window("main") {
+                Some(w) => {
+                    if let Err(e) = w.close() {
+                        eprintln!("[revery] close on quit signal failed ({e}); exiting");
+                        app.exit(0);
+                    }
+                }
+                None => app.exit(0),
+            }
+        }
+    });
+}
+
 /// Request a window close.  Because CloseAllowed is still false this re-enters
 /// on_window_event → CloseRequested → emits 'window-close-request' to the
 /// frontend, which shows the quit-confirmation modal just like the OS button.
@@ -3435,6 +3489,10 @@ tauri::Builder::default()
             {
                 let _ = window.set_decorations(false);
             }
+
+            // Logging out / shutting down closes like the close button.
+            #[cfg(unix)]
+            close_on_quit_signals(app.handle().clone());
 
             // Purge crash-backups (volatile AND durable) older than 7 days.
             let purge_handle = app.handle().clone();

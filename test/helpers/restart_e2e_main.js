@@ -23,7 +23,7 @@ if (!process.versions.electron) {
   process.exit(0);
 }
 
-const { app, dialog } = require('electron');
+const { app, dialog, BrowserWindow } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
@@ -86,6 +86,18 @@ const SCENARIOS = {
     { answers: ENTER_ON_RECOVERY, end: 'finish' }] },
   'slow-save-crash':   { files: BACKUP_FILES, last: 'note.md', sessions: [
     { answers: {}, end: 'crash' }, { answers: ENTER_ON_RECOVERY, end: 'finish' }] },
+  /* Typing reaches the disk before the computer goes down (save.js FLUSH). */
+  'flush-blur':        { files: BACKUP_FILES, last: 'note.md', sessions: [{ answers: {}, end: 'finish' }] },
+  'flush-session-end': { files: BACKUP_FILES, last: 'note.md', sessions: [{ answers: {}, end: 'finish' }] },
+  'flush-hold':        { files: BACKUP_FILES, last: 'note.md', sessions: [{ answers: KEEP, end: 'finish' }] },
+  /* Close (as at logout) while the file was just changed by another
+     program: nobody answers the questions, then the app is gone. */
+  'close-external-change': { files: BACKUP_FILES, last: 'note.md', sessions: [
+    { answers: {
+      'File Changed Externally': { answer: 'Keep my version', delayMs: 20000 },
+      'Unsaved Changes': { answer: 'Cancel', delayMs: 20000 },
+    }, end: 'crash' },
+    { answers: ENTER_ON_RECOVERY, end: 'finish' }] },
   'card-restore': { files: CARD_FILES, last: 'a/n.md', sessions: [
     { answers: {}, end: 'reload' }, { answers: {}, end: 'finish' }] },
   'card-gone':    { files: CARD_FILES, last: 'a/n.md', sessions: [
@@ -172,6 +184,9 @@ function fsAction(req) {
     }
   } else if (req.op === 'rmdir') {
     fs.rmSync(p, { recursive: true, force: true });
+  } else if (req.op === 'session-end') {
+    /* What Windows sends when it shuts down, restarts or logs off. */
+    for (const w of BrowserWindow.getAllWindows()) w.emit('query-session-end', { preventDefault() {} });
   } else {
     problems.push('unknown E2E-FS op ' + JSON.stringify(req));
   }

@@ -325,6 +325,21 @@ mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     }
   });
 
+  /* ── Windows ends the session (shutdown, restart, log off) ─────────────
+     Windows ends the app without the normal close: neither 'before-quit'
+     nor the close flow runs, and what was typed in the last moments
+     (autosave runs 1.5 s after the last keystroke) was lost. Ask the page
+     to get it onto disk NOW: the pending autosave and the crash backup —
+     the same flush as when the window loses focus, which has usually run
+     already (the Start menu took the focus). Best effort; the shutdown is
+     never blocked. Linux and macOS ask with SIGTERM instead, which
+     Electron turns into the normal close flow. */
+  const flushNow = () => {
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('app:flush-now');
+  };
+  win.on('query-session-end', flushNow);
+  win.on('session-end', flushNow);
+
   /* The page's process died (crash, out of memory, GPU failure): what is on
      screen is dead and cannot save or close. Offer a reload — the boot
      recovery then offers the crash backup — or closing. */

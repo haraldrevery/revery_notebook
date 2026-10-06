@@ -1665,6 +1665,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   var AUTOSAVE_FAILURE_COOLDOWN_MS = 3e4;
   function cancelPendingAutoSave() {
     clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = null;
   }
   var _diskOpsChain = Promise.resolve();
   function _enqueueDiskOp(op) {
@@ -2056,6 +2057,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       return false;
     }
     clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = null;
     const contentToSave = editor.value;
     const enqueueGen = S._replaceGeneration;
     const docGen = currentDocGeneration();
@@ -2291,6 +2293,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   function scheduleAutoSave() {
     if (!S.activeFilePath) return;
     clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = null;
     if (S._conflictHoldPath && S._conflictHoldPath === S.activeFilePath) {
       return;
     }
@@ -2303,7 +2306,21 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       saveActiveFile({ auto: true });
       return;
     }
-    _autoSaveTimer = setTimeout(() => saveActiveFile({ auto: true }), autosaveDelayMs());
+    _autoSaveTimer = setTimeout(() => {
+      _autoSaveTimer = null;
+      saveActiveFile({ auto: true });
+    }, autosaveDelayMs());
+  }
+  function flushPendingAutoSave() {
+    if (!_autoSaveTimer) return Promise.resolve(false);
+    clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = null;
+    return saveActiveFile({ auto: true });
+  }
+  function flushPendingWork() {
+    const api = window.NativeAPI;
+    const backup = api && typeof api.flushVolatileBackup === "function" ? api.flushVolatileBackup() : Promise.resolve();
+    return Promise.all([backup, flushPendingAutoSave()]).catch((e) => console.warn("[Sidebar] flush failed:", e));
   }
   function initSaveEngine() {
     if (docTitleEl) {
@@ -2314,6 +2331,17 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           docTitleEl.blur();
           editor.focus();
         }
+      });
+    }
+    window.addEventListener("blur", () => {
+      flushPendingWork();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flushPendingWork();
+    });
+    if (window.NativeAPI && typeof window.NativeAPI.onFlushRequest === "function") {
+      window.NativeAPI.onFlushRequest(() => {
+        flushPendingWork();
       });
     }
     window.sidebarSaveActiveFile = saveActiveFile;
@@ -5105,6 +5133,12 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
           if (!saved) break;
         }
         if (!saved) {
+          if (S.isDirty && typeof window.NativeAPI.writeVolatileNow === "function") {
+            try {
+              await whileSaving(() => window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value, noteBackupBase()));
+            } catch (_) {
+            }
+          }
           if (outcome === "deferred-verify") return;
           const baseName = baseNameOf(S.activeFilePath || "") || "this note";
           let proceedWithClose = false;
