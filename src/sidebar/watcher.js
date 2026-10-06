@@ -2,8 +2,8 @@
 import { S } from './state.js';
 import { _enqueueDiskOp, cancelPendingAutoSave, markClean, writeDurableSnapshot,
          rememberDiskContent, setAutosaveHold, clearAutosaveHold,
-         scheduleAutoSave, compareDiskWithBaseline } from './save.js';
-import { uniquePath } from './helpers.js';
+         scheduleAutoSave, compareDiskWithBaseline, noteBackupBase } from './save.js';
+import { saveTextBesideNote } from './helpers.js';
 import { renderTree } from './tree.js';
 
   let _watchedPath = null;
@@ -117,7 +117,9 @@ async function checkActiveFileOnDisk(filePath) {
        by the next event. */
     cancelPendingAutoSave();
     setAutosaveHold(filePath, verdict.kind);
-    writeDurableSnapshot(filePath, editor.value);
+    /* Based on the version we last read or wrote (S._diskBaseline): the
+       start-up recovery sees that the file is no longer that version. */
+    writeDurableSnapshot(filePath, editor.value, noteBackupBase());
     return verdict.kind;
   }
 
@@ -174,6 +176,13 @@ async function checkActiveFileOnDisk(filePath) {
           S._replaceGeneration++;
           markClean();
           rememberDiskContent(fresh);
+          /* The user discarded the version that was on screen ("Reload from
+             disk discards them"). Its crash backup — and a backup write of it
+             still waiting in the debounce — must go too: left behind, it was
+             offered again at the next start as "unsaved changes", and its
+             Restore wrote the discarded text over the file. Synchronous with
+             the swap: no keystroke for the reloaded text can land between. */
+          window.NativeAPI.deleteVolatileContent(filePath).catch(() => {});
         });
         resolved = true;
       } catch (err) {
@@ -186,34 +195,24 @@ async function checkActiveFileOnDisk(filePath) {
       // cannot alter what we promise to preserve.
       const copyContent = editor.value;
 
-      const baseName = filePath.replace(/\\/g, '/').split('/').pop();
-      const lastDot  = baseName.lastIndexOf('.');
-      const stem     = lastDot > 0 ? baseName.substring(0, lastDot) : baseName;
-      const ext      = lastDot > 0 ? baseName.substring(lastDot + 1) : 'md';
-      const dir      = filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-
       /* Copy + reload inside ONE lock acquisition so no save can
          interleave between writing the copy and swapping the editor.
-         The two-phase failure tracking (createdOk/copyOk) survives
-         the lock op via closure and lets the catch below decide
-         which error message to show. */
+         The failure tracking survives the lock op via closure and lets
+         the catch below decide which error message to show. The copy is
+         "<name>_local" beside the note (helpers.saveTextBesideNote — the
+         same writer as a recovered crash backup: never overwrites, and
+         removes its empty file again when the write fails). */
       let copyPath  = null;
-      let createdOk = false;
-      let copyOk    = false;
       let reloadErr = null;
       let copyErr   = null;
 
       try {
         await _enqueueDiskOp(async () => {
           try {
-            copyPath  = await uniquePath(dir, stem + '_local', ext);
-            await window.NativeAPI.createFile(copyPath);
-            createdOk = true;
-            await window.NativeAPI.writeFile(copyPath, copyContent);
-            copyOk    = true;
+            copyPath = await saveTextBesideNote(filePath, copyContent, '_local');
           } catch (err) {
             copyErr = err;
-            throw err; // exit the lock op; outer catch handles cleanup
+            throw err; // exit the lock op; outer catch reports it
           }
 
           // Copy succeeded. Now read+swap the original.
@@ -238,11 +237,6 @@ async function checkActiveFileOnDisk(filePath) {
         // The lock op threw — copyErr OR reloadErr is set above.
         if (copyErr) {
           console.error('[Sidebar] save-as-copy failed:', copyErr);
-          // Empty placeholder cleanup if createFile succeeded but
-          // writeFile failed.
-          if (createdOk && !copyOk && copyPath) {
-            window.NativeAPI.deleteNode(copyPath).catch(() => {});
-          }
           window.NativeAPI.showMessageBox({
             type: 'error',
             title: 'Could Not Save Copy',
@@ -293,10 +287,15 @@ async function checkActiveFileOnDisk(filePath) {
        this file, ALSO when the buffer had no unsaved edits (typing
        afterwards used to overwrite the external version unasked), and
        snapshot the buffer (the only copy of the user's version) to the
-       durable, reboot-safe slot. An explicit save lifts the hold. */
+       durable, reboot-safe slot. An explicit save lifts the hold.
+       The snapshot names the version it was based on — the one we last
+       read or wrote, NOT what the other program left — so the start-up
+       recovery never offers "Restore" over the newer file by default
+       (lifecycle.js), and leaving the note without saving keeps the
+       user's version as a copy (save.js keptVersionOnScreen). */
     if (!resolved && S.activeFilePath === filePath) {
       setAutosaveHold(filePath, 'conflict');
-      writeDurableSnapshot(filePath, editor.value);
+      writeDurableSnapshot(filePath, editor.value, noteBackupBase());
     }
   }
   return 'changed';

@@ -83,11 +83,18 @@
   }
 
   /* ── Volatile content: crash-safe temp backup ────────────────────────
-     setVolatileContent(path, content) persists the editor state to a
-     temp/backup location in case of crash. … */
+     setVolatileContent(path, content, base) persists the editor state to a
+     temp/backup location in case of crash. … `base` (optional) is the
+     fingerprint of the disk version the text was edited from (sidebar
+     save.js noteBackupBase): start-up recovery compares it with the file
+     to tell "my unsaved edits" from "the file changed since". It is stored
+     with the backup and taken together with the text, never at write time. */
+  function backupBase(base) {
+    return (typeof base === 'string' && base.length > 0 && base.length <= 200) ? base : null;
+  }
   let _volatileTimer        = null;
   let _volatileMaxWaitTimer = null;
-  let _volatilePending      = null;   // {path, content} – always the LATEST args
+  let _volatilePending      = null;   // {path, content, base} – always the LATEST args
   let _volatileChain = Promise.resolve();
   function _enqueueVolatileOp(op) {
     const run = _volatileChain.then(op, op);
@@ -107,10 +114,10 @@ function flushVolatile() {
     clearTimeout(_volatileMaxWaitTimer); _volatileMaxWaitTimer = null;
 
     if (!_volatilePending) return;
-    const { path, content } = _volatilePending;
+    const { path, content, base } = _volatilePending;
     _volatilePending = null;
 
-    _enqueueVolatileOp(() => window.NativeAPI._writeVolatileNow(path, content)).then(
+    _enqueueVolatileOp(() => window.NativeAPI._writeVolatileNow(path, content, base)).then(
       ()  => { reportVolatileOutcome(true,  null); },
       err => {
         console.warn('[NativeAPI] Volatile backup failed:', err);
@@ -195,8 +202,8 @@ function flushVolatile() {
     if (_volatilePending && _volatilePending.path === path) cancelVolatile();
   }
 
-function debounceVolatile(path, content) {
-    _volatilePending = { path, content };
+function debounceVolatile(path, content, base) {
+    _volatilePending = { path, content, base: backupBase(base) };
 
     clearTimeout(_volatileTimer);
     _volatileTimer = setTimeout(flushVolatile, volatileDebounceMs());
@@ -351,23 +358,27 @@ function debounceVolatile(path, content) {
     },
 
     /* Debounced — called on every editor keystroke */
-    setVolatileContent(path, content) {
-      debounceVolatile(path, content);
+    setVolatileContent(path, content, base) {
+      debounceVolatile(path, content, base);
     },
 
 /* Internal: the actual write, called after debounce */
-_writeVolatileNow(path, content) {
-  return window.electronAPI.setVolatileContent(path, toWellFormedText(content));
+_writeVolatileNow(path, content, base) {
+  return window.electronAPI.setVolatileContent(path, toWellFormedText(content), backupBase(base));
 },
-/* Immediate volatile write (bypass debounce, but NOT the ordering chain) */
-writeVolatileNow(path, content) {
-  return _enqueueVolatileOp(() => window.electronAPI.setVolatileContent(path, toWellFormedText(content)));
+/* Immediate volatile write (bypass debounce, but NOT the ordering chain).
+   Callers pass the CURRENT text for `path`, so a debounced write of the
+   same path still waiting (the same or older text, maybe an older base) is
+   superseded: flushed afterwards, it put the older base back. */
+writeVolatileNow(path, content, base) {
+  cancelVolatileFor(path);
+  return _enqueueVolatileOp(() => window.electronAPI.setVolatileContent(path, toWellFormedText(content), backupBase(base)));
 },
 /* Durable (reboot-safe) snapshot under userData — written by the save
    engine only for the autosave-suspended states. Recovery reads it
    through the same getVolatileContent (backend merges locations). */
-setDurableBackup(path, content) {
-  return _enqueueVolatileOp(() => window.electronAPI.setDurableBackup(path, toWellFormedText(content)));
+setDurableBackup(path, content, base) {
+  return _enqueueVolatileOp(() => window.electronAPI.setDurableBackup(path, toWellFormedText(content), backupBase(base)));
 },
 
     getVolatileContent(path) {
@@ -614,22 +625,24 @@ const tauriImpl = {
       un.push(await T.event.listen('tauri://drag-leave', (e) => dispatch({ type: 'leave', ...e.payload })));
       return () => un.forEach((f) => { try { f(); } catch (_) {} });
     },
-    setVolatileContent(path, content) {
-      debounceVolatile(path, content);
+    setVolatileContent(path, content, base) {
+      debounceVolatile(path, content, base);
     },
 
-_writeVolatileNow(path, content) {
-  return this._invoke('set_volatile_content', { path, content: toWellFormedText(content) });
+_writeVolatileNow(path, content, base) {
+  return this._invoke('set_volatile_content', { path, content: toWellFormedText(content), base: backupBase(base) });
 },
-/* Immediate volatile write (bypass debounce, but NOT the ordering chain) */
-writeVolatileNow(path, content) {
-  return _enqueueVolatileOp(() => this._invoke('set_volatile_content', { path, content: toWellFormedText(content) }));
+/* Immediate volatile write (bypass debounce, but NOT the ordering chain).
+   Supersedes a debounced write of the same path — see electronImpl. */
+writeVolatileNow(path, content, base) {
+  cancelVolatileFor(path);
+  return _enqueueVolatileOp(() => this._invoke('set_volatile_content', { path, content: toWellFormedText(content), base: backupBase(base) }));
 },
 /* Durable (reboot-safe) snapshot under the app data dir — written by the
    save engine only for the autosave-suspended states. Recovery reads it
    through the same getVolatileContent (backend merges locations). */
-setDurableBackup(path, content) {
-  return _enqueueVolatileOp(() => this._invoke('set_durable_backup', { path, content: toWellFormedText(content) }));
+setDurableBackup(path, content, base) {
+  return _enqueueVolatileOp(() => this._invoke('set_durable_backup', { path, content: toWellFormedText(content), base: backupBase(base) }));
 },
 
 getVolatileContent(path) {
@@ -1034,9 +1047,9 @@ getVolatileContent(path) {
 
     _writeVolatileNow() { return Promise.resolve(); },
     /* Immediate volatile write (bypass debounce) */
-    writeVolatileNow(path, content) {
+    writeVolatileNow(path, content, base) {
       try {
-        localStorage.setItem('revery_volatile_backup', JSON.stringify({ path, content, ts: Date.now() }));
+        localStorage.setItem('revery_volatile_backup', JSON.stringify({ path, content, base: backupBase(base), ts: Date.now() }));
       } catch (e) { /* ignore */ }
       return Promise.resolve();
     },
@@ -1050,7 +1063,7 @@ getVolatileContent(path) {
         if (!raw) return Promise.resolve(null);
         const data = JSON.parse(raw);
         if (data.path !== _path) return Promise.resolve(null);
-        return Promise.resolve({ content: data.content, ts: data.ts, originalPath: data.path });
+        return Promise.resolve({ content: data.content, ts: data.ts, originalPath: data.path, base: backupBase(data.base) });
       } catch { return Promise.resolve(null); }
     },
 

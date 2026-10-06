@@ -14,7 +14,7 @@
       __defProp(target, name, { get: all[name], enumerable: true });
   };
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/dialogs.js
+  // src/sidebar/dialogs.js
   function initDialogStyles() {
     (function injectInputDialogStyles() {
       if (document.getElementById("revery-input-dialog-styles")) return;
@@ -672,7 +672,7 @@
     });
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/state.js
+  // src/sidebar/state.js
   var btnSidebar = document.getElementById("btn-sidebar");
   var sidebarPanel = document.getElementById("project-sidebar");
   var sidebarDivider = document.getElementById("sidebar-divider");
@@ -759,7 +759,7 @@
     return i === 0 ? p[0] : p.slice(0, i);
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/paths.js
+  // src/sidebar/paths.js
   var paths_exports = {};
   __export(paths_exports, {
     MEDIA_EXTS: () => MEDIA_EXTS,
@@ -962,7 +962,7 @@
     return `![${name}](${encodeLinkDest(rel)})`;
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/drop_transport.js
+  // src/sidebar/drop_transport.js
   function decideFileDropTransport(env, platform) {
     if (env !== "tauri") return "dom";
     return /^win/i.test(String(platform || "")) ? "dom" : "native";
@@ -1001,7 +1001,7 @@
     }
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/helpers.js
+  // src/sidebar/helpers.js
   function arrayBufferToBase64(buf) {
     const bytes = new Uint8Array(buf);
     let binary = "";
@@ -1056,6 +1056,43 @@
     }
     return joinPath(dir, uniqueName(names, baseName, "." + ext, ignoreName));
   }
+  async function saveTextBesideNote(notePath, content, suffix = "_recovered") {
+    let dir = parentPathOf(notePath);
+    if (!dir || !S.rootPath || !isInsideRoot(dir, S.rootPath)) dir = S.rootPath;
+    try {
+      await window.NativeAPI.readDirectory(dir);
+    } catch (_) {
+      dir = S.rootPath;
+    }
+    if (!dir) throw new Error("No project folder is open.");
+    const base = baseNameOf(notePath);
+    const dot = base.lastIndexOf(".");
+    const oldExt = dot > 0 ? base.slice(dot + 1) : "";
+    const ext = /^(md|txt)$/i.test(oldExt) ? oldExt : "md";
+    let stem = (dot > 0 ? base.slice(0, dot) : base) + suffix;
+    if (checkEntryName(`${stem}.${ext}`) || new TextEncoder().encode(`${stem}.${ext}`).length > 150) {
+      stem = suffix.replace(/^_+/, "") || "recovered";
+    }
+    let newPath = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      newPath = await uniquePath(dir, stem, ext);
+      try {
+        await window.NativeAPI.createFile(newPath);
+        break;
+      } catch (err) {
+        if (String(err).includes("already exists") && attempt < 4) continue;
+        throw err;
+      }
+    }
+    try {
+      await window.NativeAPI.writeFile(newPath, content);
+    } catch (err) {
+      window.NativeAPI.deleteNode(newPath).catch(() => {
+      });
+      throw err;
+    }
+    return newPath;
+  }
   async function fileExistsViaListing(p) {
     if (typeof p !== "string") return null;
     const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
@@ -1108,7 +1145,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/icons.js
+  // src/sidebar/icons.js
   var ICONS = {
     /* folder.svg (glyph-u1F4C1) */
     "folder": {
@@ -1187,7 +1224,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return svg;
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/eol.js
+  // src/sidebar/eol.js
   function detectEol(raw) {
     if (typeof raw !== "string" || raw.indexOf("\r\n") < 0) return "\n";
     return /(^|[^\r])\n/.test(raw) || /\r(?!\n)/.test(raw) ? "\n" : "\r\n";
@@ -1199,7 +1236,29 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return eol === "\r\n" ? editorText.replace(/\n/g, "\r\n") : editorText;
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/watcher.js
+  // src/sidebar/fingerprint.js
+  var FINGERPRINT_VERSION = "v1";
+  function textFingerprint(text) {
+    const s = String(text);
+    let h1 = 3735928559;
+    let h2 = 1103547991;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 2654435761);
+      h2 = Math.imul(h2 ^ c, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507);
+    h1 ^= Math.imul(h2 ^ h2 >>> 13, 3266489909);
+    h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507);
+    h2 ^= Math.imul(h1 ^ h1 >>> 13, 3266489909);
+    const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
+    return `${FINGERPRINT_VERSION}:${s.length}:${hex(h2)}${hex(h1)}`;
+  }
+  function isTextFingerprint(value) {
+    return typeof value === "string" && /^v1:\d+:[0-9a-f]{16}$/.test(value);
+  }
+
+  // src/sidebar/watcher.js
   var _watchedPath = null;
   function startWatchingFile(filePath) {
     if (_watchedPath) {
@@ -1256,7 +1315,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (verdict.kind === "missing" || verdict.kind === "unreadable") {
       cancelPendingAutoSave();
       setAutosaveHold(filePath, verdict.kind);
-      writeDurableSnapshot(filePath, editor.value);
+      writeDurableSnapshot(filePath, editor.value, noteBackupBase());
       return verdict.kind;
     }
     cancelPendingAutoSave();
@@ -1289,6 +1348,8 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
             S._replaceGeneration++;
             markClean();
             rememberDiskContent(fresh);
+            window.NativeAPI.deleteVolatileContent(filePath).catch(() => {
+            });
           });
           resolved = true;
         } catch (err) {
@@ -1296,24 +1357,13 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         }
       } else if (choice === "Save my version & reload") {
         const copyContent = editor.value;
-        const baseName = filePath.replace(/\\/g, "/").split("/").pop();
-        const lastDot = baseName.lastIndexOf(".");
-        const stem = lastDot > 0 ? baseName.substring(0, lastDot) : baseName;
-        const ext = lastDot > 0 ? baseName.substring(lastDot + 1) : "md";
-        const dir = filePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
         let copyPath = null;
-        let createdOk = false;
-        let copyOk = false;
         let reloadErr = null;
         let copyErr = null;
         try {
           await _enqueueDiskOp(async () => {
             try {
-              copyPath = await uniquePath(dir, stem + "_local", ext);
-              await window.NativeAPI.createFile(copyPath);
-              createdOk = true;
-              await window.NativeAPI.writeFile(copyPath, copyContent);
-              copyOk = true;
+              copyPath = await saveTextBesideNote(filePath, copyContent, "_local");
             } catch (err) {
               copyErr = err;
               throw err;
@@ -1338,10 +1388,6 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         } catch (_innerErr) {
           if (copyErr) {
             console.error("[Sidebar] save-as-copy failed:", copyErr);
-            if (createdOk && !copyOk && copyPath) {
-              window.NativeAPI.deleteNode(copyPath).catch(() => {
-              });
-            }
             window.NativeAPI.showMessageBox({
               type: "error",
               title: "Could Not Save Copy",
@@ -1384,7 +1430,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       S._externalChangeInProgress = false;
       if (!resolved && S.activeFilePath === filePath) {
         setAutosaveHold(filePath, "conflict");
-        writeDurableSnapshot(filePath, editor.value);
+        writeDurableSnapshot(filePath, editor.value, noteBackupBase());
       }
     }
     return "changed";
@@ -1402,7 +1448,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return _watchedPath;
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/projects.js
+  // src/sidebar/projects.js
   var PROJECTS_KEY = "revery_projects";
   var MAX_PROJECTS = 20;
   var _cachedProjects = null;
@@ -1608,7 +1654,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/save.js
+  // src/sidebar/save.js
   var _autoSaveTimer = null;
   function autosaveDelayMs() {
     return window.slowHardwareMode ? 4e3 : 1500;
@@ -1751,7 +1797,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         markDirty();
         scheduleAutoSave();
         try {
-          await window.NativeAPI.writeVolatileNow(newPath, editor.value);
+          await window.NativeAPI.writeVolatileNow(newPath, editor.value, noteBackupBase());
         } catch (e) {
           console.warn("[Sidebar] note backup after scratchpad create failed (placeholder kept):", e);
           placeholderStillNeeded = true;
@@ -1817,10 +1863,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   function _durableExposed() {
     return !!S.activeFilePath && (S._conflictHoldPath && S._conflictHoldPath === S.activeFilePath || Date.now() < _autoSaveCooldownUntil);
   }
-  function writeDurableSnapshot(path, content) {
+  function writeDurableSnapshot(path, content, base = null) {
     if (typeof window.NativeAPI.setDurableBackup !== "function") return;
     _durableMirrorLast = Date.now();
-    window.NativeAPI.setDurableBackup(path, content).catch((e) => console.warn("[Sidebar] durable backup failed (non-fatal):", e));
+    window.NativeAPI.setDurableBackup(path, content, base).catch((e) => console.warn("[Sidebar] durable backup failed (non-fatal):", e));
   }
   function _durableMirrorKey() {
     if (S.activeFilePath) return _durableExposed() && S.isDirty ? S.activeFilePath : null;
@@ -1832,7 +1878,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   }
   function _fireDurableMirror() {
     const key = _durableMirrorKey();
-    if (key) writeDurableSnapshot(key, editor.value);
+    if (key) writeDurableSnapshot(key, editor.value, key === S.activeFilePath ? noteBackupBase() : null);
   }
   function mirrorDurableWhileExposed() {
     if (!_durableMirrorKey()) return;
@@ -1845,6 +1891,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }
   }
   function rememberDiskContent(raw) {
+    _baselineFp = void 0;
     if (typeof raw !== "string") {
       S._diskBaseline = null;
       S._diskEol = "\n";
@@ -1853,6 +1900,16 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     const api = window.NativeAPI;
     S._diskBaseline = api && typeof api.wellFormedText === "function" ? api.wellFormedText(raw) : raw;
     S._diskEol = detectEol(raw);
+  }
+  var _baselineFp;
+  function noteBackupBase() {
+    if (typeof S._diskBaseline !== "string") return null;
+    if (_baselineFp === void 0) _baselineFp = textFingerprint(S._diskBaseline);
+    return _baselineFp;
+  }
+  function diskFingerprint(raw) {
+    const api = window.NativeAPI;
+    return textFingerprint(api && typeof api.wellFormedText === "function" ? api.wellFormedText(raw) : raw);
   }
   async function compareDiskWithBaseline(filePath, bufferText) {
     let content;
@@ -1941,7 +1998,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
         const oldPath = S.activeFilePath;
         const finalNewPath = await uniquePath(oldDir, safeName, ext, oldFullName);
         if (!samePath(S.activeFilePath, oldPath)) return;
-        await window.NativeAPI.writeVolatileNow(finalNewPath, editor.value).catch(
+        await window.NativeAPI.writeVolatileNow(finalNewPath, editor.value, noteBackupBase()).catch(
           (e) => console.warn("[Sidebar] Pre-rename volatile migration failed (non-fatal):", e)
         );
         const journalEntry = { from: oldPath, to: finalNewPath, ts: Date.now() };
@@ -2024,6 +2081,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       }
       const pathToSave = S.activeFilePath;
       let writeResult;
+      let savedOpenNote = false;
       try {
         writeResult = await _enqueueDiskOp(async () => {
           if (S._externalChangeInProgress) return "deferred-external";
@@ -2038,17 +2096,25 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
             if (disk.kind === "changed" || disk.kind === "unreadable" || disk.kind === "missing" && auto) {
               return "deferred-verify";
             }
-            if (disk.kind === "adopted") return "ok";
+            if (disk.kind === "adopted") {
+              savedOpenNote = true;
+              return "ok";
+            }
           }
           const diskText = toDiskText(contentToSave, isActive ? S._diskEol : "\n");
           await window.NativeAPI.writeFile(pathToSave, diskText);
           if (isActive) rememberDiskContent(diskText);
+          savedOpenNote = isActive;
           return "ok";
         });
       } catch (err) {
         console.error("[Sidebar] saveActiveFile failed:", err);
         _autoSaveCooldownUntil = Date.now() + AUTOSAVE_FAILURE_COOLDOWN_MS;
-        writeDurableSnapshot(pathToSave, contentToSave);
+        writeDurableSnapshot(
+          pathToSave,
+          contentToSave,
+          pathToSave === S.activeFilePath ? noteBackupBase() : null
+        );
         _firstDirtyTime = 0;
         report("error");
         await window.NativeAPI.showMessageBox({
@@ -2071,16 +2137,18 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       }
       _autoSaveCooldownUntil = 0;
       if (S._conflictHoldPath === pathToSave) clearAutosaveHold();
-      if (editor.value === contentToSave) {
-        markClean();
-        if (typeof showSavedIndicator === "function") showSavedIndicator();
-        window.NativeAPI.deleteVolatileContent(pathToSave).catch(() => {
-        });
-      } else {
-        window.NativeAPI.writeVolatileNow(pathToSave, editor.value).catch(
-          (err) => console.warn("[Sidebar] post-save volatile refresh failed:", err)
-        );
-        scheduleAutoSave();
+      if (savedOpenNote && S.activeFilePath === pathToSave && docGen === currentDocGeneration()) {
+        if (editor.value === contentToSave) {
+          markClean();
+          if (typeof showSavedIndicator === "function") showSavedIndicator();
+          window.NativeAPI.deleteVolatileContent(pathToSave).catch(() => {
+          });
+        } else {
+          window.NativeAPI.writeVolatileNow(pathToSave, editor.value, noteBackupBase()).catch(
+            (err) => console.warn("[Sidebar] post-save volatile refresh failed:", err)
+          );
+          scheduleAutoSave();
+        }
       }
       if (S.sidebarViewMode === "card") {
         const chunk = contentToSave.substring(0, 5e3);
@@ -2109,9 +2177,58 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
   var SWITCH_CANCELLED = Symbol("switch-cancelled");
   var SWITCH_ATTEMPTS = 5;
   var unsavedNote = () => S.isDirty && !!S.activeFilePath;
-  var hasUnsavedWork = () => unsavedNote() || !!pendingScratchpad();
+  var hasUnsavedWork = () => unsavedNote() || keptVersionOnScreen() || !!pendingScratchpad();
+  function keptVersionOnScreen() {
+    return !!S.activeFilePath && !S.isDirty && !window._showingUnsupportedFile && S._holdReason === "conflict" && S._conflictHoldPath === S.activeFilePath;
+  }
+  async function saveKeptVersionCopy() {
+    const path = S.activeFilePath;
+    const text = editor.value;
+    const disk = await compareDiskWithBaseline(path, text);
+    if (!keptVersionOnScreen() || S.activeFilePath !== path) return true;
+    if (disk.kind === "same" || disk.kind === "adopted") {
+      clearAutosaveHold();
+      window.NativeAPI.deleteVolatileContent(path).catch(() => {
+      });
+      return true;
+    }
+    let copyPath;
+    try {
+      copyPath = await saveTextBesideNote(path, text, "_local");
+    } catch (err) {
+      console.error("[Sidebar] saving the kept version as a copy failed:", err);
+      await window.NativeAPI.showMessageBox({
+        type: "error",
+        title: window.t("Could Not Save Copy"),
+        message: window.t('The version of "{name}" you kept could not be saved as a copy, so the note stays open.').replace("{name}", baseNameOf(path)),
+        detail: String(err) + "\n\n" + window.t('Press Ctrl+S to save it over the file, or use "Save as..." in the File menu.'),
+        buttons: ["OK"]
+      }).catch(() => {
+      });
+      return false;
+    }
+    if (S.activeFilePath === path && !S.isDirty) {
+      clearAutosaveHold();
+      window.NativeAPI.deleteVolatileContent(path).catch(() => {
+      });
+    }
+    expandedDirs.add(parentPathOf(copyPath));
+    try {
+      await renderTree();
+    } catch (_) {
+    }
+    if (typeof window.showStatusWarning === "function") {
+      window.showStatusWarning(
+        "kept-version-copy",
+        window.t('The version of "{name}" you kept was saved as "{copy}".').replace("{name}", baseNameOf(path)).replace("{copy}", baseNameOf(copyPath)),
+        { priority: 30, ttl: 8e3 }
+      );
+    }
+    return true;
+  }
   async function saveOpenDocument() {
     if (unsavedNote()) return saveActiveFile();
+    if (keptVersionOnScreen()) return saveKeptVersionCopy();
     const pending = pendingScratchpad();
     if (!pending || await scratchpadToNote(pending)) return true;
     await tellScratchpadNotSaved(pending);
@@ -2155,10 +2272,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     if (S._conflictHoldPath === oldPath) setAutosaveHold(newPath, S._holdReason);
     if (docTitleEl) docTitleEl.value = baseNameOf(newPath).replace(/\.(md|txt)$/, "");
     startWatchingFile(newPath);
-    if (S.isDirty) {
+    if (S.isDirty || keptVersionOnScreen()) {
       try {
-        await window.NativeAPI.writeVolatileNow(newPath, editor.value);
-        if (_durableExposed()) writeDurableSnapshot(newPath, editor.value);
+        await window.NativeAPI.writeVolatileNow(newPath, editor.value, noteBackupBase());
+        if (_durableExposed()) writeDurableSnapshot(newPath, editor.value, noteBackupBase());
         await window.NativeAPI.deleteVolatileContent(oldPath);
       } catch (e) {
         console.warn("[Sidebar] could not move the crash backup to the new path (old one kept):", e);
@@ -2235,7 +2352,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       }
       rememberDiskContent(typeof savedContent === "string" ? savedContent : null);
       if (scratch) {
-        (S.isDirty ? window.NativeAPI.writeVolatileNow(newPath, editor.value) : Promise.resolve()).then(() => window.NativeAPI.deleteVolatileContent(scratch.key)).catch((e) => console.warn("[Sidebar] Save As: scratchpad backup kept:", e));
+        (S.isDirty ? window.NativeAPI.writeVolatileNow(newPath, editor.value, noteBackupBase()) : Promise.resolve()).then(() => window.NativeAPI.deleteVolatileContent(scratch.key)).catch((e) => console.warn("[Sidebar] Save As: scratchpad backup kept:", e));
       }
       await window.NativeAPI.setLastOpenedFile(newPath).catch((e) => console.warn("[Sidebar] could not persist last-opened pointer (non-fatal):", e));
       if (newRoot && newRoot !== S.rootPath) {
@@ -2299,7 +2416,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       if (S.activeFilePath) {
         markDirty();
         scheduleAutoSave();
-        window.NativeAPI.setVolatileContent(S.activeFilePath, editor.value);
+        window.NativeAPI.setVolatileContent(S.activeFilePath, editor.value, noteBackupBase());
         mirrorDurableWhileExposed();
       }
     });
@@ -2346,7 +2463,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return _panelArmed;
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/panel.js
+  // src/sidebar/panel.js
   function openSidebar() {
     S.sidebarOpen = true;
     sidebarPanel.style.display = "flex";
@@ -2430,7 +2547,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/link_rewrite.js
+  // src/sidebar/link_rewrite.js
   function buildAbsMapper(records) {
     const pairs = records.map((r) => [normalizePath(r.oldPath), normalizePath(r.newPath)]);
     return (abs) => {
@@ -2490,7 +2607,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return { text: out.join("\n"), changes };
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/project_scan.js
+  // src/sidebar/project_scan.js
   var MAX_FILES = 800;
   var LIST_TTL_MS = 15 * 1e3;
   var _cache = { at: 0, root: null, files: null };
@@ -2530,7 +2647,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     _cache = { at: 0, root: null, files: null };
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/import_text.js
+  // src/sidebar/import_text.js
   function decodeImportedText(bytes) {
     const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     if (b.length >= 4 && b[0] === 255 && b[1] === 254 && b[2] === 0 && b[3] === 0) {
@@ -2545,7 +2662,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(b);
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/fileops.js
+  // src/sidebar/fileops.js
   function errText(err) {
     return String(err && err.message || err).replace(/^Error invoking remote method '[^']*': /, "").replace(/^Error: /, "");
   }
@@ -3602,7 +3719,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     };
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/tree.js
+  // src/sidebar/tree.js
   var _treeRenderGeneration = 0;
   var sortKey = "name";
   var sortDir = "asc";
@@ -4118,7 +4235,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     });
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/card_memory.js
+  // src/sidebar/card_memory.js
   var CARD_DIRS_KEY = "revery_card_view_dirs";
   var MAX_REMEMBERED_PROJECTS = 30;
   function parseCardDirs(raw) {
@@ -4143,7 +4260,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     return [{ root, dir }, ...rest].slice(0, MAX_REMEMBERED_PROJECTS);
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/cards.js
+  // src/sidebar/cards.js
   var _cardGeneration = 0;
   function loadCardDirs() {
     try {
@@ -4576,14 +4693,14 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     })();
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/block_insert.js
+  // src/sidebar/block_insert.js
   function paragraphInsertion(before, after, block) {
     const lead = before === "" || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
     const trail = after.startsWith("\n\n") ? "" : after === "" || after.startsWith("\n") ? "\n" : "\n\n";
     return { insert: lead + block + trail, cursor: lead.length + block.length + 1 };
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/media_ingest.js
+  // src/sidebar/media_ingest.js
   var DROP_MAX_BYTES = 20 * 1024 * 1024;
   var sourceName = (src) => src.kind === "file" ? src.file.name : baseNameOf(src.path);
   var isMediaSource = (src) => getFileCategory(sourceName(src)) === "media";
@@ -4797,7 +4914,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     }, true);
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/dnd.js
+  // src/sidebar/dnd.js
   function getDropTargetDir(eventTarget) {
     const navTarget = eventTarget.closest && eventTarget.closest("[data-drop-dir]");
     if (navTarget) {
@@ -4933,7 +5050,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
     })();
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/lifecycle.js
+  // src/sidebar/lifecycle.js
   var CLOSE_STUCK_MS = 5e3;
   var _closing = null;
   async function sidebarHandleClose() {
@@ -5013,7 +5130,7 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       }
       if (S.isDirty && typeof window.NativeAPI.writeVolatileNow === "function") {
         try {
-          await whileSaving(() => window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value));
+          await whileSaving(() => window.NativeAPI.writeVolatileNow(S.activeFilePath, editor.value, noteBackupBase()));
         } catch (_) {
         }
       }
@@ -5168,47 +5285,10 @@ To recover: open the file in Revery and verify it looks correct. If it is corrup
       return;
     }
   }
-  async function saveRecoveredTextAsNewFile(notePath, content) {
-    let dir = parentPathOf(notePath);
-    if (!dir || !S.rootPath || !isInsideRoot(dir, S.rootPath)) dir = S.rootPath;
-    try {
-      await window.NativeAPI.readDirectory(dir);
-    } catch (_) {
-      dir = S.rootPath;
-    }
-    if (!dir) throw new Error("No project folder is open.");
-    const base = baseNameOf(notePath);
-    const dot = base.lastIndexOf(".");
-    const oldExt = dot > 0 ? base.slice(dot + 1) : "";
-    const ext = /^(md|txt)$/i.test(oldExt) ? oldExt : "md";
-    let stem = (dot > 0 ? base.slice(0, dot) : base) + "_recovered";
-    if (checkEntryName(`${stem}.${ext}`) || new TextEncoder().encode(`${stem}.${ext}`).length > 150) {
-      stem = "recovered";
-    }
-    let newPath = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      newPath = await uniquePath(dir, stem, ext);
-      try {
-        await window.NativeAPI.createFile(newPath);
-        break;
-      } catch (err) {
-        if (String(err).includes("already exists") && attempt < 4) continue;
-        throw err;
-      }
-    }
-    try {
-      await window.NativeAPI.writeFile(newPath, content);
-    } catch (err) {
-      window.NativeAPI.deleteNode(newPath).catch(() => {
-      });
-      throw err;
-    }
-    return newPath;
-  }
   async function saveBackupBesideNote(notePath, content) {
     let copyPath;
     try {
-      copyPath = await saveRecoveredTextAsNewFile(notePath, content);
+      copyPath = await saveTextBesideNote(notePath, content, "_recovered");
     } catch (err) {
       console.error("[Sidebar Boot] Saving the crash backup as a separate file failed:", err);
       await window.NativeAPI.showMessageBox({
@@ -5463,16 +5543,20 @@ More information, click the \xBD logo in the center top of the screen.
                     const backupLen = backup.content.length;
                     const diskLen = diskContent.length;
                     const suspicious = backupLen === 0 && diskLen > 0 || diskLen > 200 && backupLen < diskLen * 0.1;
+                    const based = isTextFingerprint(backup.base) ? backup.base === diskFingerprint(diskContent) : null;
+                    const changed = !suspicious && based === false;
                     let fileMtime = 0;
-                    try {
-                      const dirPath = lastFile.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
-                      const entries = await window.NativeAPI.readDirectory(dirPath);
-                      const norm = (p) => String(p).replace(/\\/g, "/");
-                      const me = (entries || []).find((e) => norm(e.path) === norm(lastFile));
-                      if (me && typeof me.mtime === "number") fileMtime = me.mtime;
-                    } catch (_) {
+                    if (based === null) {
+                      try {
+                        const dirPath = lastFile.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+                        const entries = await window.NativeAPI.readDirectory(dirPath);
+                        const norm = (p) => String(p).replace(/\\/g, "/");
+                        const me = (entries || []).find((e) => norm(e.path) === norm(lastFile));
+                        if (me && typeof me.mtime === "number") fileMtime = me.mtime;
+                      } catch (_) {
+                      }
                     }
-                    const stale = !suspicious && fileMtime > 0 && backup.ts > 0 && backup.ts < fileMtime;
+                    const stale = !suspicious && based === null && fileMtime > 0 && backup.ts > 0 && backup.ts < fileMtime;
                     const blank = backup.content.trim().length === 0;
                     const KEEP_BOTH = "\n\nRecommended: \u201CSave backup as a copy\u201D \u2014 the saved file stays as it is and the backup becomes a separate file next to it, so nothing is lost.";
                     let dialog;
@@ -5497,6 +5581,17 @@ Recommended: keep the saved version.`,
 
 The backup is much shorter than the saved file (${backupLen} vs ${diskLen} characters) \u2014 the crash may have damaged it. Restoring it would REPLACE your saved file with this content.` + KEEP_BOTH,
                         choices: [["restore", "Restore incomplete backup"], ["copy", "Save backup as a copy"], ["discard", "Discard backup"]],
+                        defaultAction: "copy",
+                        cancelAction: "copy"
+                      };
+                    } else if (changed) {
+                      dialog = {
+                        type: "warning",
+                        message: "Unsaved text from a previous session was found, but the file has changed since.",
+                        detail: `Last edited: ${ts}
+
+The file on disk is no longer the version this text was based on \u2014 another program, a sync service or another device changed it afterwards (or you chose \u201CKeep my version\u201D). Restoring would REPLACE that newer version with this text.` + KEEP_BOTH,
+                        choices: [["restore", "Restore backup"], ["copy", "Save backup as a copy"], ["discard", "Discard backup"]],
                         defaultAction: "copy",
                         cancelAction: "copy"
                       };
@@ -5546,7 +5641,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
                       markDirty();
                       scheduleAutoSave();
                       if (typeof window.NativeAPI.writeVolatileNow === "function") {
-                        await window.NativeAPI.writeVolatileNow(lastFile, backup.content).catch(
+                        await window.NativeAPI.writeVolatileNow(lastFile, backup.content, noteBackupBase()).catch(
                           (e) => console.warn("[Sidebar] Refreshing backup after restore failed:", e)
                         );
                       }
@@ -5631,7 +5726,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
     })();
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/yaml_index.js
+  // src/sidebar/yaml_index.js
   var INDEX_TTL_MS = 30 * 1e3;
   var MAX_FILE_BYTES = 1024 * 1024;
   var MAX_KEYS = 200;
@@ -5723,7 +5818,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
     return serialize(merged);
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/search.js
+  // src/sidebar/search.js
   var DEBOUNCE_MS = () => window.slowHardwareMode ? 600 : 250;
   var MIN_QUERY = 2;
   var MAX_MATCHES_PER_FILE = 5;
@@ -5955,7 +6050,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
     openSearch();
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/link_complete.js
+  // src/sidebar/link_complete.js
   async function listLinkCompletions(rawDest) {
     if (!window.NativeAPI || !window.NativeAPI.isDesktop || !S.rootPath) return null;
     if (typeof rawDest !== "string") return null;
@@ -5994,7 +6089,7 @@ The saved file is NEWER than this backup \u2014 restoring would replace the newe
     return { rawSegLength: rawSeg.length, entries: out.slice(0, 60) };
   }
 
-  // ../../../../tmp/claude-0/-home-user-revery-notebook/9ac718fa-ba5b-5719-b26e-7f048efe5bad/scratchpad/stage1wt/src/sidebar/index.js
+  // src/sidebar/index.js
   window.sidebarYamlIndex = getYamlIndex;
   window.sidebarListLinkCompletions = listLinkCompletions;
   window.sidebarIcon = icon;

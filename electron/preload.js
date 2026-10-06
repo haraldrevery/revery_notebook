@@ -50,11 +50,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyFileIntoFolder: (destDir, filename, contentB64) =>
     ipcRenderer.invoke('fs:copy-into-folder', destDir, filename, contentB64),
 
-  setVolatileContent: (originalPath, content) =>
-    ipcRenderer.invoke('fs:set-volatile-content', originalPath, content),
+  /* `base`: fingerprint of the disk version the text was edited from
+     (stored with the backup; recovery compares it with the file). */
+  setVolatileContent: (originalPath, content, base) =>
+    ipcRenderer.invoke('fs:set-volatile-content', originalPath, content, base),
 
-  setDurableBackup: (originalPath, content) =>
-    ipcRenderer.invoke('fs:set-durable-backup', originalPath, content),
+  setDurableBackup: (originalPath, content, base) =>
+    ipcRenderer.invoke('fs:set-durable-backup', originalPath, content, base),
 
   getVolatileContent: (originalPath) =>
     ipcRenderer.invoke('fs:get-volatile-content', originalPath),

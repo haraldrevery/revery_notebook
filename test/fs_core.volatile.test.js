@@ -239,3 +239,84 @@ describe('merged multi-directory recovery', () => {
     assert.equal(merged[0].originalPath, note);
   });
 });
+
+/* ── The disk version a backup was edited from (meta.base) ──────────────
+   Start-up recovery compares it with the file: the same version → Restore
+   only puts unsaved edits back; another version → the file changed since,
+   and keeping both is the default. Pinned here: the base travels WITH its
+   own text (per directory, newest snapshot wins), anything unusable is
+   dropped, and backups written before the field existed still read. */
+describe('backup base (the disk version the text was edited from)', () => {
+  const { getNewestVolatileContent } = require('../electron/fs_core.js');
+  const BASE_A = 'v1:5:0123456789abcdef';
+  const BASE_B = 'v1:6:fedcba9876543210';
+  let base, volDir, durDir;
+  const note = '/home/user/notes/chapter.md';
+
+  beforeEach(() => {
+    base = fs.mkdtempSync(path.join(os.tmpdir(), 'revery-base-'));
+    volDir = path.join(base, 'volatile');
+    durDir = path.join(base, 'durable');
+    ensureVolatileDir(volDir);
+    ensureVolatileDir(durDir);
+  });
+
+  afterEach(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  test('set → get returns the base with the text; the meta keeps its old fields', () => {
+    setVolatileContent(volDir, note, 'edited', BASE_A);
+    const got = getVolatileContent(volDir, note);
+    assert.deepEqual([got.content, got.originalPath, got.base], ['edited', note, BASE_A]);
+    const meta = JSON.parse(fs.readFileSync(volatilePaths(volDir, note).metaFile, 'utf8'));
+    assert.equal(meta.originalPath, note);
+    assert.equal(typeof meta.ts, 'number');
+    assert.equal(meta.base, BASE_A);
+  });
+
+  test('a later write replaces the base along with the text — or drops it', () => {
+    setVolatileContent(volDir, note, 'one', BASE_A);
+    setVolatileContent(volDir, note, 'two', BASE_B);
+    assert.deepEqual([getVolatileContent(volDir, note).content, getVolatileContent(volDir, note).base], ['two', BASE_B]);
+    setVolatileContent(volDir, note, 'three');
+    assert.deepEqual([getVolatileContent(volDir, note).content, getVolatileContent(volDir, note).base], ['three', null]);
+  });
+
+  test('unusable bases are not recorded', () => {
+    for (const bad of ['', 42, {}, 'x'.repeat(201), null, undefined]) {
+      setVolatileContent(volDir, note, 'text', bad);
+      assert.equal(getVolatileContent(volDir, note).base, null, JSON.stringify(bad));
+      const meta = JSON.parse(fs.readFileSync(volatilePaths(volDir, note).metaFile, 'utf8'));
+      assert.ok(!('base' in meta), 'no base key written for ' + JSON.stringify(bad));
+    }
+  });
+
+  test('a backup written before the field existed reads with base null', () => {
+    const { dataFile, metaFile } = volatilePaths(volDir, note);
+    fs.writeFileSync(dataFile, 'old text');
+    fs.writeFileSync(metaFile, JSON.stringify({ originalPath: note, ts: 1234 }));
+    assert.deepEqual(getVolatileContent(volDir, note), { content: 'old text', ts: 1234, originalPath: note, base: null });
+  });
+
+  test('the newest snapshot across directories brings its own base', () => {
+    setVolatileContent(volDir, note, 'volatile', BASE_A);
+    setVolatileContent(durDir, note, 'durable', BASE_B);
+    const meta = (dir, ts, b) => fs.writeFileSync(volatilePaths(dir, note).metaFile,
+      JSON.stringify({ originalPath: note, ts, base: b }));
+    meta(volDir, 1000, BASE_A);
+    meta(durDir, 2000, BASE_B);
+    assert.deepEqual(['content', 'base'].map((k) => getNewestVolatileContent([volDir, durDir], note)[k]), ['durable', BASE_B]);
+    meta(volDir, 3000, BASE_A);
+    assert.deepEqual(['content', 'base'].map((k) => getNewestVolatileContent([volDir, durDir], note)[k]), ['volatile', BASE_A]);
+  });
+
+  test('listing and purging are unaffected by the extra field', () => {
+    setVolatileContent(volDir, note, 'text', BASE_A);
+    assert.deepEqual(listVolatileBackups(volDir, '/home/user').map((b) => b.originalPath), [note]);
+    const { metaFile } = volatilePaths(volDir, note);
+    fs.writeFileSync(metaFile, JSON.stringify({ originalPath: note, ts: 1, base: BASE_A }));
+    purgeOldVolatileFiles(volDir, WEEK_MS);
+    assert.equal(getVolatileContent(volDir, note), null, 'an old pair is purged as before');
+  });
+});

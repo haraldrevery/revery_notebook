@@ -863,17 +863,41 @@ Every 2 seconds after the last keystroke, `NativeAPI.setVolatileContent(path, co
 **Electron temp path**: `os.tmpdir()/revery-volatile/<hash>.revery_volatile`  
 **Tauri temp path**: `env::temp_dir()/revery-volatile/<hash>.revery_volatile`
 
-A `.meta.json` sibling file records the original path and timestamp. At
-startup the boot recovery offers the last opened file's backup (and any
-scratchpad backup); the 7-day purge never deletes the last opened file's
-backup, since it runs on a timer, not after that offer.
+A `.meta.json` sibling file records the original path, the timestamp and
+the **base**: the fingerprint (`src/sidebar/fingerprint.js`) of the disk
+version the backed-up text was edited from — `S._diskBaseline`, taken
+together with the text (`save.js noteBackupBase`), never when a debounced
+write happens. At startup the boot recovery offers the last opened file's
+backup (and any scratchpad backup); the 7-day purge never deletes the last
+opened file's backup, since it runs on a timer, not after that offer.
 
 **The recovery question** (lifecycle.js) has three answers: Restore / Save
 as a copy / Discard. Only an explicit click on Discard deletes the backup.
 Escape (and closing the dialog) saves the backup as a separate file beside
 the note (`<name>_recovered.md`, never overwriting); a doubtful backup
-(much shorter than the file, or older than its last save) makes that the
-recommended default too. A blank backup only offers "Keep saved version".
+makes that the recommended default too: much shorter than the file, or
+**made on top of another version than the file now holds** (its base ≠ the
+file's fingerprint — another program, a sync service, another device, or
+"Keep my version" changed the file after the text was made; Restore would
+replace that newer text). Only backups without a base (written by older
+versions) still fall back to comparing timestamps, which a sync tool that
+keeps the other device's modification time defeats — Enter then used to
+restore over the newer file. A blank backup only offers "Keep saved
+version".
+
+Backups never come back after the user discarded them or resolved them
+elsewhere: "Reload from disk" deletes the backup of the edits it discards
+(and a debounced write of it still waiting); `writeVolatileNow` supersedes
+a debounced write of the same path (its text is the current one), so a
+backup taken while a save was in flight cannot land afterwards with the
+older base. A version kept with **"Keep my version" on a note without
+unsaved edits** exists only in the editor: closing keeps its snapshot
+(offered at the next start, as a copy by default), leaving the note saves
+it as `<name>_local.md` first unless the file holds it again
+(`save.js keptVersionOnScreen`), and a rename moves its snapshot along
+(`retargetActiveFile`). All copies are written by one helper
+(`helpers.saveTextBesideNote`: free name, exclusive create, the empty file
+of a failed write removed).
 When the last note cannot be opened at all (deleted or moved while the
 app was closed, no longer UTF-8, too large), its backup is offered as a new
 note that then opens — the start used to show the welcome text and forget
@@ -1314,8 +1338,11 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/fs_core.atomic.test.js` | Atomic write semantics: overwrite, temp cleanup, EXDEV copy fallback, snapshot restore on mid-copy failure, snapshot survival when even the restore fails; a Windows lock is retried (0.1/0.2/0.4 s) and one that does not let go fails with the old file intact; EBUSY is retried the same way on Linux/macOS (SMB) and never answered with a copy, while EPERM there fails at once; short writes are completed, a short write followed by ENOSPC fails with the target untouched, a zero-progress write cannot loop, and a REAL kernel short write (`ulimit -f`, Linux) is reported instead of truncating; a note name near the 255-byte limit saves (bounded temp names, whole characters), and the permission bits of the replaced file are kept |
 | `test/fs_core.paths.test.js` | Path traversal / symlink-escape rejection, dropped-filename sanitisation |
 | `test/fs_core.settings.test.js` | Settings corruption recovery: `.bak` fallback, quarantine of corrupt bytes, merge semantics |
-| `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup |
+| `test/fs_core.volatile.test.js` | Crash-backup lifecycle: dir safety checks, set/get/delete, prefix listing, age purge that never deletes on unreadable metadata nor the kept (last-opened) backup; the base travels with its own text (per directory, newest snapshot wins), unusable bases are not recorded, backups from before the field read with base null |
+| `test/fingerprint.test.js` | The backup base fingerprint: equal text → equal fingerprint (versioned format), every kind of change a note sees (newline, CRLF, BOM, case, swapped lines, one character, emoji) → another one, no collisions over 20 000 similar notes, only `v1` values accepted, a ~10 M-character note in well under 2 s |
 | `test/card_memory.test.js` | The card view's per-project folder memory: malformed storage dropped, only a folder inside its project offered, Windows spellings case-insensitive, one entry per project, newest first, bounded |
+| `test/backup_safety_e2e.test.js` | Boots the REAL desktop app across several SESSIONS of one profile (restart = reload, crash = killed renderer; `helpers/restart_e2e_main.js` + `restart_e2e_driver.js`, which can change files as a sync tool would, keeping an old modification time): "Keep my version" then close/crash → Enter keeps both versions (the newer file is never restored over); "Reload from disk" then a crash → the discarded edits never come back; typing during a slow save then a crash → plain Restore, no false "changed" warning; "Keep my version" then opening another note → `<name>_local.md` (none when the file holds it again); a rename moves the kept version's backup; "Save my version & reload" |
+| `test/card_restore_e2e.test.js` | Same multi-session harness: a restart reopens the card view's folder and New File goes there; a folder removed meanwhile falls back to the nearest existing one (New File follows); nothing remembered → the last note's folder; each project keeps its own folder across project switches |
 | `test/fs_core.read.test.js` | Strict UTF-8 reads: valid UTF-8 / BOM / CRLF round-trip byte for byte; Windows-1252 and UTF-16 are refused and left untouched |
 | `test/fs_core.rename.test.js` | The only rename-over-existing exception (case-only alias of the SAME file); two different files differing only in case are never treated as one |
 | `test/fs_core.entry.test.js` | Entry operations (`validateEntryInside`, `renameEntry`, `trashableEntry`): a link is the link, never its target (also one pointing outside); nothing behind an outside link is reachable; a symlinked root resolves to the real spelling; never overwrites (a dangling link included); absolute links move as links, relative ones are refused across folders; into-itself / root / bad names refused, a pure move keeps a legacy name; EXDEV refused with nothing changed; EBUSY is never a copy (retried on every platform, then it fails); the Windows retry, and a destination appearing during it is never overwritten; `checkEntryName` agrees with the renderer's |
@@ -1345,7 +1372,7 @@ npm run test:rust        # = cargo test --manifest-path tauri/Cargo.toml
 | `test/custom_theme.test.js` | The custom theme generator (theme.js in a vm): it sets exactly the variables every palette block defines; stored values are normalized or rejected (the earlier offset layout is converted); saturation 0 is neutral gray; each control changes only what it names (text sliders never touch a background variable and vice versa; Vivid text changes only `--doc-text`); no part of the Text saturation slider is flat; Vivid text makes dark red red; for every control combination (exact, via the extreme text and surface luminances, since any text color can meet any surface): text ≥ 7:1, muted text ≥ 4.5:1 (4:1 on hover), highlight ≥ 4.5:1 (3:1 on hover), vivid document text ≥ 4.5:1 on bg and both gradient ends, editor gradient visible but gentle (≥ 1.12:1 on dark bases); selection tint visible on a dense grid; the text-slider tracks paint with the generator; boot and live switching never leave an empty palette |
 | `test/theme_e2e.test.js` | Boots the REAL app (web mode) once with the OS in light mode and once in dark: every built-in palette and six custom ones are measured on screen (html.dark matches the actual background, body/footnote/editor-code contrast, visible selection, background-image overlay tinted with the palette's own `--bg`, click flashes yellow in built-ins and the highlight color in custom themes, one text color everywhere in a custom theme — the document on `--doc-text`, menus on `--text`, separate only with Vivid text — and the solid editor background equals `--bg`), identical under both OS settings; in-app PDF print stays dark-on-white under every palette, Vivid text included; plus the custom theme dialog through the real menu: the text sliders apply the generator's color without moving the background and the background sliders leave the text alone, Vivid text changes only the document text, live preview, Escape/outside click/Cancel restore, Save stores the base + custom values, Reset, the Background opacity override stays independent |
 | `test/typography_e2e.test.js` | Boots the REAL app (web mode) at a desktop, a phone and a short landscape size: after −/+ or a font change the first click in the classic editor lands on the line under the pointer and live preview's height map matches the screen; Settings has the two font rows; the popup's lists and sliders apply and save (a slider saves on release), the −/+ buttons update an open popup, spacing never reaches menus or a page-level element (the PDF print root), Reset, Escape, click-outside, custom fonts added/deleted from inside it, live preview opens the Preview popup; damaged stored values keep their defaults; the phone bottom panel and the short window keep Close reachable |
-| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `safe_entry_inside` (links as links, symlinked root), `rename_entry_blocking` (no overwrite, dangling link kept, relative link refused, into-itself/bad names), `case_only_alias_in_listing`, `classify_rename_error` (pins errno 17 = EEXIST on Unix), `check_entry_name` (same table as the renderer), `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `retry_rename_on_lock` (a brief Windows lock is retried, a lasting one ends as a failure; off Windows only EBUSY is retried), zip export roundtrip/symlink-skip/self-exclusion |
+| `tauri/src/main.rs` `mod tests` | Rust twins: `safe_path`, `safe_path_inside`, `safe_entry_inside` (links as links, symlinked root), `rename_entry_blocking` (no overwrite, dangling link kept, relative link refused, into-itself/bad names), `case_only_alias_in_listing`, `classify_rename_error` (pins errno 17 = EEXIST on Unix), `check_entry_name` (same table as the renderer), `strip_verbatim_prefix`/`frontend_path`, `atomic_write_file`, `retry_rename_on_lock` (a brief Windows lock is retried, a lasting one ends as a failure; off Windows only EBUSY is retried), zip export roundtrip/symlink-skip/self-exclusion, crash backups (`write_backup_to`/`read_backup_from`: key stability, the recorded base, older metas without one) |
 
 `electron/fs_core.js` is the single source of truth for the Electron-side
 atomic-write strategy — both `fs:write-file` and `dialog:save-file` call

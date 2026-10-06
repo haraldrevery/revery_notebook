@@ -697,11 +697,11 @@ ipcMain.handle('fs:delete-node', async (_event, targetPath) => {
 });
 
 /* ── Volatile (crash backup) write ───────────────────────────────────── */
-ipcMain.handle('fs:set-volatile-content', (_event, originalPath, content) => {
+ipcMain.handle('fs:set-volatile-content', (_event, originalPath, content, base) => {
   if (typeof originalPath !== 'string') return; // same guard as get/delete
   if (typeof content !== 'string') throw new Error('Content must be a string');
   if (!volatileDirReady) return;          // graceful no-op — dir failed its safety check
-  setVolatileContent(VOLATILE_DIR, originalPath, content);
+  setVolatileContent(VOLATILE_DIR, originalPath, content, base); // fs_core validates `base`
 });
 
 
@@ -728,11 +728,11 @@ ipcMain.handle('fs:get-volatile-content', (_event, originalPath) => {
    Same file format as the volatile slot, different location (userData).
    The renderer calls this only for the autosave-suspended states; the
    recovery read/delete paths above already cover both locations. */
-ipcMain.handle('fs:set-durable-backup', (_event, originalPath, content) => {
+ipcMain.handle('fs:set-durable-backup', (_event, originalPath, content, base) => {
   if (typeof originalPath !== 'string') return;
   if (typeof content !== 'string') throw new Error('Content must be a string');
   if (!ensureDurableReady()) return;    // graceful no-op, same policy as volatile
-  setVolatileContent(getDurableDir(), originalPath, content);
+  setVolatileContent(getDurableDir(), originalPath, content, base);
 });
 
 /* ── Volatile (crash backup) delete — clears ALL backup locations ────── */
